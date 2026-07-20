@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "gpt_training_sandbox",
+  "project_id": "2ede8dcd-5196-4857-88bc-46413c3f573d"
+}
