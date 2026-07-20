@@ -1,5 +1,66 @@
 # Agent Instructions
 
+## Project Context
+
+This repository is an educational, from-scratch PyTorch implementation of an
+end-to-end chat LLM, broadly aligned with nanochat's external pipeline and
+metrics rather than its internal code. Build it in staged vertical slices:
+local text -> byte tokenizer -> small decoder-only GPT -> pretrain/sample,
+followed by ClimbMix-style data and regex byte-BPE, 10M-50M base training with
+BPB/CORE evaluation, SFT and ChatCORE, shared inference for a CLI and local-only
+web UI, optional W&B tracking, and finally performance and architecture
+experiments. The initial target is one process on a single RTX 3090. Favor
+correctness, simple and testable educational code, reproducible
+configs/checkpoints, and always-available local JSONL metrics. See
+`plans/pre-training.md` for the detailed roadmap, phase ordering, acceptance
+criteria, and proposed tickets; consult the relevant section before
+implementing a bead.
+
+## Default Bead-to-PR Workflow
+
+Unless the user explicitly requests a different scope, complete one bead per
+review cycle:
+
+1. Run `bd prime`, inspect `git status`, check existing in-progress work, and
+   run `bd ready`. Resume relevant in-progress work instead of duplicating it.
+   If no ready bead exists, stop and ask the user what to do next; do not create
+   a bead from the roadmap on your own.
+2. Select the next logical ready bead by respecting dependencies, roadmap phase
+   order, priority, and the smallest coherent step toward the next vertical
+   slice. If equally valid choices would change project direction, ask the user.
+   Review it with `bd show <id>` and claim it with `bd update <id> --claim`.
+3. Refresh the remote default branch, then create a dedicated git worktree and
+   bead-specific branch from it. Keep one bead per worktree/branch and do not
+   implement the bead in the primary checkout.
+4. Use red/green/refactor TDD for each behavior:
+   - **Red:** add the smallest test that expresses the acceptance criterion and
+     run it to confirm it fails for the expected reason.
+   - **Green:** write the minimum implementation that makes the test pass.
+   - **Refactor:** improve the design while keeping tests green, then repeat.
+   For documentation or other work where an automated test is not meaningful,
+   use the closest deterministic validation available.
+5. Run focused tests throughout development. Before publishing, run all
+   relevant unit tests, linters, type checks, and builds documented by the
+   repository.
+6. Commit only the bead's scoped changes, push its branch, and open a pull
+   request that references the bead ID and includes the change summary and test
+   evidence. This workflow authorizes committing, pushing the bead branch, and
+   creating or updating its PR without asking again. It does not authorize
+   pushing the default branch, merging the PR, or running `bd dolt push`.
+7. Run the integration test suite against the branch/PR when one exists and is
+   applicable. If it fails, diagnose it, fix in-scope failures, push the update,
+   and rerun it before calling the PR review-ready. If no integration test
+   exists, say so explicitly in the handoff.
+8. Once implementation and validation are complete, update the bead with
+   completion notes using non-interactive `bd update` flags. Preserve useful
+   existing notes and include the concise change summary, branch or commit,
+   validation and integration results, PR URL, and any risks or follow-up. Leave
+   the bead `in_progress` while it awaits review. Do not equate an open PR with
+   merged work; close the bead only after confirming that the PR was merged.
+9. Hand off with the bead ID, concise change summary, validation results
+   (including integration status), PR URL, and any risks or follow-up. Stop for
+   the user to review and merge; do not merge the PR yourself.
+
 This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
 
 > **Architecture in one line:** Issues live in a local Dolt database
