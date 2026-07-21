@@ -206,6 +206,8 @@ class TrackingConfig(_SerializableConfig):
 class DataConfig(_SerializableConfig):
     """Raw and tokenized dataset locations and shard selection."""
 
+    # This profile follows nanochat's ClimbMix-400B pretraining data layout:
+    # https://github.com/karpathy/nanochat/blob/master/nanochat/dataset.py
     profile: str = "nanochat_climbmix"
     base_dir: str = "data"
     parquet_dir: str = "data/parquet/base_data_climbmix"
