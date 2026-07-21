@@ -25,10 +25,11 @@ review cycle:
    run `bd ready`. Resume relevant in-progress work instead of duplicating it.
    If no ready bead exists, stop and ask the user what to do next; do not create
    a bead from the roadmap on your own.
-2. Select the next logical ready bead by respecting dependencies, roadmap phase
-   order, priority, and the smallest coherent step toward the next vertical
-   slice. If equally valid choices would change project direction, ask the user.
-   Review it with `bd show <id>` and claim it with `bd update <id> --claim`.
+2. If not given an explicit bead, select the next logical ready bead by
+   respecting dependencies, roadmap phase order, priority, and the smallest
+   coherent step toward the next vertical slice. If equally valid choices would
+   change project direction, ask the user.  Review it with `bd show <id>` and claim
+   it with `bd update <id> --claim`.
 3. Refresh the remote default branch, then create a dedicated git worktree and
    bead-specific branch from it. Keep one bead per worktree/branch and do not
    implement the bead in the primary checkout.
