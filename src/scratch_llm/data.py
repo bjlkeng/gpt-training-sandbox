@@ -54,7 +54,7 @@ class NextTokenDataset(Dataset[tuple[Tensor, Tensor]]):
         dataset_length = len(self)
         if index < 0:
             index += dataset_length
-        if not 0 <= index < dataset_length:
+        if index < 0 or index >= dataset_length:
             raise IndexError("dataset index out of range")
 
         stop = index + self.seq_len
