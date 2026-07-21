@@ -1,0 +1,26 @@
+Byte by byte, the little model learns.
+One token follows another; one line follows the last.
+
+At sunrise, the workshop door opens.
+At noon, small gears turn: click, clack, click.
+At sunset, the workshop grows quiet.
+
+Hello, world.
+Bonjour, monde.
+Hola, mundo.
+안녕하세요, 세계.
+こんにちは、世界。
+The tiny rocket says: ready, set, go! 🚀
+
+Count the lanterns: one, two, three, four.
+Count them again: one, two, three, four.
+Red lantern, blue lantern, gold lantern, green.
+
+def add(left, right):
+    return left + right
+
+Question: What comes after rain?
+Answer: A puddle, a rainbow, and clear sky.
+
+Byte by byte, the little model learns.
+One token follows another; one line follows the last.
