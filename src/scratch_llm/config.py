@@ -9,7 +9,7 @@ applying overrides.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any, Literal, NoReturn
+from typing import Any, Literal, NoReturn, get_args
 
 
 WandbMode = Literal["online", "offline", "disabled"]
@@ -31,11 +31,11 @@ DEFAULT_SPECIAL_TOKENS = (
     "<|output_end|>",
 )
 
-_WANDB_MODES = frozenset({"online", "offline", "disabled"})
-_TOKENIZER_TYPES = frozenset({"byte", "regex_byte_bpe"})
-_NORM_TYPES = frozenset({"layernorm", "rmsnorm"})
-_ACTIVATION_TYPES = frozenset({"gelu", "relu_squared"})
-_TRAIN_DTYPES = frozenset({"float32", "float16", "bfloat16"})
+_WANDB_MODES: frozenset[str] = frozenset(get_args(WandbMode))
+_TOKENIZER_TYPES: frozenset[str] = frozenset(get_args(TokenizerType))
+_NORM_TYPES: frozenset[str] = frozenset(get_args(NormType))
+_ACTIVATION_TYPES: frozenset[str] = frozenset(get_args(ActivationType))
+_TRAIN_DTYPES: frozenset[str] = frozenset(get_args(TrainDType))
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
