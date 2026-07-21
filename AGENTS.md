@@ -62,6 +62,45 @@ review cycle:
    (including integration status), PR URL, and any risks or follow-up. Stop for
    the user to review and merge; do not merge the PR yourself.
 
+### Post-Merge Cleanup
+
+When the user reports that they have finished reviewing and merged the PR,
+resume the closeout workflow automatically. Treat that notification as
+authorization to close the bead, commit scoped Beads closeout metadata, and
+remove the merged feature worktree and branches. It does not authorize pushing
+the default branch or running `bd dolt push` unless the user separately asks for
+those operations.
+
+1. Verify through the hosting CLI or API that the PR is actually merged, and
+   record its URL and merge commit. If it is not merged, stop and report the
+   mismatch; do not close the bead or delete the worktree or branch.
+2. Fetch and prune the remote, then inspect the default branch status,
+   divergence, worktrees, and feature branches. Confirm the feature worktree is
+   clean and preserve all unrelated local changes and commits.
+3. Close the bead with a non-interactive `bd close <id> --reason` that references
+   the merged PR and commit. Preserve the implementation notes. Inspect any
+   tracked Beads audit or passive-export changes and commit only the scoped
+   closeout metadata needed to leave the local default branch clean.
+4. Reconcile the local default branch with the refreshed remote without losing
+   local work. When clean local commits and the remote merge have diverged,
+   rebase the local commits onto the remote tip; never reset, discard, or
+   overwrite unrelated work. Report any rewritten local commit hashes.
+5. Remove the bead worktree with the normal safety checks first. If removal
+   reports unpushed commits only because the merged remote feature branch was
+   deleted, use forced removal only after both checks succeed: the worktree has
+   no uncommitted changes, and
+   `git merge-base --is-ancestor <feature-head> origin/<default>` succeeds.
+6. Delete the merged local feature branch with safe deletion, prune stale remote
+   refs, and delete a surviving merged remote feature branch. Never force-delete
+   a branch whose reachability or merge status has not been proven.
+7. Run the applicable quality gates against the merged default branch. Prefer
+   isolated tooling when practical, and remove only clearly generated caches or
+   artifacts; never remove user-created data or run outputs as generic cleanup.
+8. Finish by confirming the bead is closed, the dedicated worktree and feature
+   branches are gone, and `git status` is clean. Report any local default-branch
+   commits still awaiting an explicitly authorized push, and keep Git pushes
+   distinct from Dolt synchronization.
+
 This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
 
 > **Architecture in one line:** Issues live in a local Dolt database
