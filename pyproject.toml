@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "scratch-llm"
+version = "0.1.0"
+description = "A from-scratch PyTorch sandbox for training small GPT-style chat models."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "PyYAML",
+    "regex",
+    "torch",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+tracking = ["wandb"]
+web = ["fastapi", "pydantic", "uvicorn", "websockets"]
+demo = ["gradio"]
+dev = ["matplotlib", "mypy", "pytest", "ruff"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/scratch_llm", "scripts"]
+
+[tool.hatch.build.targets.sdist]
+only-include = [
+    "LICENSE",
+    "README.md",
+    "pyproject.toml",
+    "scripts",
+    "src",
+    "tests",
+    "uv.lock",
+]
+
+[tool.pytest.ini_options]
+addopts = ["--strict-config", "--strict-markers"]
+testpaths = ["tests"]

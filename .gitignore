@@ -225,3 +225,11 @@ __marimo__/
 
 # bv (beads viewer) local config and caches
 .bv/
+
+# Project-generated data and run artifacts
+/data/raw/
+/data/parquet/
+/data/processed/
+/data/tokenized/
+/metrics/*.jsonl
+/runs/*/
