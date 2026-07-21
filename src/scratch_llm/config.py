@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, NoReturn, get_args
 
+from scratch_llm.tokenizer import SPECIAL_TOKENS
+
 
 WandbMode = Literal["online", "offline", "disabled"]
 TokenizerType = Literal["byte", "regex_byte_bpe"]
@@ -19,17 +21,7 @@ ActivationType = Literal["gelu", "relu_squared"]
 TrainDType = Literal["float32", "float16", "bfloat16"]
 GradAccumSteps = int | Literal["auto"]
 
-DEFAULT_SPECIAL_TOKENS = (
-    "<|bos|>",
-    "<|user_start|>",
-    "<|user_end|>",
-    "<|assistant_start|>",
-    "<|assistant_end|>",
-    "<|python_start|>",
-    "<|python_end|>",
-    "<|output_start|>",
-    "<|output_end|>",
-)
+DEFAULT_SPECIAL_TOKENS = SPECIAL_TOKENS
 
 _WANDB_MODES: frozenset[str] = frozenset(get_args(WandbMode))
 _TOKENIZER_TYPES: frozenset[str] = frozenset(get_args(TokenizerType))
