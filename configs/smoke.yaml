@@ -1,0 +1,52 @@
+run:
+  name: smoke
+  seed: 1337
+  device: cpu
+  output_dir: runs/smoke
+
+tracking:
+  wandb:
+    enabled: false
+    mode: disabled
+
+tokenizer:
+  type: byte
+  vocab_size: 265
+  max_chars: 100000
+  doc_cap: 10000
+
+model:
+  profile: simple_gpt
+  vocab_size: 265
+  seq_len: 128
+  n_layer: 2
+  n_head: 2
+  n_embd: 128
+  dropout: 0.0
+  bias: false
+  tie_weights: true
+  norm: layernorm
+  activation: gelu
+  use_rope: false
+  use_rmsnorm: false
+  use_qk_norm: false
+  use_gqa: false
+  use_flash_attention: false
+  use_kv_cache: false
+
+train:
+  device_batch_size: 2
+  total_batch_size_tokens: 1024
+  grad_accum_steps: auto
+  max_steps: 100
+  eval_every: 10
+  eval_tokens: 4096
+  sample_every: 25
+  save_every: 25
+  log_every: 1
+  dtype: float32
+  compile: false
+  activation_checkpointing: false
+
+web:
+  enabled: false

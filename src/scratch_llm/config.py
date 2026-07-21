@@ -8,8 +8,13 @@ applying overrides.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
-from typing import Any, Literal, NoReturn, get_args
+from collections.abc import Iterable, Mapping
+from dataclasses import asdict, dataclass, field, fields, is_dataclass
+from pathlib import Path
+from types import UnionType
+from typing import Any, Literal, NoReturn, Union, get_args, get_origin, get_type_hints
+
+import yaml  # type: ignore[import-untyped]
 
 from scratch_llm.tokenizer import SPECIAL_TOKENS
 
@@ -94,6 +99,166 @@ def _require_choice(value: object, path: str, choices: frozenset[str]) -> None:
     if value not in choices:
         options = ", ".join(sorted(choices))
         _fail(path, f"must be one of: {options}")
+
+
+def _join_path(parent: str, child: object) -> str:
+    return f"{parent}.{child}" if parent else str(child)
+
+
+def _expected_type(annotation: object) -> str:
+    origin = get_origin(annotation)
+    if origin is Literal:
+        return "one of " + ", ".join(repr(value) for value in get_args(annotation))
+    if origin is list:
+        return "a list"
+    if origin in (Union, UnionType):
+        return " or ".join(_expected_type(option) for option in get_args(annotation))
+    if annotation is type(None):
+        return "null"
+    if isinstance(annotation, type):
+        return annotation.__name__
+    return str(annotation)
+
+
+def _convert_config_value(value: Any, annotation: Any, path: str) -> Any:
+    """Validate and normalize one loaded value against its field annotation."""
+
+    origin = get_origin(annotation)
+
+    if isinstance(annotation, type) and is_dataclass(annotation):
+        if not isinstance(value, Mapping):
+            _fail(path, "must be a mapping")
+        return _construct_config(annotation, value, path)
+
+    if origin is list:
+        if not isinstance(value, list):
+            _fail(path, "must be a list")
+        (item_type,) = get_args(annotation)
+        return [
+            _convert_config_value(item, item_type, _join_path(path, index))
+            for index, item in enumerate(value)
+        ]
+
+    if origin is Literal:
+        if any(
+            type(value) is type(option) and value == option
+            for option in get_args(annotation)
+        ):
+            return value
+        _fail(path, f"must be {_expected_type(annotation)}")
+
+    if origin in (Union, UnionType):
+        for option in get_args(annotation):
+            try:
+                return _convert_config_value(value, option, path)
+            except ConfigValidationError:
+                pass
+        _fail(path, f"must be {_expected_type(annotation)}")
+
+    if annotation is float:
+        if type(value) not in (int, float):
+            _fail(path, "must be a number")
+        return float(value)
+
+    if annotation in (bool, int, str):
+        if type(value) is not annotation:
+            _fail(path, f"must be {_expected_type(annotation)}")
+        return value
+
+    if annotation is type(None):
+        if value is not None:
+            _fail(path, "must be null")
+        return None
+
+    _fail(path, f"has unsupported type annotation {annotation!r}")
+
+
+def _construct_config(
+    config_type: type[Any], values: Mapping[Any, Any], path: str = ""
+) -> Any:
+    """Recursively construct a dataclass while rejecting unknown fields."""
+
+    config_fields = {
+        config_field.name: config_field for config_field in fields(config_type)
+    }
+    annotations = get_type_hints(config_type)
+
+    converted: dict[str, Any] = {}
+    for key, value in values.items():
+        key_path = _join_path(path, key)
+        if not isinstance(key, str):
+            _fail(key_path, "configuration keys must be strings")
+        if key not in config_fields:
+            _fail(key_path, "unknown configuration field")
+        converted[key] = _convert_config_value(value, annotations[key], key_path)
+    return config_type(**converted)
+
+
+def _merge_config_values(
+    target: dict[str, Any], updates: Mapping[Any, Any], path: str = ""
+) -> None:
+    """Merge a partial mapping into resolved defaults without accepting new keys."""
+
+    for key, value in updates.items():
+        key_path = _join_path(path, key)
+        if not isinstance(key, str):
+            _fail(key_path, "configuration keys must be strings")
+        if key not in target:
+            _fail(key_path, "unknown configuration field")
+        current = target[key]
+        if isinstance(current, dict) and isinstance(value, Mapping):
+            _merge_config_values(current, value, key_path)
+        else:
+            target[key] = value
+
+
+def _load_yaml_mapping(path: Path) -> Mapping[Any, Any]:
+    try:
+        contents = path.read_text(encoding="utf-8")
+    except OSError as error:
+        _fail("config", f"could not read {path}: {error}")
+
+    try:
+        loaded = yaml.safe_load(contents)
+    except yaml.YAMLError as error:
+        _fail("config", f"invalid YAML in {path}: {error}")
+
+    if loaded is None:
+        return {}
+    if not isinstance(loaded, Mapping):
+        _fail("config", "YAML document root must be a mapping")
+    return loaded
+
+
+def _apply_dotted_override(target: dict[str, Any], override: str) -> None:
+    if not isinstance(override, str):
+        _fail("override", "must be a PATH=VALUE string")
+    raw_path, separator, value_text = override.partition("=")
+    path = raw_path.strip()
+    if not separator:
+        _fail(path or "override", "must use PATH=VALUE syntax")
+
+    parts = path.split(".")
+    if not path or any(not part.isidentifier() for part in parts):
+        _fail(path or "override", "must be a dotted configuration field path")
+
+    current = target
+    for index, part in enumerate(parts):
+        current_path = ".".join(parts[: index + 1])
+        if part not in current:
+            _fail(current_path, "unknown configuration field")
+        if index == len(parts) - 1:
+            if isinstance(current[part], dict):
+                _fail(current_path, "must identify a value field")
+            try:
+                current[part] = yaml.safe_load(value_text)
+            except yaml.YAMLError as error:
+                _fail(current_path, f"invalid YAML override value: {error}")
+            return
+        next_value = current[part]
+        if not isinstance(next_value, dict):
+            _fail(current_path, "cannot descend through a value field")
+        current = next_value
 
 
 @dataclass
@@ -483,6 +648,49 @@ class ProjectConfig(_SerializableConfig):
 Config = ProjectConfig
 
 
+def load_config(
+    path: str | Path | None = None,
+    overrides: Iterable[str] | str = (),
+) -> ProjectConfig:
+    """Resolve defaults, partial YAML, and ordered dotted overrides."""
+
+    resolved = ProjectConfig().to_dict()
+    if path is not None:
+        _merge_config_values(resolved, _load_yaml_mapping(Path(path)))
+    if isinstance(overrides, str):
+        overrides = (overrides,)
+    for override in overrides:
+        _apply_dotted_override(resolved, override)
+    return _construct_config(ProjectConfig, resolved)
+
+
+def dump_config(config: ProjectConfig, path: str | Path) -> Path:
+    """Write a complete, validated configuration as deterministic YAML."""
+
+    config.validate()
+    destination = Path(path)
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(
+            yaml.safe_dump(
+                config.to_dict(),
+                allow_unicode=True,
+                default_flow_style=False,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+    except OSError as error:
+        _fail("config", f"could not write {destination}: {error}")
+    return destination
+
+
+def save_config(config: ProjectConfig, path: str | Path) -> Path:
+    """Alias for :func:`dump_config` at file-oriented call sites."""
+
+    return dump_config(config, path)
+
+
 __all__ = [
     "ActivationType",
     "Config",
@@ -504,4 +712,7 @@ __all__ = [
     "WandbConfig",
     "WandbMode",
     "WebConfig",
+    "dump_config",
+    "load_config",
+    "save_config",
 ]

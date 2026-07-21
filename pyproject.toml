@@ -33,6 +33,7 @@ packages = ["src/scratch_llm", "scripts"]
 only-include = [
     "LICENSE",
     "README.md",
+    "configs",
     "data",
     "pyproject.toml",
     "scripts",
