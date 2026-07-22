@@ -80,12 +80,30 @@ def test_load_config_accepts_one_override_without_a_wrapper_list() -> None:
     assert config.run.device == "cpu"
 
 
+def test_load_config_accepts_omegaconf_scalar_coercion(tmp_path: Path) -> None:
+    config_path = tmp_path / "coercible.yaml"
+    config_path.write_text(
+        """
+run:
+  seed: "7"
+model:
+  dropout: "0.25"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.run.seed == 7
+    assert config.model.dropout == 0.25
+
+
 @pytest.mark.parametrize(
     ("yaml_text", "path"),
     [
         ("model:\n  layers: 2\n", "model.layers"),
         ("model:\n  n_layer: two\n", "model.n_layer"),
-        ("tracking:\n  wandb:\n    tags: [valid, 3]\n", "tracking.wandb.tags.1"),
+        ("tracking:\n  wandb:\n    tags: invalid\n", "tracking.wandb.tags"),
         ("model:\n  n_embd: 127\n", "model.n_embd"),
         ("- not\n- a\n- mapping\n", "config"),
     ],

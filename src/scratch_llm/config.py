@@ -8,11 +8,10 @@ applying overrides.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
-from dataclasses import asdict, dataclass, field, fields, is_dataclass
+from collections.abc import Iterable
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from types import UnionType
-from typing import Any, Literal, NoReturn, Union, get_args, get_origin, get_type_hints
+from typing import Any, Literal, NoReturn, get_args
 
 from omegaconf import DictConfig, OmegaConf
 
@@ -24,7 +23,9 @@ TokenizerType = Literal["byte", "regex_byte_bpe"]
 NormType = Literal["layernorm", "rmsnorm"]
 ActivationType = Literal["gelu", "relu_squared"]
 TrainDType = Literal["float32", "float16", "bfloat16"]
-GradAccumSteps = int | Literal["auto"]
+# OmegaConf does not yet support combining ``Literal`` with another type in a
+# union. Runtime validation below still restricts string values to ``"auto"``.
+GradAccumSteps = int | str
 
 DEFAULT_SPECIAL_TOKENS = SPECIAL_TOKENS
 
@@ -99,103 +100,6 @@ def _require_choice(value: object, path: str, choices: frozenset[str]) -> None:
     if value not in choices:
         options = ", ".join(sorted(choices))
         _fail(path, f"must be one of: {options}")
-
-
-def _join_path(parent: str, child: object) -> str:
-    return f"{parent}.{child}" if parent else str(child)
-
-
-def _expected_type(annotation: object) -> str:
-    origin = get_origin(annotation)
-    if origin is Literal:
-        return "one of " + ", ".join(repr(value) for value in get_args(annotation))
-    if origin is list:
-        return "a list"
-    if origin in (Union, UnionType):
-        return " or ".join(_expected_type(option) for option in get_args(annotation))
-    if annotation is type(None):
-        return "null"
-    if isinstance(annotation, type):
-        return annotation.__name__
-    return str(annotation)
-
-
-def _convert_config_value(value: Any, annotation: Any, path: str) -> Any:
-    """Validate and normalize one loaded value against its field annotation."""
-
-    origin = get_origin(annotation)
-
-    if isinstance(annotation, type) and is_dataclass(annotation):
-        if not isinstance(value, Mapping):
-            _fail(path, "must be a mapping")
-        return _construct_config(annotation, value, path)
-
-    if origin is list:
-        if not isinstance(value, list):
-            _fail(path, "must be a list")
-        (item_type,) = get_args(annotation)
-        return [
-            _convert_config_value(item, item_type, _join_path(path, index))
-            for index, item in enumerate(value)
-        ]
-
-    if origin is Literal:
-        if any(
-            type(value) is type(option) and value == option
-            for option in get_args(annotation)
-        ):
-            return value
-        _fail(path, f"must be {_expected_type(annotation)}")
-
-    if origin in (Union, UnionType):
-        for option in get_args(annotation):
-            try:
-                return _convert_config_value(value, option, path)
-            except ConfigValidationError:
-                pass
-        _fail(path, f"must be {_expected_type(annotation)}")
-
-    if annotation is float:
-        if type(value) not in (int, float):
-            _fail(path, "must be a number")
-        return float(value)
-
-    if annotation in (bool, int, str):
-        if type(value) is not annotation:
-            _fail(path, f"must be {_expected_type(annotation)}")
-        return value
-
-    if annotation is type(None):
-        if value is not None:
-            _fail(path, "must be null")
-        return None
-
-    _fail(path, f"has unsupported type annotation {annotation!r}")
-
-
-def _construct_config(
-    config_type: type[Any], values: Mapping[Any, Any], path: str = ""
-) -> Any:
-    """Strictly construct dataclasses after OmegaConf resolves source layers.
-
-    Keeping this boundary explicit preserves ``Literal`` fields, cross-field
-    validation, and rejection of scalar coercions such as ``"2"`` to ``2``.
-    """
-
-    config_fields = {
-        config_field.name: config_field for config_field in fields(config_type)
-    }
-    annotations = get_type_hints(config_type)
-
-    converted: dict[str, Any] = {}
-    for key, value in values.items():
-        key_path = _join_path(path, key)
-        if not isinstance(key, str):
-            _fail(key_path, "configuration keys must be strings")
-        if key not in config_fields:
-            _fail(key_path, "unknown configuration field")
-        converted[key] = _convert_config_value(value, annotations[key], key_path)
-    return config_type(**converted)
 
 
 def _error_summary(error: Exception) -> str:
@@ -641,7 +545,7 @@ def load_config(
 ) -> ProjectConfig:
     """Resolve defaults, partial YAML, and ordered OmegaConf overrides."""
 
-    defaults = OmegaConf.create(ProjectConfig().to_dict())
+    defaults = OmegaConf.structured(ProjectConfig)
     OmegaConf.set_struct(defaults, True)
     sources = [defaults]
     if path is not None:
@@ -662,20 +566,18 @@ def load_config(
         _fail("config", "resolved configuration must be a mapping")
 
     try:
-        values = OmegaConf.to_container(
-            resolved,
-            resolve=True,
-            throw_on_missing=True,
-        )
+        config = OmegaConf.to_object(resolved)
+    except ConfigValidationError:
+        raise
     except Exception as error:
         _fail_from_omegaconf(
             error,
             path="config",
-            context="could not resolve configuration",
+            context="could not construct configuration",
         )
-    if not isinstance(values, Mapping):
-        _fail("config", "resolved configuration must be a mapping")
-    return _construct_config(ProjectConfig, values)
+    if not isinstance(config, ProjectConfig):
+        _fail("config", "resolved configuration must be a ProjectConfig")
+    return config
 
 
 def dump_config(config: ProjectConfig, path: str | Path) -> Path:

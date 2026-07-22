@@ -12,7 +12,7 @@ license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
     "numpy",
-    "omegaconf>=2.3.1,<2.4",
+    "omegaconf==2.4.0.dev13",
     "pandas",
     "pyarrow",
     "regex",
