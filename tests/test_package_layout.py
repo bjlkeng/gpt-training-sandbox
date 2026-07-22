@@ -15,9 +15,9 @@ import scripts
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_CORE_DEPENDENCIES = {
     "numpy",
+    "omegaconf",
     "pandas",
     "pyarrow",
-    "pyyaml",
     "regex",
     "torch",
     "tqdm",

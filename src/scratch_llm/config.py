@@ -8,8 +8,12 @@ applying overrides.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Literal, NoReturn, get_args
+
+from omegaconf import DictConfig, OmegaConf
 
 from scratch_llm.tokenizer import SPECIAL_TOKENS
 
@@ -19,7 +23,9 @@ TokenizerType = Literal["byte", "regex_byte_bpe"]
 NormType = Literal["layernorm", "rmsnorm"]
 ActivationType = Literal["gelu", "relu_squared"]
 TrainDType = Literal["float32", "float16", "bfloat16"]
-GradAccumSteps = int | Literal["auto"]
+# OmegaConf does not yet support combining ``Literal`` with another type in a
+# union. Runtime validation below still restricts string values to ``"auto"``.
+GradAccumSteps = int | str
 
 DEFAULT_SPECIAL_TOKENS = SPECIAL_TOKENS
 
@@ -94,6 +100,56 @@ def _require_choice(value: object, path: str, choices: frozenset[str]) -> None:
     if value not in choices:
         options = ", ".join(sorted(choices))
         _fail(path, f"must be one of: {options}")
+
+
+def _error_summary(error: Exception) -> str:
+    summary = str(error).splitlines()[0].strip()
+    return summary or type(error).__name__
+
+
+def _omegaconf_error_path(error: Exception, fallback: str) -> str:
+    full_key = getattr(error, "full_key", None)
+    return str(full_key) if full_key else fallback
+
+
+def _fail_from_omegaconf(error: Exception, *, path: str, context: str) -> NoReturn:
+    _fail(
+        _omegaconf_error_path(error, path),
+        f"{context}: {_error_summary(error)}",
+    )
+
+
+def _load_yaml_config(path: Path) -> DictConfig:
+    try:
+        loaded = OmegaConf.load(path)
+    except (OSError, UnicodeError) as error:
+        _fail("config", f"could not read {path}: {error}")
+    except Exception as error:
+        _fail("config", f"invalid YAML in {path}: {_error_summary(error)}")
+    if not isinstance(loaded, DictConfig):
+        _fail("config", "YAML document root must be a mapping")
+    return loaded
+
+
+def _parse_dotted_override(override: object) -> DictConfig:
+    if not isinstance(override, str):
+        _fail("override", "must be a PATH=VALUE string")
+    raw_path, separator, _ = override.partition("=")
+    path = raw_path.strip()
+    if not separator:
+        _fail(path or "override", "must use PATH=VALUE syntax")
+
+    parts = path.split(".")
+    if not path or any(not part.isidentifier() for part in parts):
+        _fail(path or "override", "must be a dotted configuration field path")
+    try:
+        return OmegaConf.from_dotlist([override])
+    except Exception as error:
+        _fail_from_omegaconf(
+            error,
+            path=path,
+            context="invalid configuration override",
+        )
 
 
 @dataclass
@@ -483,6 +539,70 @@ class ProjectConfig(_SerializableConfig):
 Config = ProjectConfig
 
 
+def load_config(
+    path: str | Path | None = None,
+    overrides: Iterable[str] | str = (),
+) -> ProjectConfig:
+    """Resolve defaults, partial YAML, and ordered OmegaConf overrides."""
+
+    defaults = OmegaConf.structured(ProjectConfig)
+    OmegaConf.set_struct(defaults, True)
+    sources = [defaults]
+    if path is not None:
+        sources.append(_load_yaml_config(Path(path)))
+    if isinstance(overrides, str):
+        overrides = (overrides,)
+    sources.extend(_parse_dotted_override(override) for override in overrides)
+
+    try:
+        resolved = OmegaConf.merge(*sources)
+    except Exception as error:
+        _fail_from_omegaconf(
+            error,
+            path="config",
+            context="could not merge configuration sources",
+        )
+    if not isinstance(resolved, DictConfig):
+        _fail("config", "resolved configuration must be a mapping")
+
+    try:
+        config = OmegaConf.to_object(resolved)
+    except ConfigValidationError:
+        raise
+    except Exception as error:
+        _fail_from_omegaconf(
+            error,
+            path="config",
+            context="could not construct configuration",
+        )
+    if not isinstance(config, ProjectConfig):
+        _fail("config", "resolved configuration must be a ProjectConfig")
+    return config
+
+
+def dump_config(config: ProjectConfig, path: str | Path) -> Path:
+    """Write a complete, validated configuration through OmegaConf."""
+
+    config.validate()
+    destination = Path(path)
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        OmegaConf.save(
+            config=OmegaConf.create(config.to_dict()),
+            f=destination,
+            resolve=True,
+        )
+    except OSError as error:
+        _fail("config", f"could not write {destination}: {error}")
+    return destination
+
+
+def save_config(config: ProjectConfig, path: str | Path) -> Path:
+    """Alias for :func:`dump_config` at file-oriented call sites."""
+
+    return dump_config(config, path)
+
+
 __all__ = [
     "ActivationType",
     "Config",
@@ -504,4 +624,7 @@ __all__ = [
     "WandbConfig",
     "WandbMode",
     "WebConfig",
+    "dump_config",
+    "load_config",
+    "save_config",
 ]

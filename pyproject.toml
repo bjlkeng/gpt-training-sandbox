@@ -12,9 +12,9 @@ license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
     "numpy",
+    "omegaconf==2.4.0.dev13",
     "pandas",
     "pyarrow",
-    "PyYAML",
     "regex",
     "torch",
     "tqdm",
@@ -33,6 +33,7 @@ packages = ["src/scratch_llm", "scripts"]
 only-include = [
     "LICENSE",
     "README.md",
+    "configs",
     "data",
     "pyproject.toml",
     "scripts",
