@@ -12,9 +12,9 @@ license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
     "numpy",
+    "omegaconf>=2.3.1,<2.4",
     "pandas",
     "pyarrow",
-    "PyYAML",
     "regex",
     "torch",
     "tqdm",

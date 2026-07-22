@@ -14,7 +14,7 @@ from pathlib import Path
 from types import UnionType
 from typing import Any, Literal, NoReturn, Union, get_args, get_origin, get_type_hints
 
-import yaml  # type: ignore[import-untyped]
+from omegaconf import DictConfig, OmegaConf
 
 from scratch_llm.tokenizer import SPECIAL_TOKENS
 
@@ -176,7 +176,11 @@ def _convert_config_value(value: Any, annotation: Any, path: str) -> Any:
 def _construct_config(
     config_type: type[Any], values: Mapping[Any, Any], path: str = ""
 ) -> Any:
-    """Recursively construct a dataclass while rejecting unknown fields."""
+    """Strictly construct dataclasses after OmegaConf resolves source layers.
+
+    Keeping this boundary explicit preserves ``Literal`` fields, cross-field
+    validation, and rejection of scalar coercions such as ``"2"`` to ``2``.
+    """
 
     config_fields = {
         config_field.name: config_field for config_field in fields(config_type)
@@ -194,46 +198,39 @@ def _construct_config(
     return config_type(**converted)
 
 
-def _merge_config_values(
-    target: dict[str, Any], updates: Mapping[Any, Any], path: str = ""
-) -> None:
-    """Merge a partial mapping into resolved defaults without accepting new keys."""
-
-    for key, value in updates.items():
-        key_path = _join_path(path, key)
-        if not isinstance(key, str):
-            _fail(key_path, "configuration keys must be strings")
-        if key not in target:
-            _fail(key_path, "unknown configuration field")
-        current = target[key]
-        if isinstance(current, dict) and isinstance(value, Mapping):
-            _merge_config_values(current, value, key_path)
-        else:
-            target[key] = value
+def _error_summary(error: Exception) -> str:
+    summary = str(error).splitlines()[0].strip()
+    return summary or type(error).__name__
 
 
-def _load_yaml_mapping(path: Path) -> Mapping[Any, Any]:
+def _omegaconf_error_path(error: Exception, fallback: str) -> str:
+    full_key = getattr(error, "full_key", None)
+    return str(full_key) if full_key else fallback
+
+
+def _fail_from_omegaconf(error: Exception, *, path: str, context: str) -> NoReturn:
+    _fail(
+        _omegaconf_error_path(error, path),
+        f"{context}: {_error_summary(error)}",
+    )
+
+
+def _load_yaml_config(path: Path) -> DictConfig:
     try:
-        contents = path.read_text(encoding="utf-8")
-    except OSError as error:
+        loaded = OmegaConf.load(path)
+    except (OSError, UnicodeError) as error:
         _fail("config", f"could not read {path}: {error}")
-
-    try:
-        loaded = yaml.safe_load(contents)
-    except yaml.YAMLError as error:
-        _fail("config", f"invalid YAML in {path}: {error}")
-
-    if loaded is None:
-        return {}
-    if not isinstance(loaded, Mapping):
+    except Exception as error:
+        _fail("config", f"invalid YAML in {path}: {_error_summary(error)}")
+    if not isinstance(loaded, DictConfig):
         _fail("config", "YAML document root must be a mapping")
     return loaded
 
 
-def _apply_dotted_override(target: dict[str, Any], override: str) -> None:
+def _parse_dotted_override(override: object) -> DictConfig:
     if not isinstance(override, str):
         _fail("override", "must be a PATH=VALUE string")
-    raw_path, separator, value_text = override.partition("=")
+    raw_path, separator, _ = override.partition("=")
     path = raw_path.strip()
     if not separator:
         _fail(path or "override", "must use PATH=VALUE syntax")
@@ -241,24 +238,14 @@ def _apply_dotted_override(target: dict[str, Any], override: str) -> None:
     parts = path.split(".")
     if not path or any(not part.isidentifier() for part in parts):
         _fail(path or "override", "must be a dotted configuration field path")
-
-    current = target
-    for index, part in enumerate(parts):
-        current_path = ".".join(parts[: index + 1])
-        if part not in current:
-            _fail(current_path, "unknown configuration field")
-        if index == len(parts) - 1:
-            if isinstance(current[part], dict):
-                _fail(current_path, "must identify a value field")
-            try:
-                current[part] = yaml.safe_load(value_text)
-            except yaml.YAMLError as error:
-                _fail(current_path, f"invalid YAML override value: {error}")
-            return
-        next_value = current[part]
-        if not isinstance(next_value, dict):
-            _fail(current_path, "cannot descend through a value field")
-        current = next_value
+    try:
+        return OmegaConf.from_dotlist([override])
+    except Exception as error:
+        _fail_from_omegaconf(
+            error,
+            path=path,
+            context="invalid configuration override",
+        )
 
 
 @dataclass
@@ -652,33 +639,56 @@ def load_config(
     path: str | Path | None = None,
     overrides: Iterable[str] | str = (),
 ) -> ProjectConfig:
-    """Resolve defaults, partial YAML, and ordered dotted overrides."""
+    """Resolve defaults, partial YAML, and ordered OmegaConf overrides."""
 
-    resolved = ProjectConfig().to_dict()
+    defaults = OmegaConf.create(ProjectConfig().to_dict())
+    OmegaConf.set_struct(defaults, True)
+    sources = [defaults]
     if path is not None:
-        _merge_config_values(resolved, _load_yaml_mapping(Path(path)))
+        sources.append(_load_yaml_config(Path(path)))
     if isinstance(overrides, str):
         overrides = (overrides,)
-    for override in overrides:
-        _apply_dotted_override(resolved, override)
-    return _construct_config(ProjectConfig, resolved)
+    sources.extend(_parse_dotted_override(override) for override in overrides)
+
+    try:
+        resolved = OmegaConf.merge(*sources)
+    except Exception as error:
+        _fail_from_omegaconf(
+            error,
+            path="config",
+            context="could not merge configuration sources",
+        )
+    if not isinstance(resolved, DictConfig):
+        _fail("config", "resolved configuration must be a mapping")
+
+    try:
+        values = OmegaConf.to_container(
+            resolved,
+            resolve=True,
+            throw_on_missing=True,
+        )
+    except Exception as error:
+        _fail_from_omegaconf(
+            error,
+            path="config",
+            context="could not resolve configuration",
+        )
+    if not isinstance(values, Mapping):
+        _fail("config", "resolved configuration must be a mapping")
+    return _construct_config(ProjectConfig, values)
 
 
 def dump_config(config: ProjectConfig, path: str | Path) -> Path:
-    """Write a complete, validated configuration as deterministic YAML."""
+    """Write a complete, validated configuration through OmegaConf."""
 
     config.validate()
     destination = Path(path)
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(
-            yaml.safe_dump(
-                config.to_dict(),
-                allow_unicode=True,
-                default_flow_style=False,
-                sort_keys=False,
-            ),
-            encoding="utf-8",
+        OmegaConf.save(
+            config=OmegaConf.create(config.to_dict()),
+            f=destination,
+            resolve=True,
         )
     except OSError as error:
         _fail("config", f"could not write {destination}: {error}")
