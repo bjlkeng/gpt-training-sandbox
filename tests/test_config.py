@@ -49,6 +49,7 @@ def test_defaults_cover_the_roadmap_sections_and_are_deterministic() -> None:
         n_layer=6,
         n_head=6,
         n_embd=384,
+        mlp_ratio=4,
         dropout=0.0,
         bias=False,
         tie_weights=True,
@@ -108,6 +109,7 @@ def test_defaults_cover_the_roadmap_sections_and_are_deterministic() -> None:
             "n_layer": 6,
             "n_head": 6,
             "n_embd": 384,
+            "mlp_ratio": 4,
             "dropout": 0.0,
             "bias": False,
             "tie_weights": True,
@@ -162,13 +164,14 @@ def test_defaults_cover_the_roadmap_sections_and_are_deterministic() -> None:
     assert first.tracking.wandb.tags is not second.tracking.wandb.tags
 
 
-def test_gpt_config_exposes_the_planned_dimensions_and_tied_weights() -> None:
+def test_gpt_config_exposes_the_planned_dimensions_and_architecture() -> None:
     config = GPTConfig(
         vocab_size=265,
         seq_len=128,
         n_layer=2,
         n_head=2,
         n_embd=128,
+        mlp_ratio=3,
         tie_weights=False,
     )
 
@@ -178,8 +181,9 @@ def test_gpt_config_exposes_the_planned_dimensions_and_tied_weights() -> None:
         config.n_layer,
         config.n_head,
         config.n_embd,
+        config.mlp_ratio,
         config.tie_weights,
-    ) == (265, 128, 2, 2, 128, False)
+    ) == (265, 128, 2, 2, 128, 3, False)
 
 
 def test_to_dict_preserves_nested_configured_values_without_aliasing() -> None:
@@ -242,6 +246,7 @@ def test_to_dict_preserves_nested_configured_values_without_aliasing() -> None:
         ({"n_layer": 0}, "model.n_layer"),
         ({"n_head": 0}, "model.n_head"),
         ({"n_embd": 0}, "model.n_embd"),
+        ({"mlp_ratio": 0}, "model.mlp_ratio"),
         ({"n_head": 3, "n_embd": 128}, "model.n_embd"),
     ],
 )
