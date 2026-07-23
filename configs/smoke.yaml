@@ -2,7 +2,7 @@ run:
   name: smoke
   seed: 1337
   device: cpu
-  output_dir: runs/smoke
+  output_dir: runs
 
 tracking:
   wandb:
