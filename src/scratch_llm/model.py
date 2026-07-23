@@ -10,21 +10,22 @@ from scratch_llm.config import GPTConfig
 
 
 class MLP(nn.Module):
-    """Position-wise GELU feed-forward network with a 4x hidden expansion."""
+    """Expand each token internally, then restore the residual-stream width."""
 
     def __init__(self, config: GPTConfig) -> None:
         super().__init__()
         config.validate()
 
         self.n_embd = config.n_embd
+        hidden_dim = config.mlp_ratio * config.n_embd
         self.in_proj = nn.Linear(
             config.n_embd,
-            4 * config.n_embd,
+            hidden_dim,
             bias=config.bias,
         )
         self.activation = nn.GELU()
         self.out_proj = nn.Linear(
-            4 * config.n_embd,
+            hidden_dim,
             config.n_embd,
             bias=config.bias,
         )
@@ -62,6 +63,8 @@ class Block(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Apply pre-normalized attention and feed-forward residual updates."""
 
-        x = x + self.attn(self.ln_1(x))
-        x = x + self.mlp(self.ln_2(x))
-        return x
+        attention_residual = x
+        x = attention_residual + self.attn(self.ln_1(attention_residual))
+
+        mlp_residual = x
+        return mlp_residual + self.mlp(self.ln_2(mlp_residual))

@@ -540,6 +540,8 @@ model:
 
   n_embd: 384
 
+  mlp_ratio: 4
+
   dropout: 0.0
 
   bias: false
@@ -889,6 +891,8 @@ model:
   n_head: 2
 
   n_embd: 128
+
+  mlp_ratio: 4
 
   tie_weights: true
 
@@ -1480,6 +1484,8 @@ class GPTConfig:
 
     n_embd: int
 
+    mlp_ratio: int = 4
+
     dropout: float = 0.0
 
     bias: bool = False
@@ -1499,6 +1505,10 @@ class Block(nn.Module): ...
 class GPT(nn.Module): ...
 
 ```
+
+`n_embd` is the residual-stream width and remains unchanged between blocks.
+The MLP temporarily expands each token to `mlp_ratio * n_embd`, then projects
+back to `n_embd` before the residual addition.
 
 ## 4.2 Manual Attention First
 
@@ -3288,6 +3298,8 @@ n_head: 2
 
 n_embd: 128
 
+mlp_ratio: 4
+
 vocab_size: 32768
 
 device_batch_size: 4
@@ -3311,6 +3323,8 @@ n_layer: 6
 n_head: 6
 
 n_embd: 384
+
+mlp_ratio: 4
 
 vocab_size: 32768
 
@@ -3337,6 +3351,8 @@ n_layer: 8
 n_head: 8
 
 n_embd: 512
+
+mlp_ratio: 4
 
 vocab_size: 32768
 
@@ -4621,4 +4637,3 @@ These links are included to explain what this plan is aligning with. The impleme
 - W&B offline docs: [https://docs.wandb.ai/models/ref/cli/wandb-offline](https://docs.wandb.ai/models/ref/cli/wandb-offline)
 
 - Gradio ChatInterface docs: [https://gradio.app/docs/gradio/chatinterface](https://gradio.app/docs/gradio/chatinterface)
-

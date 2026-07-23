@@ -331,6 +331,7 @@ class GPTConfig(_SerializableConfig):
     n_layer: int = 6
     n_head: int = 6
     n_embd: int = 384
+    mlp_ratio: int = 4
     dropout: float = 0.0
     bias: bool = False
     tie_weights: bool = True
@@ -348,7 +349,14 @@ class GPTConfig(_SerializableConfig):
 
     def validate(self) -> None:
         _require_non_empty(self.profile, "model.profile")
-        for field_name in ("vocab_size", "seq_len", "n_layer", "n_head", "n_embd"):
+        for field_name in (
+            "vocab_size",
+            "seq_len",
+            "n_layer",
+            "n_head",
+            "n_embd",
+            "mlp_ratio",
+        ):
             _require_positive_int(getattr(self, field_name), f"model.{field_name}")
         if self.n_embd % self.n_head != 0:
             _fail("model.n_embd", "must be divisible by model.n_head")

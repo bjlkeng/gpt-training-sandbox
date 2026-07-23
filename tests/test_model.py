@@ -39,13 +39,13 @@ def test_mlp_preserves_batch_sequence_and_channel_shape(
     assert module(x).shape == x.shape
 
 
-def test_mlp_uses_four_times_expansion_and_gelu() -> None:
-    module = MLP(_model_config(n_embd=8, bias=False))
+def test_mlp_uses_configured_expansion_and_gelu() -> None:
+    module = MLP(_model_config(n_embd=8, mlp_ratio=3, bias=False))
 
     assert module.in_proj.in_features == 8
-    assert module.in_proj.out_features == 32
+    assert module.in_proj.out_features == 24
     assert isinstance(module.activation, nn.GELU)
-    assert module.out_proj.in_features == 32
+    assert module.out_proj.in_features == 24
     assert module.out_proj.out_features == 8
     assert module.in_proj.bias is None
     assert module.out_proj.bias is None
@@ -83,7 +83,7 @@ def test_block_preserves_batch_sequence_and_channel_shape(
     sequence_length: int,
     channels: int,
 ) -> None:
-    module = Block(_model_config(n_embd=channels))
+    module = Block(_model_config(n_embd=channels, mlp_ratio=3))
     x = torch.randn(batch_size, sequence_length, channels)
 
     assert module(x).shape == x.shape
@@ -151,7 +151,7 @@ class _RecordingTransform(nn.Module):
         return self.scale * x + self.offset
 
 
-def test_block_uses_pre_layernorm_ordering_for_both_residual_paths() -> None:
+def test_block_adds_both_residuals_with_pre_layernorm_ordering() -> None:
     block = Block(_model_config())
     assert isinstance(block.ln_1, nn.LayerNorm)
     assert isinstance(block.ln_2, nn.LayerNorm)

@@ -22,6 +22,7 @@ model:
   n_layer: 2
   n_head: 2
   n_embd: 128
+  mlp_ratio: 4
   dropout: 0.0
   bias: false
   tie_weights: true
