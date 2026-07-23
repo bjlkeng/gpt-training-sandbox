@@ -68,3 +68,45 @@ class Block(nn.Module):
 
         mlp_residual = x
         return mlp_residual + self.mlp(self.ln_2(mlp_residual))
+
+
+class GPT(nn.Module):
+    """Decoder-only GPT assembled from learned embeddings and transformer blocks."""
+
+    def __init__(self, config: GPTConfig) -> None:
+        super().__init__()
+        config.validate()
+
+        self.config = config
+        self.max_seq_len = config.seq_len
+        self.token_embedding = nn.Embedding(config.vocab_size, config.n_embd)
+        self.position_embedding = nn.Embedding(config.seq_len, config.n_embd)
+        self.embedding_dropout = nn.Dropout(config.dropout)
+        self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layer)])
+        self.ln_f = nn.LayerNorm(config.n_embd, bias=config.bias)
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        if config.tie_weights:
+            self.lm_head.weight = self.token_embedding.weight
+
+    def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
+        """Return next-token logits for a ``(batch, sequence)`` token tensor."""
+
+        if token_ids.ndim != 2:
+            raise ValueError(
+                "GPT input must have shape (batch, sequence); "
+                f"received {tuple(token_ids.shape)}"
+            )
+        sequence_length = token_ids.shape[1]
+        if sequence_length == 0:
+            raise ValueError("GPT input sequence must not be empty")
+        if sequence_length > self.max_seq_len:
+            raise ValueError(
+                f"sequence length {sequence_length} exceeds configured "
+                f"context length {self.max_seq_len}"
+            )
+        positions = torch.arange(sequence_length, device=token_ids.device)
+        x = self.token_embedding(token_ids) + self.position_embedding(positions)
+        x = self.embedding_dropout(x)
+        for block in self.blocks:
+            x = block(x)
+        return self.lm_head(self.ln_f(x))
