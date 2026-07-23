@@ -37,6 +37,92 @@ def test_gpt_forward_without_targets_returns_vocab_logits() -> None:
     assert logits.shape == (2, 5, config.vocab_size)
 
 
+def test_gpt_forward_with_targets_returns_scalar_mean_loss() -> None:
+    config = _model_config()
+    model = GPT(config)
+    token_ids = torch.randint(config.vocab_size, (2, 5))
+    targets = torch.randint(config.vocab_size, token_ids.shape)
+
+    loss = model(token_ids, targets)
+
+    assert loss.shape == torch.Size([])
+    assert torch.isfinite(loss)
+
+
+def test_gpt_unreduced_loss_matches_the_target_shape() -> None:
+    config = _model_config()
+    model = GPT(config)
+    token_ids = torch.randint(config.vocab_size, (2, 5))
+    targets = torch.randint(config.vocab_size, token_ids.shape)
+
+    loss = model(token_ids, targets, loss_reduction="none")
+
+    assert loss.shape == targets.shape
+    assert torch.isfinite(loss).all()
+
+
+def test_gpt_ignored_targets_contribute_no_loss_or_logit_gradient() -> None:
+    model = GPT(_model_config())
+    token_ids = torch.randint(model.config.vocab_size, (2, 5))
+    targets = torch.randint(model.config.vocab_size, token_ids.shape)
+    targets[0, 1] = -1
+    targets[1, 3] = -1
+    captured_logits: list[torch.Tensor] = []
+
+    def retain_logits(
+        _module: nn.Module,
+        _inputs: tuple[torch.Tensor, ...],
+        output: torch.Tensor,
+    ) -> None:
+        output.retain_grad()
+        captured_logits.append(output)
+
+    hook = model.lm_head.register_forward_hook(retain_logits)
+    try:
+        loss = model(token_ids, targets, loss_reduction="none")
+    finally:
+        hook.remove()
+    loss.sum().backward()
+
+    logits = captured_logits[0]
+    assert logits.grad is not None
+    ignored = targets == -1
+    assert torch.equal(loss[ignored], torch.zeros_like(loss[ignored]))
+    assert torch.equal(
+        logits.grad[ignored],
+        torch.zeros_like(logits.grad[ignored]),
+    )
+    assert logits.grad[~ignored].abs().sum() > 0
+
+
+def test_gpt_mixed_masked_mean_loss_matches_reference_calculation() -> None:
+    torch.manual_seed(23)
+    model = GPT(_model_config())
+    token_ids = torch.randint(model.config.vocab_size, (2, 5))
+    targets = torch.tensor(
+        [
+            [4, -1, 2, 9, -1],
+            [-1, 7, 1, -1, 3],
+        ]
+    )
+
+    logits = model(token_ids)
+    loss = model(token_ids, targets)
+
+    included = targets != -1
+    included_logits = logits[included]
+    included_targets = targets[included]
+    expected = (
+        -included_logits.log_softmax(dim=-1)
+        .gather(
+            dim=-1,
+            index=included_targets.unsqueeze(-1),
+        )
+        .mean()
+    )
+    torch.testing.assert_close(loss, expected)
+
+
 @pytest.mark.parametrize("shape", [(5,), (2, 5, 1)])
 def test_gpt_requires_a_batch_by_sequence_token_tensor(
     shape: tuple[int, ...],

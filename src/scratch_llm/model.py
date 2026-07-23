@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from scratch_llm.attention import CausalSelfAttention
 from scratch_llm.config import GPTConfig
@@ -88,8 +89,13 @@ class GPT(nn.Module):
         if config.tie_weights:
             self.lm_head.weight = self.token_embedding.weight
 
-    def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
-        """Return next-token logits for a ``(batch, sequence)`` token tensor."""
+    def forward(
+        self,
+        token_ids: torch.Tensor,
+        targets: torch.Tensor | None = None,
+        loss_reduction: str = "mean",
+    ) -> torch.Tensor:
+        """Return next-token logits or reduced loss for a batch of token IDs."""
 
         if token_ids.ndim != 2:
             raise ValueError(
@@ -109,4 +115,15 @@ class GPT(nn.Module):
         x = self.embedding_dropout(x)
         for block in self.blocks:
             x = block(x)
-        return self.lm_head(self.ln_f(x))
+        logits = self.lm_head(self.ln_f(x))
+        if targets is None:
+            return logits
+        loss = F.cross_entropy(
+            logits.reshape(-1, logits.size(-1)),
+            targets.reshape(-1),
+            ignore_index=-1,
+            reduction=loss_reduction,
+        )
+        if loss_reduction == "none":
+            return loss.reshape(targets.shape)
+        return loss
