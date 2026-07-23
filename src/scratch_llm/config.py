@@ -8,6 +8,7 @@ applying overrides.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -16,6 +17,7 @@ from typing import Any, Literal, NoReturn, get_args
 from omegaconf import DictConfig, OmegaConf
 
 from scratch_llm.tokenizer import SPECIAL_TOKENS
+from scratch_llm.utils import atomic_write
 
 
 WandbMode = Literal["online", "offline", "disabled"]
@@ -35,6 +37,7 @@ _NORM_TYPES: frozenset[str] = frozenset(get_args(NormType))
 _ACTIVATION_TYPES: frozenset[str] = frozenset(get_args(ActivationType))
 _TRAIN_DTYPES: frozenset[str] = frozenset(get_args(TrainDType))
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+_RUN_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 
 
 class ConfigValidationError(ValueError):
@@ -167,6 +170,14 @@ class _SerializableConfig:
 
         return asdict(self)
 
+    def to_yaml(self) -> str:
+        """Return resolved deterministic YAML for the complete config value."""
+
+        return OmegaConf.to_yaml(
+            OmegaConf.create(self.to_dict()),
+            resolve=True,
+        )
+
 
 @dataclass
 class RunConfig(_SerializableConfig):
@@ -182,6 +193,12 @@ class RunConfig(_SerializableConfig):
 
     def validate(self) -> None:
         _require_non_empty(self.name, "run.name")
+        if _RUN_NAME_PATTERN.fullmatch(self.name) is None:
+            _fail(
+                "run.name",
+                "must be a safe portable path component containing only "
+                "letters, numbers, dots, hyphens, and underscores",
+            )
         _require_int(self.seed, "run.seed")
         _require_non_empty(self.device, "run.device")
         _require_non_empty(self.output_dir, "run.output_dir")
@@ -608,12 +625,7 @@ def dump_config(config: ProjectConfig, path: str | Path) -> Path:
     config.validate()
     destination = Path(path)
     try:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        OmegaConf.save(
-            config=OmegaConf.create(config.to_dict()),
-            f=destination,
-            resolve=True,
-        )
+        atomic_write(destination, config.to_yaml())
     except OSError as error:
         _fail("config", f"could not write {destination}: {error}")
     return destination
