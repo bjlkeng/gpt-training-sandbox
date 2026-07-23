@@ -274,6 +274,23 @@ def test_train_validation_rejects_non_positive_batches(
         TrainConfig(**kwargs)  # type: ignore[arg-type]
 
 
+def test_train_validation_rejects_overlapping_schedule_ranges() -> None:
+    with pytest.raises(
+        ConfigValidationError,
+        match=r"^train\.warmup_steps:.*warmdown",
+    ):
+        TrainConfig(max_steps=10, warmup_steps=7, warmdown_ratio=0.4)
+
+
+@pytest.mark.parametrize("field_name", ["beta1", "beta2"])
+def test_train_validation_rejects_adamw_beta_of_one(field_name: str) -> None:
+    with pytest.raises(
+        ConfigValidationError,
+        match=rf"^train\.{field_name}:.*\[0, 1\)",
+    ):
+        TrainConfig(**{field_name: 1.0})  # type: ignore[arg-type]
+
+
 @pytest.mark.parametrize(
     ("factory", "path"),
     [
