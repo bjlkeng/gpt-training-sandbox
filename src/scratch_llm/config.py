@@ -96,6 +96,12 @@ def _require_unit_interval(
         _fail(path, f"must be in {interval}")
 
 
+def _require_half_open_unit_interval(value: object, path: str) -> None:
+    numeric = _require_real(value, path)
+    if not 0 <= numeric < 1:
+        _fail(path, "must be in [0, 1)")
+
+
 def _require_choice(value: object, path: str, choices: frozenset[str]) -> None:
     if value not in choices:
         options = ", ".join(sorted(choices))
@@ -415,14 +421,22 @@ class TrainConfig(_SerializableConfig):
         if self.min_lr > self.learning_rate:
             _fail("train.min_lr", "must not exceed train.learning_rate")
         _require_non_negative_real(self.weight_decay, "train.weight_decay")
-        _require_unit_interval(self.beta1, "train.beta1")
-        _require_unit_interval(self.beta2, "train.beta2")
+        _require_half_open_unit_interval(self.beta1, "train.beta1")
+        _require_half_open_unit_interval(self.beta2, "train.beta2")
         _require_positive_real(self.grad_clip, "train.grad_clip")
         _require_non_negative_int(self.warmup_steps, "train.warmup_steps")
         _require_unit_interval(self.warmdown_ratio, "train.warmdown_ratio")
         _require_unit_interval(
             self.final_lr_frac, "train.final_lr_frac", include_zero=False
         )
+        warmdown_steps = round(self.warmdown_ratio * self.max_steps)
+        warmdown_start_step = self.max_steps - warmdown_steps
+        if self.warmup_steps > warmdown_start_step:
+            _fail(
+                "train.warmup_steps",
+                "must not extend past the warmdown start at step "
+                f"{warmdown_start_step}",
+            )
         for field_name in (
             "eval_every",
             "eval_tokens",

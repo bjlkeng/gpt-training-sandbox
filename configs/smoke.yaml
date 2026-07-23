@@ -40,6 +40,8 @@ train:
   total_batch_size_tokens: 1024
   grad_accum_steps: auto
   max_steps: 100
+  warmup_steps: 5
+  warmdown_ratio: 0.2
   eval_every: 10
   eval_tokens: 4096
   sample_every: 25
