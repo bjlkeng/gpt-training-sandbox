@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable
 from copy import deepcopy
 from pathlib import Path
@@ -12,6 +13,7 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 from torch.optim import AdamW, SGD
+from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
 
 import scratch_llm.training as training
@@ -25,7 +27,9 @@ from scratch_llm.config import (
 from scratch_llm.data import NextTokenDataset
 from scratch_llm.model import GPT
 from scratch_llm.optim import build_lr_scheduler, build_optimizer
+from scratch_llm.run import prepare_run
 from scratch_llm.tokenizer import VOCAB_SIZE, ByteTokenizer
+from scratch_llm.tracking import JsonlTracker
 from scratch_llm.training import (
     derive_grad_accum_steps,
     run_optimizer_step,
@@ -46,12 +50,17 @@ def _tiny_project_config(
     *,
     device: str = "cpu",
     max_steps: int = 12,
+    output_dir: Path | None = None,
     seed: int = 123,
 ) -> ProjectConfig:
     seq_len = 16
     device_batch_size = 4
     return ProjectConfig(
-        run=RunConfig(seed=seed, device=device),
+        run=RunConfig(
+            seed=seed,
+            device=device,
+            output_dir=str(output_dir or "runs/out"),
+        ),
         tokenizer=TokenizerConfig(type="byte", vocab_size=VOCAB_SIZE),
         model=GPTConfig(
             vocab_size=VOCAB_SIZE,
@@ -72,6 +81,115 @@ def _tiny_project_config(
             warmdown_ratio=0.0,
         ),
     )
+
+
+class _ValidationProbe(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.tensor(1.0))
+        self.forward_states: list[tuple[bool, bool, bool]] = []
+
+    def forward(self, inputs: Tensor, targets: Tensor) -> Tensor:
+        self.forward_states.append(
+            (
+                torch.is_grad_enabled(),
+                torch.is_inference_mode_enabled(),
+                self.training,
+            )
+        )
+        return F.mse_loss(inputs * self.weight, targets)
+
+
+@pytest.mark.parametrize("training_mode", [True, False])
+def test_validation_aggregates_by_target_count_without_mutating_training_state(
+    training_mode: bool,
+) -> None:
+    model = _ValidationProbe()
+    model.train(training_mode)
+    model.weight.grad = torch.tensor(7.0)
+    optimizer = SGD(model.parameters(), lr=0.1)
+    scheduler = StepLR(optimizer, step_size=1)
+    parameter_before = model.weight.detach().clone()
+    gradient_before = model.weight.grad.detach().clone()
+    optimizer_before = deepcopy(optimizer.state_dict())
+    scheduler_before = deepcopy(scheduler.state_dict())
+    batches = [
+        (
+            torch.tensor([[1.0, 2.0]]),
+            torch.tensor([[0.0, 0.0]]),
+        ),
+        (
+            torch.tensor([[3.0]]),
+            torch.tensor([[0.0]]),
+        ),
+    ]
+
+    loss = training.run_validation(model, batches, device="cpu")
+
+    assert loss == pytest.approx(14.0 / 3.0)
+    assert model.forward_states == [
+        (False, True, False),
+        (False, True, False),
+    ]
+    assert model.training is training_mode
+    torch.testing.assert_close(model.weight, parameter_before)
+    torch.testing.assert_close(model.weight.grad, gradient_before)
+    assert optimizer.state_dict() == optimizer_before
+    assert scheduler.state_dict() == scheduler_before
+
+
+def test_tiny_text_smoke_writes_core_metrics_under_the_run_directory(
+    tmp_path: Path,
+) -> None:
+    config = _tiny_project_config(
+        max_steps=3,
+        output_dir=tmp_path / "runs",
+    )
+    config.train.log_every = 1
+    text = TINY_TEXT_PATH.read_text(encoding="utf-8")
+    paths = prepare_run(config)
+    destination = paths.run_dir / config.tracking.jsonl.path
+    tracker = JsonlTracker(destination)
+
+    try:
+        result = train_tiny_text(text, config, tracker=tracker)
+    finally:
+        tracker.finish()
+
+    records = [
+        json.loads(line)
+        for line in destination.read_text(encoding="utf-8").splitlines()
+    ]
+    batches_per_epoch = (
+        len(
+            NextTokenDataset(
+                ByteTokenizer().encode(text),
+                config.model.seq_len,
+            )
+        )
+        // config.train.device_batch_size
+    )
+
+    assert destination == paths.metrics_dir / "metrics.jsonl"
+    assert [record["step"] for record in records] == [1, 2, 3]
+    assert all(record["record_type"] == "metrics" for record in records)
+    assert len(records) == len(result.steps)
+    for record, step_result in zip(records, result.steps, strict=True):
+        metrics = record["metrics"]
+        assert {
+            "train/loss",
+            "train/lrm",
+            "train/dt",
+            "train/grad_norm",
+            "train/epoch",
+        } <= metrics.keys()
+        assert metrics["train/loss"] == pytest.approx(step_result.loss)
+        assert metrics["train/lrm"] == pytest.approx(1.0)
+        assert metrics["train/dt"] >= 0.0
+        assert metrics["train/grad_norm"] == pytest.approx(step_result.grad_norm)
+        assert metrics["train/epoch"] == pytest.approx(
+            record["step"] / batches_per_epoch
+        )
 
 
 def test_derive_grad_accum_steps_uses_the_exact_token_budget() -> None:

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sized
 from dataclasses import dataclass
+from time import perf_counter
 
 import torch
 from torch import Tensor, nn
@@ -18,6 +19,7 @@ from scratch_llm.data import NextTokenDataset
 from scratch_llm.model import GPT
 from scratch_llm.optim import build_lr_scheduler, build_optimizer
 from scratch_llm.tokenizer import SPECIAL_TOKENS, ByteTokenizer
+from scratch_llm.tracking import NullTracker, Tracker
 from scratch_llm.utils import get_device, set_seed
 
 
@@ -160,6 +162,60 @@ def _repeat_batches(
             raise ValueError("batches must yield at least one training batch")
 
 
+def run_validation(
+    model: nn.Module,
+    batches: Iterable[tuple[Tensor, Tensor]],
+    *,
+    device: str | torch.device,
+) -> float:
+    """Return target-weighted mean loss without changing trainable state."""
+
+    if not isinstance(model, nn.Module):
+        raise TypeError(f"model must be an nn.Module, got {type(model).__name__}")
+    resolved_device = get_device(device)
+    module_modes = [(module, module.training) for module in model.modules()]
+    weighted_loss = 0.0
+    target_count = 0
+
+    try:
+        model.eval()
+        with torch.inference_mode():
+            for batch in batches:
+                if not isinstance(batch, (tuple, list)) or len(batch) != 2:
+                    raise TypeError(
+                        "each validation batch must contain exactly inputs and targets"
+                    )
+                inputs, targets = batch
+                if not isinstance(inputs, Tensor) or not isinstance(targets, Tensor):
+                    raise TypeError(
+                        "validation batch inputs and targets must be Tensors"
+                    )
+
+                targets = targets.to(resolved_device)
+                batch_target_count = int(targets.ne(-1).sum().item())
+                if batch_target_count == 0:
+                    continue
+                loss = model(inputs.to(resolved_device), targets)
+                if not isinstance(loss, Tensor):
+                    raise TypeError(
+                        "validation model must return a Tensor loss when given targets"
+                    )
+                if loss.ndim != 0:
+                    raise ValueError(
+                        "validation model loss must be scalar, "
+                        f"got shape {tuple(loss.shape)}"
+                    )
+                weighted_loss += float(loss.item()) * batch_target_count
+                target_count += batch_target_count
+    finally:
+        for module, training_mode in module_modes:
+            module.training = training_mode
+
+    if target_count == 0:
+        raise ValueError("validation batches must contain at least one target")
+    return weighted_loss / target_count
+
+
 def run_training_steps(
     model: nn.Module,
     batches: Iterable[tuple[Tensor, Tensor]],
@@ -170,6 +226,8 @@ def run_training_steps(
     grad_accum_steps: int,
     grad_clip: float,
     device: str | torch.device,
+    tracker: Tracker | None = None,
+    log_every: int = 1,
 ) -> list[OptimizerStepResult]:
     """Train a model for a bounded number of single-device optimizer steps."""
 
@@ -189,14 +247,29 @@ def run_training_steps(
         name="grad_accum_steps",
     )
     grad_clip = require_positive_real(grad_clip, name="grad_clip")
+    log_every = require_positive_integer(log_every, name="log_every")
+    if tracker is None:
+        tracker = NullTracker()
+    if not isinstance(tracker, Tracker):
+        raise TypeError(f"tracker must be a Tracker, got {type(tracker).__name__}")
     resolved_device = get_device(device)
+    batches_per_epoch = len(batches) if isinstance(batches, Sized) else None
+    if batches_per_epoch is not None and batches_per_epoch <= 0:
+        batches_per_epoch = None
 
     model.to(resolved_device)
     model.train()
     batch_iterator = iter(_repeat_batches(batches))
     results: list[OptimizerStepResult] = []
+    initial_step = scheduler.last_epoch
 
-    for _ in range(max_steps):
+    for step_offset in range(1, max_steps + 1):
+        step = initial_step + step_offset
+        base_learning_rate = float(scheduler.base_lrs[0])
+        learning_rate_multiplier = (
+            float(scheduler.get_last_lr()[0]) / base_learning_rate
+        )
+        step_started_at = perf_counter()
 
         def micro_losses() -> Iterator[Tensor]:
             for _ in range(grad_accum_steps):
@@ -213,7 +286,18 @@ def run_training_steps(
             grad_clip=grad_clip,
         )
         scheduler.step()
+        step_duration = perf_counter() - step_started_at
         results.append(result)
+        if step % log_every == 0:
+            metrics = {
+                "train/loss": result.loss,
+                "train/lrm": learning_rate_multiplier,
+                "train/dt": step_duration,
+                "train/grad_norm": result.grad_norm,
+            }
+            if batches_per_epoch is not None:
+                metrics["train/epoch"] = step * grad_accum_steps / batches_per_epoch
+            tracker.log(metrics, step=step)
 
     return results
 
@@ -221,6 +305,8 @@ def run_training_steps(
 def train_tiny_text(
     text: str,
     config: ProjectConfig,
+    *,
+    tracker: Tracker | None = None,
 ) -> TinyTextTrainingResult:
     """Compose the byte tokenizer, tiny dataset, GPT, AdamW, and train loop."""
 
@@ -284,6 +370,8 @@ def train_tiny_text(
         grad_accum_steps=grad_accum_steps,
         grad_clip=config.train.grad_clip,
         device=device,
+        tracker=tracker,
+        log_every=config.train.log_every,
     )
     return TinyTextTrainingResult(
         model=model,
@@ -300,5 +388,6 @@ __all__ = [
     "derive_grad_accum_steps",
     "run_optimizer_step",
     "run_training_steps",
+    "run_validation",
     "train_tiny_text",
 ]
