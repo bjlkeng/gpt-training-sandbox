@@ -4,8 +4,9 @@ A from-scratch PyTorch sandbox for pretraining, supervised finetuning, evaluatin
 
 The repository is being built in small vertical slices. The byte tokenizer,
 tiny decoder-only GPT, typed configuration, run layout, and local metrics
-foundations are present. Training, sampling, evaluation, and chat commands have
-stable interfaces, but their non-dry-run implementations land in later slices.
+foundations are present. Checkpoint-backed sampling is executable; training,
+evaluation, and chat commands have stable interfaces whose non-dry-run
+implementations land in later slices.
 
 ## Setup
 
@@ -75,8 +76,11 @@ uv run python -m scripts.pretrain --config configs/smoke.yaml
 uv run python -m scripts.sample --checkpoint runs/smoke/checkpoints/last.pt
 ```
 
-Those two commands currently exit with an explicit `not implemented` error;
-the interfaces are reserved for the training-loop and generation slices. The
-same explicit behavior applies to the remaining command skeletons. Inspect any
-interface without optional dependencies by running, for example,
-`uv run python -m scripts.web_chat --help`.
+The pretraining command still exits with an explicit `not implemented` error
+until the training integration slice lands. The sampling command loads the
+model, byte tokenizer, and generation defaults from a versioned checkpoint.
+Pass `--prompt` more than once to sample multiple prompts, or override
+checkpoint settings with `--device`, `--max-new-tokens`, `--temperature`,
+`--top-k`, and `--seed`. The remaining command skeletons also fail explicitly
+until their slices land. Inspect any interface without optional dependencies by
+running, for example, `uv run python -m scripts.web_chat --help`.
