@@ -34,6 +34,9 @@ CONFIG_COMMANDS = (
     "scripts.train_sft",
     "scripts.eval_chat",
 )
+UNIMPLEMENTED_CONFIG_COMMANDS = tuple(
+    module for module in CONFIG_COMMANDS if module != "scripts.pretrain"
+)
 CHECKPOINT_COMMANDS = (
     "scripts.sample",
     "scripts.chat",
@@ -104,7 +107,10 @@ def test_config_command_dry_run_resolves_repeated_overrides_without_training(
 @pytest.mark.parametrize(
     ("module", "arguments"),
     [
-        *((module, ("--config", str(SMOKE_CONFIG))) for module in CONFIG_COMMANDS),
+        *(
+            (module, ("--config", str(SMOKE_CONFIG)))
+            for module in UNIMPLEMENTED_CONFIG_COMMANDS
+        ),
         *(
             (module, ("--checkpoint", "runs/missing/checkpoints/last.pt"))
             for module in UNIMPLEMENTED_CHECKPOINT_COMMANDS
@@ -195,3 +201,4 @@ def test_readme_documents_the_subprocess_tested_setup_and_smoke_commands() -> No
         "uv run python -m scripts.sample "
         "--checkpoint runs/smoke/checkpoints/last.pt" in readme
     )
+    assert "--resume runs/smoke/checkpoints/step_000075.pt" in readme

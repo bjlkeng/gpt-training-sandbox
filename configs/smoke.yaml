@@ -9,6 +9,10 @@ tracking:
     enabled: false
     mode: disabled
 
+data:
+  profile: tiny_text
+  base_dir: data
+
 tokenizer:
   type: byte
   vocab_size: 265
@@ -39,7 +43,9 @@ train:
   device_batch_size: 2
   total_batch_size_tokens: 1024
   grad_accum_steps: auto
-  max_steps: 100
+  max_steps: 200
+  learning_rate: 0.005
+  weight_decay: 0.0
   warmup_steps: 5
   warmdown_ratio: 0.2
   eval_every: 10
@@ -50,6 +56,13 @@ train:
   dtype: float32
   compile: false
   activation_checkpointing: false
+
+generation:
+  temperature: 0.4
+  top_k: 20
+  top_p: null
+  max_new_tokens: 100
+  seed: 1337
 
 web:
   enabled: false

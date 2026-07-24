@@ -377,6 +377,11 @@ def test_cpu_training_loop_runs_forward_backward_clip_optimizer_and_scheduler(
         events.append("scheduler")
         return original_scheduler_step(*args, **kwargs)
 
+    def record_completed_step(step: int, result: Any) -> None:
+        assert step == scheduler.last_epoch == 1
+        assert torch.isfinite(torch.tensor(result.loss))
+        events.append("callback")
+
     monkeypatch.setattr(model, "forward", record_forward)
     monkeypatch.setattr(training, "clip_grad_norm_", record_clip)
     monkeypatch.setattr(scheduler, "step", record_scheduler_step)
@@ -392,11 +397,19 @@ def test_cpu_training_loop_runs_forward_backward_clip_optimizer_and_scheduler(
         grad_accum_steps=1,
         grad_clip=train_config.grad_clip,
         device="cpu",
+        on_step=record_completed_step,
     )
     gradient_hook.remove()
     optimizer_hook.remove()
 
-    assert events == ["forward", "backward", "clip", "optimizer", "scheduler"]
+    assert events == [
+        "forward",
+        "backward",
+        "clip",
+        "optimizer",
+        "scheduler",
+        "callback",
+    ]
     assert len(results) == 1
     assert torch.isfinite(torch.tensor(results[0].loss))
     assert torch.isfinite(torch.tensor(results[0].grad_norm))
