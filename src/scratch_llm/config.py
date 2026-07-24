@@ -16,6 +16,20 @@ from typing import Any, Literal, NoReturn, get_args
 
 from omegaconf import DictConfig, OmegaConf
 
+from scratch_llm._validation import (
+    ConfigValidationError,
+    _fail,
+    _require_choice,
+    _require_half_open_unit_interval,
+    _require_int,
+    _require_non_empty,
+    _require_non_negative_int,
+    _require_non_negative_real,
+    _require_positive_int,
+    _require_positive_real,
+    _require_real,
+    _require_unit_interval,
+)
 from scratch_llm.tokenizer import SPECIAL_TOKENS
 from scratch_llm.utils import atomic_write
 
@@ -38,77 +52,6 @@ _ACTIVATION_TYPES: frozenset[str] = frozenset(get_args(ActivationType))
 _TRAIN_DTYPES: frozenset[str] = frozenset(get_args(TrainDType))
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 _RUN_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
-
-
-class ConfigValidationError(ValueError):
-    """A configuration error tied to a dotted field path."""
-
-    def __init__(self, path: str, message: str) -> None:
-        self.path = path
-        self.message = message
-        super().__init__(f"{path}: {message}")
-
-
-def _fail(path: str, message: str) -> NoReturn:
-    raise ConfigValidationError(path, message)
-
-
-def _require_non_empty(value: object, path: str) -> None:
-    if not isinstance(value, str) or not value.strip():
-        _fail(path, "must be a non-empty string")
-
-
-def _require_int(value: object, path: str) -> None:
-    if not isinstance(value, int) or isinstance(value, bool):
-        _fail(path, "must be an integer")
-
-
-def _require_positive_int(value: object, path: str) -> None:
-    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-        _fail(path, "must be a positive integer")
-
-
-def _require_non_negative_int(value: object, path: str) -> None:
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        _fail(path, "must be a non-negative integer")
-
-
-def _require_real(value: object, path: str) -> float:
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        _fail(path, "must be a number")
-    return float(value)
-
-
-def _require_positive_real(value: object, path: str) -> None:
-    if _require_real(value, path) <= 0:
-        _fail(path, "must be greater than zero")
-
-
-def _require_non_negative_real(value: object, path: str) -> None:
-    if _require_real(value, path) < 0:
-        _fail(path, "must be non-negative")
-
-
-def _require_unit_interval(
-    value: object, path: str, *, include_zero: bool = True
-) -> None:
-    numeric = _require_real(value, path)
-    lower_bound_satisfied = numeric >= 0 if include_zero else numeric > 0
-    if not lower_bound_satisfied or numeric > 1:
-        interval = "[0, 1]" if include_zero else "(0, 1]"
-        _fail(path, f"must be in {interval}")
-
-
-def _require_half_open_unit_interval(value: object, path: str) -> None:
-    numeric = _require_real(value, path)
-    if not 0 <= numeric < 1:
-        _fail(path, "must be in [0, 1)")
-
-
-def _require_choice(value: object, path: str, choices: frozenset[str]) -> None:
-    if value not in choices:
-        options = ", ".join(sorted(choices))
-        _fail(path, f"must be one of: {options}")
 
 
 def _error_summary(error: Exception) -> str:

@@ -9,6 +9,7 @@ import torch
 from torch import Tensor
 from torch.utils.data import Dataset
 
+from scratch_llm._validation import require_positive_integer
 from scratch_llm.tokenizer import VOCAB_SIZE
 
 
@@ -22,8 +23,8 @@ class NextTokenDataset(Dataset[tuple[Tensor, Tensor]]):
         *,
         vocab_size: int = VOCAB_SIZE,
     ) -> None:
-        self.seq_len = _require_positive_integer(seq_len, name="seq_len")
-        self.vocab_size = _require_positive_integer(vocab_size, name="vocab_size")
+        self.seq_len = require_positive_integer(seq_len, name="seq_len")
+        self.vocab_size = require_positive_integer(vocab_size, name="vocab_size")
         validated_ids = [
             _validate_token_id(
                 token_id,
@@ -61,14 +62,6 @@ class NextTokenDataset(Dataset[tuple[Tensor, Tensor]]):
         inputs = self._token_ids[index:stop]
         targets = self._token_ids[index + 1 : stop + 1]
         return inputs, targets
-
-
-def _require_positive_integer(value: object, *, name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise TypeError(f"{name} must be an integer, got {type(value).__name__}")
-    if value <= 0:
-        raise ValueError(f"{name} must be positive, got {value}")
-    return value
 
 
 def _validate_token_id(token_id: object, *, position: int, vocab_size: int) -> int:
