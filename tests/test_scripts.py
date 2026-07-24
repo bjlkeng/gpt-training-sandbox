@@ -7,8 +7,21 @@ import sys
 from pathlib import Path
 
 import pytest
+import torch
 
-from scratch_llm.config import load_config
+from scratch_llm.checkpoint import save_checkpoint
+from scratch_llm.config import (
+    GPTConfig,
+    GenerationConfig,
+    ProjectConfig,
+    RunConfig,
+    TokenizerConfig,
+    TrainConfig,
+    load_config,
+)
+from scratch_llm.model import GPT
+from scratch_llm.optim import build_lr_scheduler, build_optimizer
+from scratch_llm.tokenizer import VOCAB_SIZE, ByteTokenizer
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +36,10 @@ CONFIG_COMMANDS = (
 )
 CHECKPOINT_COMMANDS = (
     "scripts.sample",
+    "scripts.chat",
+    "scripts.web_chat",
+)
+UNIMPLEMENTED_CHECKPOINT_COMMANDS = (
     "scripts.chat",
     "scripts.web_chat",
 )
@@ -90,7 +107,7 @@ def test_config_command_dry_run_resolves_repeated_overrides_without_training(
         *((module, ("--config", str(SMOKE_CONFIG))) for module in CONFIG_COMMANDS),
         *(
             (module, ("--checkpoint", "runs/missing/checkpoints/last.pt"))
-            for module in CHECKPOINT_COMMANDS
+            for module in UNIMPLEMENTED_CHECKPOINT_COMMANDS
         ),
     ],
 )
@@ -102,6 +119,65 @@ def test_unimplemented_non_dry_run_commands_fail_explicitly(
 
     assert result.returncode != 0
     assert "not implemented" in result.stderr.lower()
+    assert "Traceback" not in result.stderr
+
+
+def test_sample_loads_a_tiny_checkpoint_and_prints_non_empty_text(
+    tmp_path: Path,
+) -> None:
+    config = ProjectConfig(
+        run=RunConfig(device="cpu"),
+        tokenizer=TokenizerConfig(type="byte", vocab_size=VOCAB_SIZE),
+        model=GPTConfig(
+            vocab_size=VOCAB_SIZE,
+            seq_len=4,
+            n_layer=1,
+            n_head=1,
+            n_embd=8,
+            mlp_ratio=2,
+        ),
+        train=TrainConfig(
+            device_batch_size=1,
+            total_batch_size_tokens=4,
+            grad_accum_steps=1,
+            max_steps=1,
+            warmup_steps=0,
+            warmdown_ratio=0.0,
+        ),
+        generation=GenerationConfig(
+            temperature=0.0,
+            top_k=1,
+            max_new_tokens=2,
+            seed=31,
+        ),
+    )
+    model = GPT(config.model)
+    with torch.no_grad():
+        for parameter in model.parameters():
+            parameter.zero_()
+    optimizer = build_optimizer(model, config.train)
+    scheduler = build_lr_scheduler(optimizer, config.train)
+    checkpoint_path = save_checkpoint(
+        tmp_path / "last.pt",
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        config=config,
+        step=0,
+        tokenizer=ByteTokenizer(),
+    )
+
+    result = _run_module(
+        "scripts.sample",
+        "--checkpoint",
+        str(checkpoint_path),
+        "--prompt",
+        "Hello",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "Hello\x00\x00\n"
+    assert result.stdout.strip()
     assert "Traceback" not in result.stderr
 
 
