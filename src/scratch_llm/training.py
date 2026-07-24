@@ -9,22 +9,7 @@ from torch import Tensor
 from torch.nn.utils import clip_grad_norm_
 from torch.optim import Optimizer
 
-
-def _require_positive_integer(value: object, *, name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise TypeError(f"{name} must be an integer, got {type(value).__name__}")
-    if value <= 0:
-        raise ValueError(f"{name} must be positive, got {value}")
-    return value
-
-
-def _require_positive_real(value: object, *, name: str) -> float:
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        raise TypeError(f"{name} must be a number, got {type(value).__name__}")
-    numeric = float(value)
-    if numeric <= 0:
-        raise ValueError(f"{name} must be positive, got {value}")
-    return numeric
+from scratch_llm._validation import require_positive_integer, require_positive_real
 
 
 def derive_grad_accum_steps(
@@ -35,12 +20,12 @@ def derive_grad_accum_steps(
 ) -> int:
     """Return the exact number of microbatches in one optimizer step."""
 
-    device_batch_size = _require_positive_integer(
+    device_batch_size = require_positive_integer(
         device_batch_size,
         name="device_batch_size",
     )
-    seq_len = _require_positive_integer(seq_len, name="seq_len")
-    total_batch_size_tokens = _require_positive_integer(
+    seq_len = require_positive_integer(seq_len, name="seq_len")
+    total_batch_size_tokens = require_positive_integer(
         total_batch_size_tokens,
         name="total_batch_size_tokens",
     )
@@ -84,11 +69,11 @@ def run_optimizer_step(
         raise TypeError(
             f"optimizer must be an Optimizer, got {type(optimizer).__name__}"
         )
-    grad_accum_steps = _require_positive_integer(
+    grad_accum_steps = require_positive_integer(
         grad_accum_steps,
         name="grad_accum_steps",
     )
-    grad_clip = _require_positive_real(grad_clip, name="grad_clip")
+    grad_clip = require_positive_real(grad_clip, name="grad_clip")
 
     loss_iterator = iter(micro_losses)
     loss_sum: Tensor | None = None

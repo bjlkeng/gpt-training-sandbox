@@ -16,6 +16,7 @@ from typing import Any, Literal, NoReturn, get_args
 
 from omegaconf import DictConfig, OmegaConf
 
+from scratch_llm._validation import require_positive_integer, require_positive_real
 from scratch_llm.tokenizer import SPECIAL_TOKENS
 from scratch_llm.utils import atomic_write
 
@@ -64,7 +65,9 @@ def _require_int(value: object, path: str) -> None:
 
 
 def _require_positive_int(value: object, path: str) -> None:
-    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+    try:
+        require_positive_integer(value, name=path)
+    except (TypeError, ValueError):
         _fail(path, "must be a positive integer")
 
 
@@ -80,7 +83,11 @@ def _require_real(value: object, path: str) -> float:
 
 
 def _require_positive_real(value: object, path: str) -> None:
-    if _require_real(value, path) <= 0:
+    try:
+        require_positive_real(value, name=path)
+    except TypeError:
+        _fail(path, "must be a number")
+    except ValueError:
         _fail(path, "must be greater than zero")
 
 
