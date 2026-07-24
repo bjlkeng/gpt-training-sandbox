@@ -91,3 +91,11 @@ def test_distribution_metadata_separates_core_and_optional_dependencies() -> Non
     assert core_dependencies == EXPECTED_CORE_DEPENDENCIES
     assert core_dependencies.isdisjoint(FORBIDDEN_CORE_DEPENDENCIES)
     assert optional_dependencies == EXPECTED_OPTIONAL_DEPENDENCIES
+
+    ruff_requirements = [
+        requirement
+        for requirement in requirements
+        if _normalized_requirement_name(requirement) == "ruff"
+    ]
+    assert len(ruff_requirements) == 1
+    assert ruff_requirements[0].startswith("ruff==0.15.22;")

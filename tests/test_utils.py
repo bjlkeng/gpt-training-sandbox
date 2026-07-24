@@ -150,9 +150,7 @@ def test_count_parameters_deduplicates_tied_weights_and_filters_trainable() -> N
         (1_000_000_000_000, "1.00T"),
     ],
 )
-def test_format_num_uses_stable_decimal_boundaries(
-    value: int, expected: str
-) -> None:
+def test_format_num_uses_stable_decimal_boundaries(value: int, expected: str) -> None:
     assert format_num(value) == expected
 
 
@@ -167,9 +165,7 @@ def test_format_num_uses_stable_decimal_boundaries(
         (1024**3, "1.00 GiB"),
     ],
 )
-def test_format_bytes_uses_stable_binary_boundaries(
-    value: int, expected: str
-) -> None:
+def test_format_bytes_uses_stable_binary_boundaries(value: int, expected: str) -> None:
     assert format_bytes(value) == expected
 
 
@@ -192,13 +188,7 @@ def test_json_helpers_round_trip_canonical_utf8_text(tmp_path: Path) -> None:
 
     assert result == destination
     assert destination.read_text(encoding="utf-8") == (
-        '{\n'
-        '  "a": {\n'
-        '    "enabled": true,\n'
-        '    "unicode": "café"\n'
-        '  },\n'
-        '  "z": 3\n'
-        '}\n'
+        '{\n  "a": {\n    "enabled": true,\n    "unicode": "café"\n  },\n  "z": 3\n}\n'
     )
     assert load_json(destination) == payload
 

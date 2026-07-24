@@ -31,9 +31,7 @@ def set_seed(seed: int) -> None:
     if not isinstance(seed, int) or isinstance(seed, bool):
         raise TypeError(f"seed must be an integer, got {type(seed).__name__}")
     if not 0 <= seed <= _MAX_SHARED_SEED:
-        raise ValueError(
-            f"seed must be in range [0, {_MAX_SHARED_SEED}], got {seed}"
-        )
+        raise ValueError(f"seed must be in range [0, {_MAX_SHARED_SEED}], got {seed}")
 
     random.seed(seed)
     np.random.seed(seed)
@@ -107,8 +105,7 @@ def count_parameters(module: nn.Module, *, trainable_only: bool = False) -> int:
         raise TypeError(f"module must be an nn.Module, got {type(module).__name__}")
     if not isinstance(trainable_only, bool):
         raise TypeError(
-            "trainable_only must be a boolean, "
-            f"got {type(trainable_only).__name__}"
+            f"trainable_only must be a boolean, got {type(trainable_only).__name__}"
         )
 
     seen: set[int] = set()
@@ -137,8 +134,7 @@ def format_num(value: int | float) -> str:
 
     suffix_index = 0
     while (
-        suffix_index < len(_NUMBER_SUFFIXES) - 1
-        and float(f"{abs(scaled):.2f}") >= 1000
+        suffix_index < len(_NUMBER_SUFFIXES) - 1 and float(f"{abs(scaled):.2f}") >= 1000
     ):
         scaled /= 1000
         suffix_index += 1
@@ -155,9 +151,7 @@ def format_bytes(num_bytes: int) -> str:
     """Format a non-negative byte count with IEC binary units."""
 
     if not isinstance(num_bytes, int) or isinstance(num_bytes, bool):
-        raise TypeError(
-            f"num_bytes must be an integer, got {type(num_bytes).__name__}"
-        )
+        raise TypeError(f"num_bytes must be an integer, got {type(num_bytes).__name__}")
     if num_bytes < 0:
         raise ValueError(f"num_bytes must be non-negative, got {num_bytes}")
 
