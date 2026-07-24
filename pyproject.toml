@@ -24,7 +24,7 @@ dependencies = [
 tracking = ["wandb"]
 web = ["fastapi", "pydantic", "uvicorn", "websockets"]
 demo = ["gradio"]
-dev = ["matplotlib", "mypy", "pytest", "ruff"]
+dev = ["matplotlib", "mypy", "pytest", "ruff==0.15.22"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/scratch_llm", "scripts"]

@@ -2770,7 +2770,7 @@ requires-dist = [
     { name = "pydantic", marker = "extra == 'web'" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "regex" },
-    { name = "ruff", marker = "extra == 'dev'" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.22" },
     { name = "torch" },
     { name = "tqdm" },
     { name = "uvicorn", marker = "extra == 'web'" },
