@@ -229,7 +229,7 @@ def run_training_steps(
     tracker: Tracker | None = None,
     log_every: int = 1,
 ) -> list[OptimizerStepResult]:
-    """Train a model for a bounded number of single-device optimizer steps."""
+    """Train a model until the total completed-step target ``max_steps``."""
 
     if not isinstance(model, nn.Module):
         raise TypeError(f"model must be an nn.Module, got {type(model).__name__}")
@@ -262,9 +262,12 @@ def run_training_steps(
     batch_iterator = iter(_repeat_batches(batches))
     results: list[OptimizerStepResult] = []
     initial_step = scheduler.last_epoch
+    if initial_step > max_steps:
+        raise ValueError(
+            f"scheduler step {initial_step} exceeds max_steps target {max_steps}"
+        )
 
-    for step_offset in range(1, max_steps + 1):
-        step = initial_step + step_offset
+    for step in range(initial_step + 1, max_steps + 1):
         base_learning_rate = float(scheduler.base_lrs[0])
         learning_rate_multiplier = (
             float(scheduler.get_last_lr()[0]) / base_learning_rate
