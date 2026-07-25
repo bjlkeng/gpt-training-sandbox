@@ -116,6 +116,140 @@ the latest JSON scalar for each metric name; nested diagnostic values remain
 in the append-only JSONL audit trail. Resuming the same run identity preserves
 its latest step and scalar metrics while updating the summary atomically.
 
+## Optional W&B tracking
+
+W&B is an optional fan-out from the always-on local JSONL tracker. The base
+development install exercises every local workflow without importing W&B:
+
+```bash
+uv sync --extra dev
+```
+
+Install the tracking extra only for online or offline W&B runs:
+
+```bash
+uv sync --extra dev --extra tracking
+```
+
+The complete tracking section can be set in YAML. JSONL cannot be disabled:
+
+```yaml
+tracking:
+  jsonl:
+    enabled: true
+    path: metrics/metrics.jsonl
+  wandb:
+    enabled: true
+    project: scratch-llm
+    entity: null
+    group: 3090-pretrain
+    name: null
+    tags: [base, 3090]
+    mode: offline
+    dir: runs/wandb
+    log_code: false
+    log_model_artifacts: false
+    log_dataset_artifacts: false
+    log_tokenizer_artifacts: true
+    log_prompts: false
+    log_responses: false
+```
+
+Tracking values resolve in this order, with later sources winning:
+
+1. YAML values override project defaults.
+2. `WANDB_MODE`, `WANDB_PROJECT`, `WANDB_ENTITY`, and `WANDB_RUN_GROUP`
+   override YAML.
+3. Repeated dotted `--override tracking.wandb.<field>=<value>` options override
+   the environment.
+4. `--wandb` or `--no-wandb` and `--wandb-mode` are the final dedicated
+   overrides.
+
+`WANDB_MODE` selects a mode but does not by itself change
+`tracking.wandb.enabled`; use `--wandb` or set `enabled: true` in YAML. The
+factory passes an explicit W&B name through unchanged, or defaults it to the
+resolved `run.name`. The configured group passes through, configured tags
+preserve first-occurrence order, and each command adds a stable
+`pipeline-stage:<command>` tag such as `pipeline-stage:pretrain`.
+
+### Disabled: local-only smoke
+
+This credential-free smoke command uses the base install, never imports W&B,
+and still writes `config.yaml`, `metrics/metrics.jsonl`, and
+`metrics/summary.json` below `runs/tracking-disabled-smoke/`:
+
+```bash
+uv run python -m scripts.pretrain \
+  --config configs/smoke.yaml \
+  --override run.name=tracking-disabled-smoke \
+  --no-wandb \
+  --wandb-mode disabled \
+  --dry-run
+```
+
+Either `tracking.wandb.enabled: false` or `mode: disabled` keeps the remote
+backend off. Local JSONL remains enabled in both cases.
+
+### Offline: credential-free W&B smoke
+
+Offline mode initializes the optional W&B SDK but performs no cloud sync and
+does not require credentials:
+
+```bash
+WANDB_MODE=offline \
+WANDB_PROJECT=scratch-llm \
+WANDB_RUN_GROUP=3090-offline-smoke \
+uv run --extra tracking python -m scripts.pretrain \
+  --config configs/smoke.yaml \
+  --override run.name=tracking-offline-smoke \
+  --override tracking.wandb.dir=runs/wandb \
+  --wandb \
+  --dry-run
+```
+
+The command prints the exact offline run directory, normally below
+`runs/wandb/wandb/offline-run-<timestamp>-<id>/`. When the user later has
+credentials and network access, upload that directory with:
+
+```bash
+uv run --extra tracking wandb sync \
+  runs/wandb/wandb/offline-run-<timestamp>-<id>
+```
+
+See the official [W&B sync command
+reference](https://docs.wandb.ai/models/ref/cli/wandb-sync) for account and
+bulk-sync options.
+
+### Online: authenticated W&B
+
+Online mode requires the user to authenticate W&B and have network access. The
+following dry run demonstrates environment identity, an explicit name, and
+configured tags; replace the entity before running it:
+
+```bash
+WANDB_PROJECT=scratch-llm \
+WANDB_ENTITY=your-wandb-entity \
+WANDB_RUN_GROUP=3090-pretrain \
+uv run --extra tracking python -m scripts.pretrain \
+  --config configs/smoke.yaml \
+  --override run.name=tracking-online \
+  --override tracking.wandb.name=tracking-online-explicit \
+  --override tracking.wandb.tags=[pretrain,online] \
+  --wandb \
+  --wandb-mode online \
+  --dry-run
+```
+
+The supported variables follow the official [W&B environment-variable
+reference](https://docs.wandb.ai/models/track/environment-variables), but the
+project's precedence rules above remain authoritative for these commands.
+
+All three modes keep run configuration and metrics locally. Model checkpoints
+are not uploaded by default because `log_model_artifacts` defaults to `false`;
+large dataset artifacts also default off. Raw prompts and responses remain
+independently opt-in through `log_prompts` and `log_responses`, both of which
+default to `false`.
+
 ## Training and sampling interfaces
 
 The first-sprint executable path is:
