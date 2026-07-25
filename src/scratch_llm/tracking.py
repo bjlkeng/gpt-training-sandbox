@@ -10,6 +10,9 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, TextIO
 
+from scratch_llm.config import ProjectConfig
+from scratch_llm.run import RunPaths
+
 
 class Tracker(ABC):
     """Record one run's JSON-compatible telemetry through a common lifecycle.
@@ -299,10 +302,60 @@ class CompositeTracker(Tracker):
         self._fan_out("finish")
 
 
+def build_tracker(
+    config: ProjectConfig,
+    paths: RunPaths,
+    *,
+    stage: str,
+) -> CompositeTracker:
+    """Build the run's always-local tracker and optional W&B fan-out.
+
+    JSONL is always the first child. W&B is added only when it is enabled and
+    its mode is not ``disabled``. A stable stage tag distinguishes pipeline
+    commands while preserving configured tag order.
+    """
+
+    if not isinstance(config, ProjectConfig):
+        raise TypeError(f"config must be a ProjectConfig, got {type(config).__name__}")
+    if not isinstance(paths, RunPaths):
+        raise TypeError(f"paths must be RunPaths, got {type(paths).__name__}")
+    if not isinstance(stage, str) or not stage.strip():
+        raise ValueError("stage must be a non-empty string")
+    config.validate()
+
+    local = JsonlTracker(paths.run_dir / config.tracking.jsonl.path)
+    trackers: list[Tracker] = [local]
+    wandb_config = config.tracking.wandb
+    if not wandb_config.enabled or wandb_config.mode == "disabled":
+        return CompositeTracker(*trackers)
+
+    wandb_dir = Path(wandb_config.dir)
+    try:
+        wandb_dir.mkdir(parents=True, exist_ok=True)
+        stage_tag = f"pipeline-stage:{stage}"
+        tags = list(dict.fromkeys([*wandb_config.tags, stage_tag]))
+        trackers.append(
+            WandbTracker(
+                project=wandb_config.project,
+                entity=wandb_config.entity,
+                group=wandb_config.group,
+                name=wandb_config.name or config.run.name,
+                tags=tags,
+                mode=wandb_config.mode,
+                dir=wandb_dir,
+            )
+        )
+    except BaseException:
+        local.finish()
+        raise
+    return CompositeTracker(*trackers)
+
+
 __all__ = [
     "CompositeTracker",
     "JsonlTracker",
     "NullTracker",
     "Tracker",
     "WandbTracker",
+    "build_tracker",
 ]

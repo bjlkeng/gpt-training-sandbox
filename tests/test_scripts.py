@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -69,6 +70,67 @@ def test_every_roadmap_command_has_dependency_light_help(module: str) -> None:
 
 
 @pytest.mark.parametrize("module", CONFIG_COMMANDS)
+def test_config_commands_share_explicit_wandb_options(module: str) -> None:
+    result = _run_module(module, "--help")
+
+    assert result.returncode == 0, result.stderr
+    assert "--wandb" in result.stdout
+    assert "--no-wandb" in result.stdout
+    assert "--wandb-mode {online,offline,disabled}" in result.stdout
+
+
+def test_dry_run_applies_wandb_environment_then_cli_without_importing_wandb(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "runs"
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "WANDB_MODE": "offline",
+            "WANDB_PROJECT": "environment-project",
+            "WANDB_ENTITY": "environment-entity",
+            "WANDB_RUN_GROUP": "environment-group",
+        }
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.pretrain",
+            "--config",
+            str(SMOKE_CONFIG),
+            "--override",
+            f"run.output_dir={output_dir}",
+            "--override",
+            "run.name=tracking-dry-run",
+            "--override",
+            "tracking.wandb.project=cli-project",
+            "--wandb",
+            "--wandb-mode",
+            "disabled",
+            "--dry-run",
+        ],
+        cwd=PROJECT_ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    run_dir = output_dir / "tracking-dry-run"
+    resolved = load_config(run_dir / "config.yaml")
+    assert result.returncode == 0, result.stderr
+    assert resolved.tracking.wandb.enabled is True
+    assert resolved.tracking.wandb.mode == "disabled"
+    assert resolved.tracking.wandb.project == "cli-project"
+    assert resolved.tracking.wandb.entity == "environment-entity"
+    assert resolved.tracking.wandb.group == "environment-group"
+    assert (run_dir / "metrics" / "metrics.jsonl").is_file()
+    assert "Traceback" not in result.stderr
+
+
+@pytest.mark.parametrize("module", CONFIG_COMMANDS)
 def test_config_command_dry_run_resolves_repeated_overrides_without_training(
     module: str,
     tmp_path: Path,
@@ -100,7 +162,8 @@ def test_config_command_dry_run_resolves_repeated_overrides_without_training(
     assert (run_dir / "checkpoints").is_dir()
     assert (run_dir / "metrics").is_dir()
     assert not list((run_dir / "checkpoints").iterdir())
-    assert not list((run_dir / "metrics").iterdir())
+    assert [path.name for path in (run_dir / "metrics").iterdir()] == ["metrics.jsonl"]
+    assert (run_dir / "metrics" / "metrics.jsonl").read_bytes() == b""
     assert not list(run_dir.rglob("*.pt"))
 
 

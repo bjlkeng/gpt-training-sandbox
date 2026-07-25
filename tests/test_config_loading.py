@@ -74,6 +74,55 @@ model:
     assert config.train.compile is True
 
 
+def test_tracking_sources_resolve_in_yaml_environment_cli_order(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "tracking.yaml"
+    config_path.write_text(
+        """
+tracking:
+  wandb:
+    enabled: false
+    project: from-yaml
+    entity: yaml-entity
+    group: yaml-group
+    mode: online
+""".lstrip(),
+        encoding="utf-8",
+    )
+    environment = {
+        "WANDB_MODE": "offline",
+        "WANDB_PROJECT": "from-environment",
+        "WANDB_ENTITY": "environment-entity",
+        "WANDB_RUN_GROUP": "environment-group",
+        "UNRELATED_SETTING": "preserved",
+    }
+
+    config = load_config(
+        config_path,
+        overrides=[
+            "tracking.wandb.project=from-dotted-cli",
+            "tracking.wandb.group=cli-group",
+        ],
+        environment=environment,
+        wandb_enabled=True,
+        wandb_mode="disabled",
+    )
+
+    assert config.tracking.wandb.enabled is True
+    assert config.tracking.wandb.mode == "disabled"
+    assert config.tracking.wandb.project == "from-dotted-cli"
+    assert config.tracking.wandb.entity == "environment-entity"
+    assert config.tracking.wandb.group == "cli-group"
+    assert environment == {
+        "WANDB_MODE": "offline",
+        "WANDB_PROJECT": "from-environment",
+        "WANDB_ENTITY": "environment-entity",
+        "WANDB_RUN_GROUP": "environment-group",
+        "UNRELATED_SETTING": "preserved",
+    }
+
+
 def test_load_config_accepts_one_override_without_a_wrapper_list() -> None:
     config = load_config(overrides="run.device=cpu")
 

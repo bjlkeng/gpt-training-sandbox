@@ -21,9 +21,9 @@ from scratch_llm.config import ProjectConfig
 from scratch_llm.data import NextTokenDataset
 from scratch_llm.model import GPT
 from scratch_llm.optim import build_lr_scheduler, build_optimizer
-from scratch_llm.run import RunPaths, prepare_run
+from scratch_llm.run import RunPaths
 from scratch_llm.tokenizer import SPECIAL_TOKENS, ByteTokenizer
-from scratch_llm.tracking import JsonlTracker
+from scratch_llm.tracking import Tracker
 from scratch_llm.training import (
     OptimizerStepResult,
     derive_grad_accum_steps,
@@ -200,12 +200,18 @@ def _validate_existing_outputs(
 def run_tiny_pretraining(
     config: ProjectConfig,
     *,
+    paths: RunPaths,
+    tracker: Tracker,
     resume_from: str | Path | None = None,
 ) -> PretrainingResult:
     """Train or resume the deterministic first-sprint tiny-text workflow."""
 
     if not isinstance(config, ProjectConfig):
         raise TypeError(f"config must be a ProjectConfig, got {type(config).__name__}")
+    if not isinstance(paths, RunPaths):
+        raise TypeError(f"paths must be RunPaths, got {type(paths).__name__}")
+    if not isinstance(tracker, Tracker):
+        raise TypeError(f"tracker must be a Tracker, got {type(tracker).__name__}")
     _validate_tiny_text_config(config)
     text = _read_tiny_text(config)
     set_seed(config.run.seed)
@@ -236,7 +242,6 @@ def run_tiny_pretraining(
             )
 
     batches = _build_batches(text, config, tokenizer)
-    paths = prepare_run(config)
     metrics_path = paths.run_dir / config.tracking.jsonl.path
     _validate_existing_outputs(
         paths,
@@ -245,7 +250,6 @@ def run_tiny_pretraining(
         is_resume=resume_from is not None,
     )
     metrics_were_empty = not metrics_path.exists() or metrics_path.stat().st_size == 0
-    tracker = JsonlTracker(metrics_path)
     if metrics_were_empty:
         tracker.log_config(config.to_dict())
 
@@ -281,32 +285,29 @@ def run_tiny_pretraining(
         seq_len=config.model.seq_len,
         total_batch_size_tokens=config.train.total_batch_size_tokens,
     )
-    try:
-        step_results = run_training_steps(
-            model,
-            batches,
-            optimizer,
-            scheduler,
-            max_steps=config.train.max_steps,
-            grad_accum_steps=grad_accum_steps,
-            grad_clip=config.train.grad_clip,
-            device=device,
-            tracker=tracker,
-            log_every=config.train.log_every,
-            on_step=save_periodic_checkpoint,
-        )
-        final_step = scheduler.last_epoch
-        save_checkpoint(
-            checkpoint_path,
-            model=model,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            config=config,
-            step=final_step,
-            tokenizer=tokenizer,
-        )
-    finally:
-        tracker.finish()
+    step_results = run_training_steps(
+        model,
+        batches,
+        optimizer,
+        scheduler,
+        max_steps=config.train.max_steps,
+        grad_accum_steps=grad_accum_steps,
+        grad_clip=config.train.grad_clip,
+        device=device,
+        tracker=tracker,
+        log_every=config.train.log_every,
+        on_step=save_periodic_checkpoint,
+    )
+    final_step = scheduler.last_epoch
+    save_checkpoint(
+        checkpoint_path,
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        config=config,
+        step=final_step,
+        tokenizer=tokenizer,
+    )
 
     return PretrainingResult(
         paths=paths,

@@ -16,7 +16,15 @@ from scratch_llm.tracking import (
     NullTracker,
     Tracker,
     WandbTracker,
+    build_tracker,
 )
+from scratch_llm.config import (
+    ProjectConfig,
+    RunConfig,
+    TrackingConfig,
+    WandbConfig,
+)
+from scratch_llm.run import prepare_run
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -343,6 +351,122 @@ class _FakeWandbRun:
 
     def finish(self) -> None:
         self.finish_calls += 1
+
+
+@pytest.mark.parametrize(
+    ("mode", "configured_name", "expected_name"),
+    [
+        ("online", None, "factory-run"),
+        ("offline", "explicit-name", "explicit-name"),
+    ],
+)
+def test_tracker_factory_builds_local_first_with_resolved_wandb_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    configured_name: str | None,
+    expected_name: str,
+) -> None:
+    init_calls: list[dict[str, Any]] = []
+    run = _FakeWandbRun()
+    fake_wandb = ModuleType("wandb")
+
+    def init(**kwargs: Any) -> _FakeWandbRun:
+        init_calls.append(kwargs)
+        return run
+
+    setattr(fake_wandb, "init", init)
+    setattr(fake_wandb, "Artifact", _FakeWandbArtifact)
+    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+    wandb_dir = tmp_path / "wandb"
+    config = ProjectConfig(
+        run=RunConfig(
+            name="factory-run",
+            device="cpu",
+            output_dir=str(tmp_path / "runs"),
+        ),
+        tracking=TrackingConfig(
+            wandb=WandbConfig(
+                enabled=True,
+                project="factory-project",
+                entity="factory-entity",
+                group="factory-group",
+                name=configured_name,
+                tags=["configured"],
+                mode=mode,  # type: ignore[arg-type]
+                dir=str(wandb_dir),
+            )
+        ),
+    )
+    paths = prepare_run(config)
+
+    tracker = build_tracker(config, paths, stage="pretrain")
+    tracker.log({"train/loss": 0.5}, step=1)
+    tracker.finish()
+
+    metrics_path = paths.run_dir / config.tracking.jsonl.path
+    assert isinstance(tracker, CompositeTracker)
+    assert _read_jsonl(metrics_path) == [
+        {
+            "record_type": "metrics",
+            "metrics": {"train/loss": 0.5},
+            "step": 1,
+        }
+    ]
+    assert run.logs == [({"train/loss": 0.5}, {"step": 1})]
+    assert wandb_dir.is_dir()
+    assert init_calls == [
+        {
+            "project": "factory-project",
+            "entity": "factory-entity",
+            "group": "factory-group",
+            "name": expected_name,
+            "tags": ["configured", "pipeline-stage:pretrain"],
+            "mode": mode,
+            "dir": str(wandb_dir),
+        }
+    ]
+
+
+def test_tracker_factory_disabled_mode_stays_local_without_importing_wandb(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delitem(sys.modules, "wandb", raising=False)
+    real_import = __import__
+
+    def blocked_import(
+        name: str,
+        globals: dict[str, Any] | None = None,
+        locals: dict[str, Any] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> Any:
+        if name == "wandb" or name.startswith("wandb."):
+            raise AssertionError("disabled factory imported wandb")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr("builtins.__import__", blocked_import)
+    config = ProjectConfig(
+        run=RunConfig(
+            name="local-only",
+            device="cpu",
+            output_dir=str(tmp_path / "runs"),
+        ),
+        tracking=TrackingConfig(wandb=WandbConfig(enabled=True, mode="disabled")),
+    )
+    paths = prepare_run(config)
+
+    tracker = build_tracker(config, paths, stage="eval_base")
+    tracker.log({"eval/val_bpb": 1.25})
+    tracker.finish()
+
+    assert _read_jsonl(paths.metrics_dir / "metrics.jsonl") == [
+        {
+            "record_type": "metrics",
+            "metrics": {"eval/val_bpb": 1.25},
+        }
+    ]
 
 
 def test_wandb_tracker_maps_the_complete_lifecycle_to_one_run(

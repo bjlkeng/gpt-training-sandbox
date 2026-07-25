@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import os
 from collections.abc import Sequence
 from pathlib import Path
 
-from scratch_llm.config import ConfigValidationError, load_config
-from scratch_llm.run import RunConflictError, prepare_run
+from scratch_llm.config import ConfigValidationError, ProjectConfig, load_config
+from scratch_llm.run import RunConflictError, RunPaths, prepare_run
+from scratch_llm.tracking import CompositeTracker, build_tracker
 
 
 def config_parser(command: str, description: str) -> argparse.ArgumentParser:
@@ -37,6 +39,25 @@ def config_parser(command: str, description: str) -> argparse.ArgumentParser:
         action="store_true",
         help="Resolve configuration and prepare run paths without doing work.",
     )
+    wandb_group = parser.add_mutually_exclusive_group()
+    wandb_group.add_argument(
+        "--wandb",
+        dest="wandb_enabled",
+        action="store_true",
+        default=None,
+        help="Enable optional W&B tracking.",
+    )
+    wandb_group.add_argument(
+        "--no-wandb",
+        dest="wandb_enabled",
+        action="store_false",
+        help="Disable optional W&B tracking while keeping local JSONL enabled.",
+    )
+    parser.add_argument(
+        "--wandb-mode",
+        choices=("online", "offline", "disabled"),
+        help="Select the W&B operating mode.",
+    )
     return parser
 
 
@@ -65,10 +86,7 @@ def run_config_stub(
     """Resolve a config dry-run or reject an unimplemented execution path."""
 
     arguments = parser.parse_args(argv)
-    try:
-        config = load_config(arguments.config, arguments.overrides)
-    except ConfigValidationError as error:
-        parser.error(str(error))
+    config = resolve_config_arguments(parser, arguments)
 
     if not arguments.dry_run:
         parser.error(
@@ -76,16 +94,52 @@ def run_config_stub(
             "use --dry-run to validate its configuration"
         )
 
-    try:
-        paths = prepare_run(config)
-    except (OSError, RunConflictError) as error:
-        parser.error(str(error))
+    paths, tracker = prepare_tracked_run(
+        parser,
+        config,
+        command=command,
+    )
+    tracker.finish()
 
     print(f"Run directory: {paths.run_dir}")
     print(f"Resolved config: {paths.config_path}")
     print("Resolved values:")
     print(config.to_yaml(), end="")
     return 0
+
+
+def resolve_config_arguments(
+    parser: argparse.ArgumentParser,
+    arguments: argparse.Namespace,
+) -> ProjectConfig:
+    """Resolve one config command using the shared source precedence."""
+
+    try:
+        return load_config(
+            arguments.config,
+            arguments.overrides,
+            environment=os.environ,
+            wandb_enabled=arguments.wandb_enabled,
+            wandb_mode=arguments.wandb_mode,
+        )
+    except ConfigValidationError as error:
+        parser.error(str(error))
+
+
+def prepare_tracked_run(
+    parser: argparse.ArgumentParser,
+    config: ProjectConfig,
+    *,
+    command: str,
+) -> tuple[RunPaths, CompositeTracker]:
+    """Prepare run paths and assemble the command's shared tracker."""
+
+    try:
+        paths = prepare_run(config)
+        tracker = build_tracker(config, paths, stage=command)
+    except (ModuleNotFoundError, OSError, RunConflictError, ValueError) as error:
+        parser.error(str(error))
+    return paths, tracker
 
 
 def run_checkpoint_stub(

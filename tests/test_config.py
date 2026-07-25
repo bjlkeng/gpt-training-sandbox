@@ -313,9 +313,17 @@ def test_validation_rejects_invalid_modes(
         factory()
 
 
-def _enable_wandb_with_disabled_mode(config: ProjectConfig) -> None:
+@pytest.mark.parametrize("mode", ["online", "offline", "disabled"])
+def test_tracking_schema_accepts_every_wandb_mode_with_jsonl_always_on(
+    mode: WandbMode,
+) -> None:
+    config = ProjectConfig()
     config.tracking.wandb.enabled = True
-    config.tracking.wandb.mode = "disabled"
+    config.tracking.wandb.mode = mode
+
+    config.validate()
+
+    assert config.tracking.jsonl.enabled is True
 
 
 @pytest.mark.parametrize(
@@ -324,10 +332,6 @@ def _enable_wandb_with_disabled_mode(config: ProjectConfig) -> None:
         (
             lambda config: setattr(config.tracking.jsonl, "enabled", False),
             "tracking.jsonl.enabled",
-        ),
-        (
-            _enable_wandb_with_disabled_mode,
-            "tracking.wandb.mode",
         ),
         (
             lambda config: setattr(config.model, "vocab_size", 265),

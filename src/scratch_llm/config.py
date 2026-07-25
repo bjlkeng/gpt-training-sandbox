@@ -9,7 +9,7 @@ applying overrides.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal, NoReturn, get_args
@@ -52,6 +52,12 @@ _ACTIVATION_TYPES: frozenset[str] = frozenset(get_args(ActivationType))
 _TRAIN_DTYPES: frozenset[str] = frozenset(get_args(TrainDType))
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 _RUN_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+_WANDB_ENVIRONMENT_FIELDS = {
+    "WANDB_MODE": "mode",
+    "WANDB_PROJECT": "project",
+    "WANDB_ENTITY": "entity",
+    "WANDB_RUN_GROUP": "group",
+}
 
 
 def _error_summary(error: Exception) -> str:
@@ -192,11 +198,6 @@ class WandbConfig(_SerializableConfig):
         _require_choice(self.mode, "tracking.wandb.mode", _WANDB_MODES)
         _require_non_empty(self.project, "tracking.wandb.project")
         _require_non_empty(self.dir, "tracking.wandb.dir")
-        if self.enabled and self.mode == "disabled":
-            _fail(
-                "tracking.wandb.mode",
-                "cannot be 'disabled' when tracking.wandb.enabled is true",
-            )
         for index, tag in enumerate(self.tags):
             _require_non_empty(tag, f"tracking.wandb.tags.{index}")
 
@@ -524,17 +525,55 @@ Config = ProjectConfig
 def load_config(
     path: str | Path | None = None,
     overrides: Iterable[str] | str = (),
+    *,
+    environment: Mapping[str, str] | None = None,
+    wandb_enabled: bool | None = None,
+    wandb_mode: WandbMode | None = None,
 ) -> ProjectConfig:
-    """Resolve defaults, partial YAML, and ordered OmegaConf overrides."""
+    """Resolve defaults, YAML, W&B environment, and ordered CLI overrides.
+
+    Source precedence is defaults, YAML, supported ``WANDB_*`` variables,
+    dotted CLI overrides, then dedicated W&B CLI options. The supplied
+    environment mapping is read without being mutated.
+    """
 
     defaults = OmegaConf.structured(ProjectConfig)
     OmegaConf.set_struct(defaults, True)
     sources = [defaults]
     if path is not None:
         sources.append(_load_yaml_config(Path(path)))
+
+    if environment is not None:
+        environment_values: dict[str, str | None] = {}
+        for variable, field_name in _WANDB_ENVIRONMENT_FIELDS.items():
+            if variable not in environment:
+                continue
+            value: str | None = environment[variable]
+            if field_name in {"entity", "group"} and value == "":
+                value = None
+            environment_values[field_name] = value
+        if environment_values:
+            sources.append(
+                OmegaConf.create(
+                    {"tracking": {"wandb": environment_values}},
+                )
+            )
+
     if isinstance(overrides, str):
         overrides = (overrides,)
     sources.extend(_parse_dotted_override(override) for override in overrides)
+
+    dedicated_wandb_values: dict[str, object] = {}
+    if wandb_enabled is not None:
+        dedicated_wandb_values["enabled"] = wandb_enabled
+    if wandb_mode is not None:
+        dedicated_wandb_values["mode"] = wandb_mode
+    if dedicated_wandb_values:
+        sources.append(
+            OmegaConf.create(
+                {"tracking": {"wandb": dedicated_wandb_values}},
+            )
+        )
 
     try:
         resolved = OmegaConf.merge(*sources)
