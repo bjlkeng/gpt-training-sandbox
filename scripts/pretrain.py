@@ -7,10 +7,13 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from scratch_llm.checkpoint import CheckpointError
-from scratch_llm.config import ConfigValidationError, load_config
 from scratch_llm.pretraining import PretrainingError, run_tiny_pretraining
-from scratch_llm.run import RunConflictError, prepare_run
-from scripts._common import config_parser
+from scratch_llm.run import RunConflictError
+from scripts._common import (
+    config_parser,
+    prepare_tracked_run,
+    resolve_config_arguments,
+)
 
 
 COMMAND = "pretrain"
@@ -36,39 +39,40 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser = build_parser()
     arguments = parser.parse_args(argv)
-    try:
-        config = load_config(arguments.config, arguments.overrides)
-    except ConfigValidationError as error:
-        parser.error(str(error))
+    config = resolve_config_arguments(parser, arguments)
 
     if arguments.dry_run:
         if arguments.resume is not None:
             parser.error("--resume cannot be combined with --dry-run")
-        try:
-            paths = prepare_run(config)
-        except (OSError, RunConflictError) as error:
-            parser.error(str(error))
+        paths, tracker = prepare_tracked_run(parser, config, command=COMMAND)
+        tracker.finish()
         print(f"Run directory: {paths.run_dir}")
         print(f"Resolved config: {paths.config_path}")
         print("Resolved values:")
         print(config.to_yaml(), end="")
         return 0
 
+    paths, tracker = prepare_tracked_run(parser, config, command=COMMAND)
     try:
-        result = run_tiny_pretraining(
-            config,
-            resume_from=arguments.resume,
-        )
-    except (
-        CheckpointError,
-        OSError,
-        PretrainingError,
-        RunConflictError,
-        RuntimeError,
-        TypeError,
-        ValueError,
-    ) as error:
-        parser.error(str(error))
+        try:
+            result = run_tiny_pretraining(
+                config,
+                paths=paths,
+                tracker=tracker,
+                resume_from=arguments.resume,
+            )
+        except (
+            CheckpointError,
+            OSError,
+            PretrainingError,
+            RunConflictError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ) as error:
+            parser.error(str(error))
+    finally:
+        tracker.finish()
 
     print(f"Run directory: {result.paths.run_dir}")
     print(f"Resolved config: {result.paths.config_path}")
