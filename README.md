@@ -8,6 +8,22 @@ foundations are present. The tiny-text pretraining path and checkpoint-backed
 sampling are executable; evaluation and chat commands have stable interfaces
 whose non-dry-run implementations land in later slices.
 
+## Roadmap status
+
+Milestone 1 — Hello Tiny GPT: complete. The first vertical slice runs local
+text through the byte tokenizer and tiny decoder-only GPT, trains to a
+checkpoint with decreasing loss and local JSONL metrics, samples non-empty
+text from that checkpoint, and resumes training from a saved step.
+
+Run its bounded CPU command-level acceptance check with:
+
+```bash
+uv run --extra dev pytest -q tests/test_pretrain_integration.py
+```
+
+The full test suite also protects the deterministic fixed-batch overfit
+threshold. Milestone 2 extends the local tracking foundation.
+
 ## Setup
 
 Install [uv](https://docs.astral.sh/uv/), clone the repository, and create the
