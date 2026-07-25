@@ -9,7 +9,7 @@ from pathlib import Path
 
 from scratch_llm.config import ConfigValidationError, ProjectConfig, load_config
 from scratch_llm.run import RunConflictError, RunPaths, prepare_run
-from scratch_llm.tracking import CompositeTracker, build_tracker
+from scratch_llm.tracking import RunTracker, build_tracker
 
 
 def config_parser(command: str, description: str) -> argparse.ArgumentParser:
@@ -99,12 +99,11 @@ def run_config_stub(
         config,
         command=command,
     )
-    tracker.finish()
-
-    print(f"Run directory: {paths.run_dir}")
-    print(f"Resolved config: {paths.config_path}")
-    print("Resolved values:")
-    print(config.to_yaml(), end="")
+    with tracker:
+        print(f"Run directory: {paths.run_dir}")
+        print(f"Resolved config: {paths.config_path}")
+        print("Resolved values:")
+        print(config.to_yaml(), end="")
     return 0
 
 
@@ -131,7 +130,7 @@ def prepare_tracked_run(
     config: ProjectConfig,
     *,
     command: str,
-) -> tuple[RunPaths, CompositeTracker]:
+) -> tuple[RunPaths, RunTracker]:
     """Prepare run paths and assemble the command's shared tracker."""
 
     try:

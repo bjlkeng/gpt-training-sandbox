@@ -83,6 +83,39 @@ The same `--config`, repeated `--override`, and `--dry-run` convention is
 available on `train_tokenizer`, `eval_tokenizer`, `pretrain`, `eval_base`,
 `train_sft`, and `eval_chat`.
 
+## Run-local tracking outputs
+
+Every config-driven command creates an always-local event stream at
+`<run.output_dir>/<run.name>/metrics/metrics.jsonl`. Each line is one complete
+UTF-8 JSON object with a `record_type` of `config`, `metrics`, or `artifact`. A
+new run writes its fully resolved configuration once as the first record.
+Reopening the same run validates that record instead of appending a duplicate
+or a conflicting configuration.
+
+`<run.output_dir>/<run.name>/metrics/summary.json` is an atomically replaced
+view of the same lifecycle. Its stable schema is:
+
+```json
+{
+  "schema_version": 1,
+  "run": {
+    "name": "smoke",
+    "output_dir": "runs/smoke",
+    "stage": "pretrain"
+  },
+  "status": "completed",
+  "latest_step": 200,
+  "latest_metrics": {
+    "train/loss": 0.25
+  }
+}
+```
+
+`status` is `running`, `completed`, or `failed`. `latest_metrics` retains only
+the latest JSON scalar for each metric name; nested diagnostic values remain
+in the append-only JSONL audit trail. Resuming the same run identity preserves
+its latest step and scalar metrics while updating the summary atomically.
+
 ## Training and sampling interfaces
 
 The first-sprint executable path is:

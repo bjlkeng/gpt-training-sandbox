@@ -82,10 +82,30 @@ def test_pretrain_checkpoint_sample_metrics_and_resume_workflow(
     assert final_checkpoint.is_file()
     assert resume_checkpoint.is_file()
     records = _metric_records(metrics_path)
+    all_records = [
+        json.loads(line)
+        for line in metrics_path.read_text(encoding="utf-8").splitlines()
+    ]
     assert [record["step"] for record in records] == list(range(1, 7))
+    assert [record["record_type"] for record in all_records].count("config") == 1
+    assert all_records[0] == {
+        "record_type": "config",
+        "config": fresh_config.to_dict(),
+    }
     losses = [float(record["metrics"]["train/loss"]) for record in records]  # type: ignore[index]
     assert losses[-1] < losses[0]
     assert load_model_checkpoint(final_checkpoint).step == 6
+    assert json.loads((fresh_run / "metrics" / "summary.json").read_text()) == {
+        "schema_version": 1,
+        "run": {
+            "name": fresh_config.run.name,
+            "output_dir": str(fresh_run),
+            "stage": "pretrain",
+        },
+        "status": "completed",
+        "latest_step": 6,
+        "latest_metrics": records[-1]["metrics"],
+    }
 
     sampled = _run_module(
         "scripts.sample",
@@ -115,5 +135,12 @@ def test_pretrain_checkpoint_sample_metrics_and_resume_workflow(
     resumed_checkpoint = resumed_run / "checkpoints" / "last.pt"
     assert resumed.returncode == 0, resumed.stderr
     assert [record["step"] for record in resumed_metrics] == [6]
+    resumed_records = [
+        json.loads(line)
+        for line in (resumed_run / resumed_config.tracking.jsonl.path)
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert [record["record_type"] for record in resumed_records].count("config") == 1
     assert load_model_checkpoint(resumed_checkpoint).step == 6
     assert "Resumed from step 5" in resumed.stdout

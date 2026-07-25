@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -18,6 +19,7 @@ from scratch_llm.config import (
     RunConfig,
     TokenizerConfig,
     TrainConfig,
+    dump_config,
     load_config,
 )
 from scratch_llm.model import GPT
@@ -162,9 +164,69 @@ def test_config_command_dry_run_resolves_repeated_overrides_without_training(
     assert (run_dir / "checkpoints").is_dir()
     assert (run_dir / "metrics").is_dir()
     assert not list((run_dir / "checkpoints").iterdir())
-    assert [path.name for path in (run_dir / "metrics").iterdir()] == ["metrics.jsonl"]
-    assert (run_dir / "metrics" / "metrics.jsonl").read_bytes() == b""
+    assert sorted(path.name for path in (run_dir / "metrics").iterdir()) == [
+        "metrics.jsonl",
+        "summary.json",
+    ]
+    records = [
+        json.loads(line)
+        for line in (run_dir / "metrics" / "metrics.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert records == [
+        {
+            "record_type": "config",
+            "config": load_config(resolved_config).to_dict(),
+        }
+    ]
+    summary = json.loads(
+        (run_dir / "metrics" / "summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["status"] == "completed"
+    assert summary["run"] == {
+        "name": run_name,
+        "output_dir": str(run_dir),
+        "stage": command_name,
+    }
     assert not list(run_dir.rglob("*.pt"))
+
+
+def test_failed_pretrain_still_closes_valid_local_tracking_outputs(
+    tmp_path: Path,
+) -> None:
+    config = load_config(SMOKE_CONFIG)
+    config.run.name = "failing-pretrain"
+    config.run.output_dir = str(tmp_path / "runs")
+    config.data.profile = "not-yet-supported"
+    config_path = dump_config(config, tmp_path / "failing.yaml")
+
+    result = _run_module(
+        "scripts.pretrain",
+        "--config",
+        str(config_path),
+        "--no-wandb",
+    )
+
+    run_dir = Path(config.run.output_dir) / config.run.name
+    metrics_path = run_dir / config.tracking.jsonl.path
+    records = [
+        json.loads(line)
+        for line in metrics_path.read_text(encoding="utf-8").splitlines()
+    ]
+    summary = json.loads(
+        (run_dir / "metrics" / "summary.json").read_text(encoding="utf-8")
+    )
+    assert result.returncode != 0
+    assert records == [
+        {
+            "record_type": "config",
+            "config": config.to_dict(),
+        }
+    ]
+    assert summary["status"] == "failed"
+    assert summary["latest_step"] is None
+    assert "Traceback" not in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -265,3 +327,8 @@ def test_readme_documents_the_subprocess_tested_setup_and_smoke_commands() -> No
         "--checkpoint runs/smoke/checkpoints/last.pt" in readme
     )
     assert "--resume runs/smoke/checkpoints/step_000075.pt" in readme
+    assert "metrics/metrics.jsonl" in readme
+    assert "metrics/summary.json" in readme
+    assert '"schema_version": 1' in readme
+    assert '"latest_step": 200' in readme
+    assert "`running`, `completed`, or `failed`" in readme

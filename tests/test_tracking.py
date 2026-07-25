@@ -14,6 +14,8 @@ from scratch_llm.tracking import (
     CompositeTracker,
     JsonlTracker,
     NullTracker,
+    RunSummary,
+    RunTracker,
     Tracker,
     WandbTracker,
     build_tracker,
@@ -172,6 +174,43 @@ def test_jsonl_tracker_rejects_invalid_json_without_appending_a_partial_record(
 
     assert destination.read_bytes() == b""
     tracker.finish()
+
+
+def test_jsonl_tracker_rejects_an_existing_partial_record_before_append(
+    tmp_path: Path,
+) -> None:
+    destination = tmp_path / "metrics.jsonl"
+    partial = b'{"record_type":"metrics","metrics":{"loss":1.0}}'
+    destination.write_bytes(partial)
+
+    with pytest.raises(ValueError, match="complete newline-delimited JSON"):
+        JsonlTracker(destination)
+
+    assert destination.read_bytes() == partial
+
+
+def test_jsonl_tracker_logs_one_matching_config_and_rejects_conflicts(
+    tmp_path: Path,
+) -> None:
+    destination = tmp_path / "metrics.jsonl"
+    config = {"run": {"name": "resume", "label": "café"}}
+    first = JsonlTracker(destination)
+
+    assert first.log_config_once(config) is True
+    first.finish()
+
+    resumed = JsonlTracker(destination)
+    assert resumed.log_config_once(config) is False
+    with pytest.raises(ValueError, match="conflicting resolved configuration"):
+        resumed.log_config_once({"run": {"name": "different"}})
+    resumed.finish()
+
+    assert _read_jsonl(destination) == [
+        {
+            "record_type": "config",
+            "config": config,
+        }
+    ]
 
 
 class _RecordingTracker(NullTracker):
@@ -405,15 +444,21 @@ def test_tracker_factory_builds_local_first_with_resolved_wandb_identity(
     tracker.finish()
 
     metrics_path = paths.run_dir / config.tracking.jsonl.path
+    assert isinstance(tracker, RunTracker)
     assert isinstance(tracker, CompositeTracker)
     assert _read_jsonl(metrics_path) == [
+        {
+            "record_type": "config",
+            "config": config.to_dict(),
+        },
         {
             "record_type": "metrics",
             "metrics": {"train/loss": 0.5},
             "step": 1,
-        }
+        },
     ]
     assert run.logs == [({"train/loss": 0.5}, {"step": 1})]
+    assert run.config.updates == [(config.to_dict(), True)]
     assert wandb_dir.is_dir()
     assert init_calls == [
         {
@@ -459,14 +504,138 @@ def test_tracker_factory_disabled_mode_stays_local_without_importing_wandb(
 
     tracker = build_tracker(config, paths, stage="eval_base")
     tracker.log({"eval/val_bpb": 1.25})
+    artifact_path = paths.metrics_dir / "base_eval.json"
+    artifact_path.write_text('{"val_bpb": 1.25}\n', encoding="utf-8")
+    tracker.log_artifact(
+        str(artifact_path),
+        name="base-eval",
+        type="evaluation",
+    )
     tracker.finish()
 
     assert _read_jsonl(paths.metrics_dir / "metrics.jsonl") == [
         {
+            "record_type": "config",
+            "config": config.to_dict(),
+        },
+        {
             "record_type": "metrics",
             "metrics": {"eval/val_bpb": 1.25},
-        }
+        },
+        {
+            "record_type": "artifact",
+            "path": str(artifact_path),
+            "name": "base-eval",
+            "type": "evaluation",
+        },
     ]
+    assert artifact_path.is_file()
+    assert json.loads((paths.metrics_dir / "summary.json").read_text()) == {
+        "schema_version": 1,
+        "run": {
+            "name": "local-only",
+            "output_dir": str(paths.run_dir),
+            "stage": "eval_base",
+        },
+        "status": "completed",
+        "latest_step": None,
+        "latest_metrics": {"eval/val_bpb": 1.25},
+    }
+
+
+def test_tracker_factory_resume_keeps_one_config_and_advances_summary(
+    tmp_path: Path,
+) -> None:
+    config = ProjectConfig(
+        run=RunConfig(
+            name="resumed-local",
+            device="cpu",
+            output_dir=str(tmp_path / "runs"),
+        )
+    )
+    paths = prepare_run(config)
+    first = build_tracker(config, paths, stage="pretrain")
+    first.log({"train/loss": 2.0}, step=1)
+    first.finish()
+
+    resumed = build_tracker(config, paths, stage="pretrain")
+    resumed.log({"train/loss": 1.0, "train/epoch": 0.5}, step=2)
+    resumed.finish()
+
+    records = _read_jsonl(paths.metrics_dir / "metrics.jsonl")
+    assert [record["record_type"] for record in records].count("config") == 1
+    assert [record.get("step") for record in records if "step" in record] == [1, 2]
+    summary = json.loads((paths.metrics_dir / "summary.json").read_text())
+    assert summary["status"] == "completed"
+    assert summary["latest_step"] == 2
+    assert summary["latest_metrics"] == {
+        "train/epoch": 0.5,
+        "train/loss": 1.0,
+    }
+
+
+def test_run_summary_resumes_atomically_without_losing_latest_scalars(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "metrics" / "summary.json"
+    identity = {
+        "name": "resumed",
+        "output_dir": str(tmp_path / "runs" / "resumed"),
+        "stage": "pretrain",
+    }
+    first = RunSummary(destination, run=identity)
+    first.log({"train/loss": 2.0, "nested": {"ignored": True}}, step=1)
+    first.set_status("completed")
+
+    resumed = RunSummary(destination, run=identity)
+    assert resumed.status == "running"
+    resumed.log({"train/loss": 1.0, "train/epoch": 0.5}, step=2)
+    stable = destination.read_bytes()
+
+    def fail_replace(source: object, destination: object) -> None:
+        raise OSError("atomic replace failed")
+
+    monkeypatch.setattr("scratch_llm.utils.os.replace", fail_replace)
+    with pytest.raises(OSError, match="atomic replace failed"):
+        resumed.log({"train/loss": 0.5}, step=3)
+
+    assert destination.read_bytes() == stable
+    assert not list(destination.parent.glob(".summary.json.*.tmp"))
+    assert json.loads(stable) == {
+        "schema_version": 1,
+        "run": identity,
+        "status": "running",
+        "latest_step": 2,
+        "latest_metrics": {
+            "train/epoch": 0.5,
+            "train/loss": 1.0,
+        },
+    }
+
+
+def test_run_tracker_marks_failure_and_finishes_children(
+    tmp_path: Path,
+) -> None:
+    events: list[tuple[str, str]] = []
+    summary = RunSummary(
+        tmp_path / "summary.json",
+        run={
+            "name": "failed",
+            "output_dir": str(tmp_path / "failed"),
+            "stage": "pretrain",
+        },
+    )
+    child = _RecordingTracker("child", events)
+    tracker = RunTracker(summary, child)
+
+    with pytest.raises(RuntimeError, match="training failed"):
+        with tracker:
+            raise RuntimeError("training failed")
+
+    tracker.finish()
+    assert events == [("child", "finish")]
+    assert json.loads(summary.path.read_text())["status"] == "failed"
 
 
 def test_wandb_tracker_maps_the_complete_lifecycle_to_one_run(

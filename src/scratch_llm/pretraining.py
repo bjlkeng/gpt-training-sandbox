@@ -249,9 +249,6 @@ def run_tiny_pretraining(
         initial_step=initial_step,
         is_resume=resume_from is not None,
     )
-    metrics_were_empty = not metrics_path.exists() or metrics_path.stat().st_size == 0
-    if metrics_were_empty:
-        tracker.log_config(config.to_dict())
 
     checkpoint_path = paths.checkpoints_dir / "last.pt"
 
