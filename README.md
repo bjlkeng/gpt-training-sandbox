@@ -22,7 +22,25 @@ uv run --extra dev pytest -q tests/test_pretrain_integration.py
 ```
 
 The full test suite also protects the deterministic fixed-batch overfit
-threshold. Milestone 2 extends the local tracking foundation.
+threshold.
+
+Milestone 2 — Tracking Foundation: complete. Tracker, JSONL, optional W&B, and
+composite backends share one interface. Every config-driven command resolves
+YAML, supported W&B environment variables, dotted overrides, and dedicated
+tracking flags through one path, then creates an always-local JSONL stream and
+atomic run summary. The executable pretraining path receives the same tracker
+used by command dry runs, while the base install remains fully functional
+without W&B.
+
+Run its bounded, credential-free CPU acceptance check with:
+
+```bash
+uv run --extra dev pytest -q \
+  tests/test_tracking.py \
+  tests/test_config_loading.py \
+  tests/test_scripts.py \
+  tests/test_pretrain_integration.py
+```
 
 ## Setup
 
