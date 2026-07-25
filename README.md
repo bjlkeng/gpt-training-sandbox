@@ -66,8 +66,9 @@ uv run python -m scripts.pretrain --config configs/smoke.yaml --dry-run
 ```
 
 The command prints the run directory, the resolved config path, and all
-resolved values. It creates `runs/smoke/config.yaml` plus empty `metrics/` and
-`checkpoints/` directories; it does not train or write a checkpoint.
+resolved values. It creates `runs/smoke/config.yaml`, a config-only
+`metrics/metrics.jsonl`, a completed `metrics/summary.json`, and an empty
+`checkpoints/` directory; it does not train or write a checkpoint.
 
 Apply dotted overrides by repeating `--override`. Later values win:
 
