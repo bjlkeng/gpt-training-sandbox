@@ -332,3 +332,16 @@ def test_readme_documents_the_subprocess_tested_setup_and_smoke_commands() -> No
     assert '"schema_version": 1' in readme
     assert '"latest_step": 200' in readme
     assert "`running`, `completed`, or `failed`" in readme
+    assert "uv sync --extra dev --extra tracking" in readme
+    assert "--override run.name=tracking-disabled-smoke" in readme
+    assert "--override run.name=tracking-offline-smoke" in readme
+    assert "--override run.name=tracking-online" in readme
+    assert "WANDB_MODE=offline" in readme
+    assert "WANDB_PROJECT=scratch-llm" in readme
+    assert "WANDB_ENTITY=your-wandb-entity" in readme
+    assert "WANDB_RUN_GROUP=3090-pretrain" in readme
+    assert "wandb sync" in readme
+    assert "pipeline-stage:pretrain" in readme
+    assert "log_model_artifacts" in readme
+    assert "log_prompts" in readme
+    assert "log_responses" in readme
