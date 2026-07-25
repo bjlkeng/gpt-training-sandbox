@@ -202,3 +202,11 @@ def test_readme_documents_the_subprocess_tested_setup_and_smoke_commands() -> No
         "--checkpoint runs/smoke/checkpoints/last.pt" in readme
     )
     assert "--resume runs/smoke/checkpoints/step_000075.pt" in readme
+
+
+def test_readme_records_the_milestone_one_acceptance_check() -> None:
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "## Roadmap status" in readme
+    assert "Milestone 1 — Hello Tiny GPT: complete" in readme
+    assert "uv run --extra dev pytest -q tests/test_pretrain_integration.py" in readme
