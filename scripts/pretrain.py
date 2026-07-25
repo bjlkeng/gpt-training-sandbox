@@ -45,15 +45,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.resume is not None:
             parser.error("--resume cannot be combined with --dry-run")
         paths, tracker = prepare_tracked_run(parser, config, command=COMMAND)
-        tracker.finish()
-        print(f"Run directory: {paths.run_dir}")
-        print(f"Resolved config: {paths.config_path}")
-        print("Resolved values:")
-        print(config.to_yaml(), end="")
+        with tracker:
+            print(f"Run directory: {paths.run_dir}")
+            print(f"Resolved config: {paths.config_path}")
+            print("Resolved values:")
+            print(config.to_yaml(), end="")
         return 0
 
     paths, tracker = prepare_tracked_run(parser, config, command=COMMAND)
-    try:
+    with tracker:
         try:
             result = run_tiny_pretraining(
                 config,
@@ -71,8 +71,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             ValueError,
         ) as error:
             parser.error(str(error))
-    finally:
-        tracker.finish()
 
     print(f"Run directory: {result.paths.run_dir}")
     print(f"Resolved config: {result.paths.config_path}")
