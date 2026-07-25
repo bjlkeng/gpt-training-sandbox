@@ -22,8 +22,9 @@ from scratch_llm.optim import (
 )
 from scratch_llm.tokenizer import (
     BYTE_VOCAB_SIZE,
-    SPECIAL_TOKENS,
+    NANOCHAT_SPECIAL_TOKENS,
     ByteTokenizer,
+    Tokenizer,
 )
 from scratch_llm.utils import get_device
 
@@ -51,7 +52,7 @@ class ModelCheckpoint:
     """Model, tokenizer, and metadata reconstructed for sampling."""
 
     model: GPT
-    tokenizer: ByteTokenizer
+    tokenizer: Tokenizer
     config: ProjectConfig
     step: int
 
@@ -68,7 +69,7 @@ class TrainingCheckpoint(ModelCheckpoint):
 class _DecodedCheckpoint:
     payload: dict[str, Any]
     config: ProjectConfig
-    tokenizer: ByteTokenizer
+    tokenizer: Tokenizer
     step: int
     device: torch.device
 
@@ -80,7 +81,7 @@ def _validate_save_state(
     scheduler: LRScheduler,
     config: ProjectConfig,
     step: int,
-    tokenizer: ByteTokenizer,
+    tokenizer: Tokenizer,
 ) -> None:
     if not isinstance(model, GPT):
         raise TypeError(f"model must be a GPT, got {type(model).__name__}")
@@ -97,9 +98,9 @@ def _validate_save_state(
         raise TypeError(f"step must be an integer, got {type(step).__name__}")
     if step < 0:
         raise ValueError(f"step must be non-negative, got {step}")
-    if not isinstance(tokenizer, ByteTokenizer):
+    if not isinstance(tokenizer, Tokenizer):
         raise TypeError(
-            f"tokenizer must be a ByteTokenizer, got {type(tokenizer).__name__}"
+            f"tokenizer must implement Tokenizer, got {type(tokenizer).__name__}"
         )
 
     config.validate()
@@ -119,10 +120,33 @@ def _validate_save_state(
         raise ValueError("base smoke checkpoints require tokenizer.type='byte'")
     if config.tokenizer.vocab_size != tokenizer.get_vocab_size():
         raise ValueError(
-            "resolved tokenizer vocabulary size does not match ByteTokenizer"
+            "resolved tokenizer vocabulary size does not match the tokenizer"
         )
-    if tuple(config.tokenizer.special_tokens) != SPECIAL_TOKENS:
-        raise ValueError("resolved tokenizer special tokens do not match ByteTokenizer")
+    if tuple(config.tokenizer.special_tokens) != NANOCHAT_SPECIAL_TOKENS:
+        raise ValueError(
+            "resolved tokenizer special tokens do not match the nanochat vocabulary"
+        )
+    if tokenizer.get_special_tokens() != set(NANOCHAT_SPECIAL_TOKENS):
+        raise ValueError(
+            "tokenizer special tokens do not match the nanochat vocabulary"
+        )
+    expected_special_ids = list(
+        range(
+            BYTE_VOCAB_SIZE,
+            BYTE_VOCAB_SIZE + len(NANOCHAT_SPECIAL_TOKENS),
+        )
+    )
+    actual_special_ids = [
+        tokenizer.encode_special(token) for token in NANOCHAT_SPECIAL_TOKENS
+    ]
+    if actual_special_ids != expected_special_ids:
+        raise ValueError(
+            "byte-checkpoint tokenizer special-token IDs do not match this runtime"
+        )
+    if tokenizer.get_bos_token_id() != expected_special_ids[0]:
+        raise ValueError(
+            "byte-checkpoint tokenizer BOS token ID does not match this runtime"
+        )
 
 
 def _atomic_torch_save(value: object, destination: Path) -> Path:
@@ -163,7 +187,7 @@ def save_checkpoint(
     scheduler: LRScheduler,
     config: ProjectConfig,
     step: int,
-    tokenizer: ByteTokenizer,
+    tokenizer: Tokenizer,
 ) -> Path:
     """Atomically save all state needed for sampling and basic training resume."""
 
@@ -186,7 +210,7 @@ def save_checkpoint(
             "type": "byte",
             "byte_vocab_size": BYTE_VOCAB_SIZE,
             "vocab_size": tokenizer.get_vocab_size(),
-            "special_tokens": list(SPECIAL_TOKENS),
+            "special_tokens": list(NANOCHAT_SPECIAL_TOKENS),
         },
     }
     return _atomic_torch_save(payload, Path(path))
@@ -209,12 +233,12 @@ def _restore_config(value: object) -> ProjectConfig:
     return config
 
 
-def _restore_tokenizer(value: object, config: ProjectConfig) -> ByteTokenizer:
+def _restore_tokenizer(value: object, config: ProjectConfig) -> Tokenizer:
     expected_metadata = {
         "type": "byte",
         "byte_vocab_size": BYTE_VOCAB_SIZE,
-        "vocab_size": BYTE_VOCAB_SIZE + len(SPECIAL_TOKENS),
-        "special_tokens": list(SPECIAL_TOKENS),
+        "vocab_size": BYTE_VOCAB_SIZE + len(NANOCHAT_SPECIAL_TOKENS),
+        "special_tokens": list(NANOCHAT_SPECIAL_TOKENS),
     }
     if value != expected_metadata:
         raise CheckpointError(
@@ -227,7 +251,7 @@ def _restore_tokenizer(value: object, config: ProjectConfig) -> ByteTokenizer:
         raise CheckpointError(
             "checkpoint config vocabulary size does not match ByteTokenizer"
         )
-    if tuple(config.tokenizer.special_tokens) != SPECIAL_TOKENS:
+    if tuple(config.tokenizer.special_tokens) != NANOCHAT_SPECIAL_TOKENS:
         raise CheckpointError(
             "checkpoint config special tokens do not match ByteTokenizer"
         )

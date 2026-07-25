@@ -3,15 +3,24 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
+from typing import get_type_hints
 
 import pytest
 
+import scratch_llm.checkpoint as checkpoint
+import scratch_llm.pretraining as pretraining
+from scratch_llm.config import DEFAULT_SPECIAL_TOKENS
 from scratch_llm.tokenizer import (
     BYTE_VOCAB_SIZE,
+    NANOCHAT_SPECIAL_TOKENS,
     SPECIAL_TOKENS,
     VOCAB_SIZE,
     ByteTokenizer,
+    Tokenizer,
+    UnsupportedTokenizerOperationError,
 )
+from scratch_llm.training import TinyTextTrainingResult
 
 
 EXPECTED_SPECIAL_TOKENS = (
@@ -53,6 +62,8 @@ def test_special_tokens_have_locked_ids_after_the_byte_vocabulary() -> None:
     tokenizer = ByteTokenizer()
 
     assert BYTE_VOCAB_SIZE == 256
+    assert NANOCHAT_SPECIAL_TOKENS is SPECIAL_TOKENS
+    assert DEFAULT_SPECIAL_TOKENS is NANOCHAT_SPECIAL_TOKENS
     assert SPECIAL_TOKENS == EXPECTED_SPECIAL_TOKENS
     assert VOCAB_SIZE == 265
     assert tokenizer.get_vocab_size() == VOCAB_SIZE
@@ -66,6 +77,42 @@ def test_special_tokens_have_locked_ids_after_the_byte_vocabulary() -> None:
         assert tokenizer.decode_single_token_bytes(token_id) == token.encode("utf-8")
 
     assert tokenizer.get_bos_token_id() == BYTE_VOCAB_SIZE
+
+
+def test_byte_tokenizer_implements_the_shared_contract() -> None:
+    tokenizer: Tokenizer = ByteTokenizer()
+
+    assert isinstance(tokenizer, Tokenizer)
+    assert tokenizer("hello") == tokenizer.encode("hello")
+
+
+def test_project_consumers_depend_on_the_shared_tokenizer_contract() -> None:
+    assert get_type_hints(checkpoint.ModelCheckpoint)["tokenizer"] is Tokenizer
+    assert get_type_hints(checkpoint.save_checkpoint)["tokenizer"] is Tokenizer
+    assert get_type_hints(pretraining._build_batches)["tokenizer"] is Tokenizer
+    assert get_type_hints(TinyTextTrainingResult)["tokenizer"] is Tokenizer
+
+
+def test_byte_tokenizer_reports_unsupported_lifecycle_operations(
+    tmp_path: Path,
+) -> None:
+    tokenizer = ByteTokenizer()
+
+    with pytest.raises(
+        UnsupportedTokenizerOperationError,
+        match=r"^ByteTokenizer does not support training$",
+    ):
+        tokenizer.train(["text"])
+    with pytest.raises(
+        UnsupportedTokenizerOperationError,
+        match=r"^ByteTokenizer does not support saving tokenizer artifacts$",
+    ):
+        tokenizer.save(tmp_path)
+    with pytest.raises(
+        UnsupportedTokenizerOperationError,
+        match=r"^ByteTokenizer does not support loading tokenizer artifacts$",
+    ):
+        ByteTokenizer.load(tmp_path)
 
 
 def test_special_tokens_are_explicit_and_can_wrap_ordinary_text() -> None:
@@ -109,6 +156,18 @@ def test_decode_rejects_non_integer_ids(token_ids: list[object]) -> None:
     tokenizer = ByteTokenizer()
 
     with pytest.raises(TypeError, match=r"token ID.*must be an integer"):
+        tokenizer.decode(token_ids)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("token_ids", [1, None])
+def test_decode_rejects_non_iterable_token_collections(token_ids: object) -> None:
+    tokenizer = ByteTokenizer()
+
+    with pytest.raises(
+        TypeError,
+        match=rf"^token IDs must be an iterable of integers, got "
+        rf"{type(token_ids).__name__}$",
+    ):
         tokenizer.decode(token_ids)  # type: ignore[arg-type]
 
 

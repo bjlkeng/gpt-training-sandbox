@@ -18,7 +18,7 @@ from scratch_llm.config import ProjectConfig
 from scratch_llm.data import NextTokenDataset
 from scratch_llm.model import GPT
 from scratch_llm.optim import build_lr_scheduler, build_optimizer
-from scratch_llm.tokenizer import SPECIAL_TOKENS, ByteTokenizer
+from scratch_llm.tokenizer import NANOCHAT_SPECIAL_TOKENS, ByteTokenizer, Tokenizer
 from scratch_llm.tracking import NullTracker, Tracker
 from scratch_llm.utils import get_device, set_seed
 
@@ -68,7 +68,7 @@ class TinyTextTrainingResult:
     """Reusable state and step history from the phase-one text training path."""
 
     model: GPT
-    tokenizer: ByteTokenizer
+    tokenizer: Tokenizer
     optimizer: Optimizer
     scheduler: LRScheduler
     steps: tuple[OptimizerStepResult, ...]
@@ -337,7 +337,7 @@ def train_tiny_text(
             "tiny-text training requires tokenizer.vocab_size="
             f"{tokenizer.get_vocab_size()}, got {config.tokenizer.vocab_size}"
         )
-    if tuple(config.tokenizer.special_tokens) != SPECIAL_TOKENS:
+    if tuple(config.tokenizer.special_tokens) != NANOCHAT_SPECIAL_TOKENS:
         raise ValueError(
             "tiny-text training requires the ByteTokenizer special-token order"
         )
