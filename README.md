@@ -4,9 +4,9 @@ A from-scratch PyTorch sandbox for pretraining, supervised finetuning, evaluatin
 
 The repository is being built in small vertical slices. The byte tokenizer,
 tiny decoder-only GPT, typed configuration, run layout, and local metrics
-foundations are present. Checkpoint-backed sampling is executable; training,
-evaluation, and chat commands have stable interfaces whose non-dry-run
-implementations land in later slices.
+foundations are present. The tiny-text pretraining path and checkpoint-backed
+sampling are executable; evaluation and chat commands have stable interfaces
+whose non-dry-run implementations land in later slices.
 
 ## Setup
 
@@ -76,11 +76,30 @@ uv run python -m scripts.pretrain --config configs/smoke.yaml
 uv run python -m scripts.sample --checkpoint runs/smoke/checkpoints/last.pt
 ```
 
-The pretraining command still exits with an explicit `not implemented` error
-until the training integration slice lands. The sampling command loads the
-model, byte tokenizer, and generation defaults from a versioned checkpoint.
-Pass `--prompt` more than once to sample multiple prompts, or override
-checkpoint settings with `--device`, `--max-new-tokens`, `--temperature`,
-`--top-k`, and `--seed`. The remaining command skeletons also fail explicitly
-until their slices land. Inspect any interface without optional dependencies by
-running, for example, `uv run python -m scripts.web_chat --help`.
+Pretraining reads the repository's deterministic `data/fixtures/tiny.txt`
+corpus, writes the complete resolved config and JSONL metrics under
+`runs/smoke/`, saves periodic `step_*.pt` checkpoints at `train.save_every`,
+and atomically updates `checkpoints/last.pt`. A fresh run refuses to overwrite
+existing training outputs.
+
+Resume a periodic checkpoint into a new named run while keeping every other
+resolved setting unchanged:
+
+```bash
+uv run python -m scripts.pretrain \
+  --config configs/smoke.yaml \
+  --override run.name=smoke-resumed \
+  --resume runs/smoke/checkpoints/step_000075.pt
+```
+
+This first-sprint resume contract restores the model, optimizer, and scheduler
+and advances from the saved step. Exact RNG and dataloader-position continuity
+remain later roadmap work.
+
+The sampling command loads the model, byte tokenizer, and generation defaults
+from a versioned checkpoint. Pass `--prompt` more than once to sample multiple
+prompts, or override checkpoint settings with `--device`, `--max-new-tokens`,
+`--temperature`, `--top-k`, and `--seed`. The remaining command skeletons fail
+explicitly until their slices land. Inspect any interface without optional
+dependencies by running, for example, `uv run python -m scripts.web_chat
+--help`.

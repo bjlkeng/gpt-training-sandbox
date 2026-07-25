@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Sized
+from collections.abc import Callable, Iterable, Iterator, Sized
 from dataclasses import dataclass
 from time import perf_counter
 
@@ -228,8 +228,9 @@ def run_training_steps(
     device: str | torch.device,
     tracker: Tracker | None = None,
     log_every: int = 1,
+    on_step: Callable[[int, OptimizerStepResult], None] | None = None,
 ) -> list[OptimizerStepResult]:
-    """Train a model until the total completed-step target ``max_steps``."""
+    """Train to ``max_steps`` and call ``on_step`` after each completed step."""
 
     if not isinstance(model, nn.Module):
         raise TypeError(f"model must be an nn.Module, got {type(model).__name__}")
@@ -252,6 +253,10 @@ def run_training_steps(
         tracker = NullTracker()
     if not isinstance(tracker, Tracker):
         raise TypeError(f"tracker must be a Tracker, got {type(tracker).__name__}")
+    if on_step is not None and not callable(on_step):
+        raise TypeError(
+            f"on_step must be callable or None, got {type(on_step).__name__}"
+        )
     resolved_device = get_device(device)
     batches_per_epoch = len(batches) if isinstance(batches, Sized) else None
     if batches_per_epoch is not None and batches_per_epoch <= 0:
@@ -301,6 +306,8 @@ def run_training_steps(
             if batches_per_epoch is not None:
                 metrics["train/epoch"] = step * grad_accum_steps / batches_per_epoch
             tracker.log(metrics, step=step)
+        if on_step is not None:
+            on_step(step, result)
 
     return results
 

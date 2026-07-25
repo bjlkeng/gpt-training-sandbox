@@ -171,6 +171,8 @@ def test_smoke_config_is_a_cpu_safe_tiny_byte_gpt() -> None:
     assert config.run.device == "cpu"
     assert config.tracking.wandb.enabled is False
     assert config.tracking.wandb.mode == "disabled"
+    assert config.data.profile == "tiny_text"
+    assert config.data.base_dir == "data"
     assert config.tokenizer.type == "byte"
     assert config.tokenizer.vocab_size == VOCAB_SIZE
     assert config.model.vocab_size == VOCAB_SIZE
@@ -184,7 +186,10 @@ def test_smoke_config_is_a_cpu_safe_tiny_byte_gpt() -> None:
     assert config.model.tie_weights is True
     assert config.model.use_flash_attention is False
     assert config.train.device_batch_size == 2
-    assert config.train.max_steps == 100
+    assert config.train.max_steps == 200
+    assert config.train.learning_rate == 0.005
+    assert config.train.weight_decay == 0.0
     assert config.train.dtype == "float32"
     assert config.train.compile is False
+    assert config.generation.seed == 1337
     assert config.web.enabled is False
