@@ -2,15 +2,198 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import re
+from collections.abc import Iterator, Sequence
 from operator import index as integer_index
+from pathlib import Path
 
+import pyarrow as pa  # type: ignore[import-untyped]
+import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import torch
 from torch import Tensor
 from torch.utils.data import Dataset
 
 from scratch_llm._validation import require_positive_integer
 from scratch_llm.tokenizer import VOCAB_SIZE
+
+
+_PARQUET_SHARD_NAME = re.compile(r"^shard_([0-9]+)\.parquet$")
+DEFAULT_CLIMBMIX_DATA_DIR = Path("data/parquet/base_data_climbmix")
+DEFAULT_VALIDATION_SHARD_INDEX = 6542
+
+
+def list_parquet_files(data_dir: str | Path) -> list[Path]:
+    """Return canonical parquet shards ordered by their numeric shard index."""
+
+    directory = Path(data_dir)
+    if not directory.exists():
+        raise FileNotFoundError(f"parquet data directory does not exist: {directory}")
+    if not directory.is_dir():
+        raise NotADirectoryError(f"parquet data path is not a directory: {directory}")
+
+    canonical_paths: list[Path] = []
+    for path in directory.iterdir():
+        match = _PARQUET_SHARD_NAME.fullmatch(path.name)
+        if match is not None and path.is_file():
+            canonical_paths.append(path)
+
+    return [path for _, path in _index_parquet_files(canonical_paths)]
+
+
+def select_parquet_files(
+    files: Sequence[str | Path],
+    split: str,
+    *,
+    num_train_shards: int | None = None,
+    validation_shard_index: int = DEFAULT_VALIDATION_SHARD_INDEX,
+) -> list[Path]:
+    """Select a train prefix or the fixed validation shard from local files."""
+
+    _validate_parquet_split(split)
+    if num_train_shards is not None:
+        num_train_shards = _require_non_negative_integer(
+            num_train_shards,
+            name="num_train_shards",
+        )
+    validation_shard_index = _require_non_negative_integer(
+        validation_shard_index,
+        name="validation_shard_index",
+    )
+
+    indexed_paths = _index_parquet_files(files)
+    for index, path in indexed_paths:
+        if index > validation_shard_index:
+            raise ValueError(
+                f"parquet shard index {index} exceeds configured final validation "
+                f"shard index {validation_shard_index}: {path.name}"
+            )
+
+    if split == "val":
+        for index, path in indexed_paths:
+            if index == validation_shard_index:
+                return [path]
+        raise FileNotFoundError(
+            "fixed validation parquet shard with index "
+            f"{validation_shard_index} was not found"
+        )
+
+    train_paths = [
+        path for index, path in indexed_paths if index != validation_shard_index
+    ]
+    if num_train_shards is None:
+        return train_paths
+    return train_paths[:num_train_shards]
+
+
+def parquets_iter_batched(
+    split: str,
+    start: int = 0,
+    step: int = 1,
+    *,
+    data_dir: str | Path = DEFAULT_CLIMBMIX_DATA_DIR,
+    num_train_shards: int | None = None,
+    validation_shard_index: int = DEFAULT_VALIDATION_SHARD_INDEX,
+    batch_size: int = 1024,
+    text_column: str = "text",
+) -> Iterator[list[str]]:
+    """Stream bounded text batches from a deterministic stride of split shards."""
+
+    _validate_parquet_split(split)
+    start = _require_non_negative_integer(start, name="start")
+    step = require_positive_integer(step, name="step")
+    if start >= step:
+        raise ValueError(
+            f"start must be less than step; got start={start}, step={step}"
+        )
+    batch_size = require_positive_integer(batch_size, name="batch_size")
+    if not isinstance(text_column, str):
+        raise TypeError(
+            f"text_column must be a non-empty string, got {type(text_column).__name__}"
+        )
+    if not text_column.strip():
+        raise ValueError("text_column must be a non-empty string")
+
+    files = select_parquet_files(
+        list_parquet_files(data_dir),
+        split,
+        num_train_shards=num_train_shards,
+        validation_shard_index=validation_shard_index,
+    )
+    for path in files[start::step]:
+        parquet_file = pq.ParquetFile(path)
+        schema = parquet_file.schema_arrow
+        column_indices = schema.get_all_field_indices(text_column)
+        if not column_indices:
+            raise ValueError(
+                f"text column {text_column!r} was not found in parquet shard "
+                f"{path.name}"
+            )
+        if len(column_indices) > 1:
+            raise ValueError(
+                f"text column {text_column!r} is ambiguous in parquet shard {path.name}"
+            )
+
+        column_type = schema.field(column_indices[0]).type
+        if not (
+            pa.types.is_string(column_type) or pa.types.is_large_string(column_type)
+        ):
+            raise TypeError(
+                f"text column {text_column!r} must have a string Arrow type; "
+                f"got {column_type} in parquet shard {path.name}"
+            )
+
+        for record_batch in parquet_file.iter_batches(
+            batch_size=batch_size,
+            columns=[text_column],
+            use_threads=False,
+        ):
+            text_array = record_batch.column(0)
+            if text_array.null_count:
+                raise ValueError(
+                    f"text column {text_column!r} contains null values in "
+                    f"parquet shard {path.name}"
+                )
+            texts = text_array.to_pylist()
+            if texts:
+                yield texts
+
+
+def _index_parquet_files(
+    files: Sequence[str | Path],
+) -> list[tuple[int, Path]]:
+    indexed_paths: list[tuple[int, Path]] = []
+    for raw_path in files:
+        path = Path(raw_path)
+        match = _PARQUET_SHARD_NAME.fullmatch(path.name)
+        if match is None:
+            raise ValueError(
+                "selected parquet path does not use the canonical "
+                f"'shard_<index>.parquet' name: {path}"
+            )
+        indexed_paths.append((int(match.group(1)), path))
+
+    indexed_paths.sort(key=lambda item: (item[0], str(item[1])))
+    for previous, current in zip(indexed_paths, indexed_paths[1:], strict=False):
+        if previous[0] == current[0]:
+            raise ValueError(
+                f"duplicate parquet shard index {current[0]}: "
+                f"{previous[1]} and {current[1]}"
+            )
+
+    return indexed_paths
+
+
+def _validate_parquet_split(split: object) -> None:
+    if not isinstance(split, str) or split not in ("train", "val"):
+        raise ValueError(f"split must be 'train' or 'val', got {split!r}")
+
+
+def _require_non_negative_integer(value: object, *, name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise TypeError(f"{name} must be an integer, got {type(value).__name__}")
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative, got {value}")
+    return value
 
 
 class NextTokenDataset(Dataset[tuple[Tensor, Tensor]]):

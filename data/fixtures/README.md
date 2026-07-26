@@ -4,3 +4,6 @@
 small, deterministic UTF-8 corpus for tokenizer, dataset, and overfitting smoke
 tests; it is not copied or adapted from an external work. It is distributed
 under the repository's MIT license.
+
+The [`parquet`](parquet/) directory contains the separately documented
+synthetic ClimbMix-style fixture used by the raw-data pipeline tests.
