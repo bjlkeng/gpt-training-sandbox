@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +33,7 @@ from scratch_llm.tokenizer import (
     SPECIAL_TOKENS,
     VOCAB_SIZE,
     ByteTokenizer,
+    Tokenizer,
 )
 from scratch_llm.tracking import NullTracker
 from scratch_llm.training import run_training_steps
@@ -59,6 +60,39 @@ class _StepTracker(NullTracker):
 
     def log(self, metrics: dict[str, Any], step: int | None = None) -> None:
         self.steps.append(step)
+
+
+class _IndependentByteCompatibleTokenizer(Tokenizer):
+    """Stand in for a future implementation at shared consumer boundaries."""
+
+    def __init__(self) -> None:
+        self._delegate = ByteTokenizer()
+
+    def encode(
+        self,
+        text: str,
+        prepend: str | int | None = None,
+        append: str | int | None = None,
+    ) -> list[int]:
+        return self._delegate.encode(text, prepend=prepend, append=append)
+
+    def decode(self, token_ids: Iterable[int]) -> str:
+        return self._delegate.decode(token_ids)
+
+    def encode_special(self, token: str) -> int:
+        return self._delegate.encode_special(token)
+
+    def decode_single_token_bytes(self, token_id: int) -> bytes:
+        return self._delegate.decode_single_token_bytes(token_id)
+
+    def get_vocab_size(self) -> int:
+        return self._delegate.get_vocab_size()
+
+    def get_bos_token_id(self) -> int:
+        return self._delegate.get_bos_token_id()
+
+    def get_special_tokens(self) -> set[str]:
+        return self._delegate.get_special_tokens()
 
 
 def _checkpoint_state() -> tuple[
@@ -260,6 +294,26 @@ def test_checkpoint_replacement_is_atomic_and_cleans_a_failed_install(
     assert observed_payload["step"] == 0
     assert checkpoint_path.read_bytes() == original_contents
     assert not list(tmp_path.glob(".last.pt.*.tmp"))
+
+
+def test_checkpoint_save_accepts_an_independent_tokenizer_contract(
+    tmp_path: Path,
+) -> None:
+    config, _, model, optimizer, scheduler, _ = _checkpoint_state()
+    tokenizer = _IndependentByteCompatibleTokenizer()
+
+    checkpoint_path = save_checkpoint(
+        tmp_path / "contract.pt",
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        config=config,
+        step=0,
+        tokenizer=tokenizer,
+    )
+
+    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    assert payload["tokenizer"]["vocab_size"] == tokenizer.get_vocab_size()
 
 
 def test_save_rejects_training_state_the_shared_loader_cannot_reconstruct(

@@ -22,7 +22,7 @@ from scratch_llm.data import NextTokenDataset
 from scratch_llm.model import GPT
 from scratch_llm.optim import build_lr_scheduler, build_optimizer
 from scratch_llm.run import RunPaths
-from scratch_llm.tokenizer import SPECIAL_TOKENS, ByteTokenizer
+from scratch_llm.tokenizer import NANOCHAT_SPECIAL_TOKENS, ByteTokenizer, Tokenizer
 from scratch_llm.tracking import Tracker
 from scratch_llm.training import (
     OptimizerStepResult,
@@ -65,7 +65,7 @@ def _read_tiny_text(config: ProjectConfig) -> str:
 def _build_batches(
     text: str,
     config: ProjectConfig,
-    tokenizer: ByteTokenizer,
+    tokenizer: Tokenizer,
 ) -> DataLoader[tuple[torch.Tensor, torch.Tensor]]:
     token_ids = tokenizer.encode(text)
     dataset = NextTokenDataset(
@@ -99,7 +99,7 @@ def _validate_tiny_text_config(config: ProjectConfig) -> None:
             "tiny-text pretraining requires tokenizer.vocab_size="
             f"{tokenizer.get_vocab_size()}"
         )
-    if tuple(config.tokenizer.special_tokens) != SPECIAL_TOKENS:
+    if tuple(config.tokenizer.special_tokens) != NANOCHAT_SPECIAL_TOKENS:
         raise PretrainingError(
             "tiny-text pretraining requires the ByteTokenizer special-token order"
         )
@@ -218,7 +218,7 @@ def run_tiny_pretraining(
     device = get_device(config.run.device)
 
     model: GPT
-    tokenizer: ByteTokenizer
+    tokenizer: Tokenizer
     optimizer: Optimizer
     scheduler: LRScheduler
     if resume_from is None:

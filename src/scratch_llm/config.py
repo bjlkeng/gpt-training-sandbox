@@ -30,7 +30,10 @@ from scratch_llm._validation import (
     _require_real,
     _require_unit_interval,
 )
-from scratch_llm.tokenizer import SPECIAL_TOKENS
+from scratch_llm.tokenizer import (
+    NANOCHAT_SPECIAL_TOKENS,
+    VOCAB_SIZE as BYTE_TOKENIZER_VOCAB_SIZE,
+)
 from scratch_llm.utils import atomic_write
 
 
@@ -43,7 +46,7 @@ TrainDType = Literal["float32", "float16", "bfloat16"]
 # union. Runtime validation below still restricts string values to ``"auto"``.
 GradAccumSteps = int | str
 
-DEFAULT_SPECIAL_TOKENS = SPECIAL_TOKENS
+DEFAULT_SPECIAL_TOKENS = NANOCHAT_SPECIAL_TOKENS
 
 _WANDB_MODES: frozenset[str] = frozenset(get_args(WandbMode))
 _TOKENIZER_TYPES: frozenset[str] = frozenset(get_args(TokenizerType))
@@ -276,15 +279,35 @@ class TokenizerConfig(_SerializableConfig):
         _require_positive_int(self.vocab_size, "tokenizer.vocab_size")
         _require_positive_int(self.max_chars, "tokenizer.max_chars")
         _require_positive_int(self.doc_cap, "tokenizer.doc_cap")
+        if not isinstance(self.special_tokens, list):
+            _fail(
+                "tokenizer.special_tokens",
+                "must be a list containing the nine ordered nanochat special tokens",
+            )
         for index, token in enumerate(self.special_tokens):
             _require_non_empty(token, f"tokenizer.special_tokens.{index}")
         if len(set(self.special_tokens)) != len(self.special_tokens):
             _fail("tokenizer.special_tokens", "must not contain duplicates")
-        minimum_vocab_size = 256 + len(self.special_tokens)
-        if self.vocab_size < minimum_vocab_size:
+        if tuple(self.special_tokens) != NANOCHAT_SPECIAL_TOKENS:
+            _fail(
+                "tokenizer.special_tokens",
+                "must exactly match the nine ordered nanochat special tokens; "
+                "<|pad|> is not supported and BOS is the categorical-padding "
+                "fallback",
+            )
+        if self.type == "byte" and self.vocab_size != BYTE_TOKENIZER_VOCAB_SIZE:
             _fail(
                 "tokenizer.vocab_size",
-                f"must be at least {minimum_vocab_size} for bytes and special tokens",
+                f"must be exactly {BYTE_TOKENIZER_VOCAB_SIZE} for the byte tokenizer",
+            )
+        if (
+            self.type == "regex_byte_bpe"
+            and self.vocab_size < BYTE_TOKENIZER_VOCAB_SIZE
+        ):
+            _fail(
+                "tokenizer.vocab_size",
+                f"must be at least {BYTE_TOKENIZER_VOCAB_SIZE} "
+                "for bytes and special tokens",
             )
 
 

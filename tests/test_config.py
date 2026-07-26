@@ -16,6 +16,7 @@ from scratch_llm.config import (
     NormType,
     ProjectConfig,
     RunConfig,
+    TokenizerConfig,
     TrainConfig,
     TrainDType,
     WandbConfig,
@@ -184,6 +185,36 @@ def test_gpt_config_exposes_the_planned_dimensions_and_architecture() -> None:
         config.mlp_ratio,
         config.tie_weights,
     ) == (265, 128, 2, 2, 128, 3, False)
+
+
+@pytest.mark.parametrize(
+    "special_tokens",
+    [
+        [*DEFAULT_SPECIAL_TOKENS, "<|pad|>"],
+        list(reversed(DEFAULT_SPECIAL_TOKENS)),
+        list(DEFAULT_SPECIAL_TOKENS[:-1]),
+        ["<|bos|>", *DEFAULT_SPECIAL_TOKENS[1:-1], "<|unknown|>"],
+    ],
+)
+def test_tokenizer_config_requires_the_locked_nanochat_special_token_order(
+    special_tokens: list[str],
+) -> None:
+    with pytest.raises(
+        ConfigValidationError,
+        match=r"^tokenizer\.special_tokens:.*nine ordered nanochat special tokens",
+    ):
+        TokenizerConfig(special_tokens=special_tokens)
+
+
+@pytest.mark.parametrize("vocab_size", [264, 266, 32_768])
+def test_byte_tokenizer_config_requires_its_stable_vocabulary_size(
+    vocab_size: int,
+) -> None:
+    with pytest.raises(
+        ConfigValidationError,
+        match=r"^tokenizer\.vocab_size:.*exactly 265.*byte tokenizer",
+    ):
+        TokenizerConfig(type="byte", vocab_size=vocab_size)
 
 
 def test_to_dict_preserves_nested_configured_values_without_aliasing() -> None:

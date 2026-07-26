@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections.abc import Iterable
+from os import PathLike
 from types import MappingProxyType
 from typing import Final, Mapping
 
 
 BYTE_VOCAB_SIZE: Final = 256
-SPECIAL_TOKENS: Final = (
+# nanochat intentionally defines no padding token. Categorical chat evaluation
+# uses BOS as padding and masks those positions from scoring.
+NANOCHAT_SPECIAL_TOKENS: Final = (
     "<|bos|>",
     "<|user_start|>",
     "<|user_end|>",
@@ -19,16 +23,101 @@ SPECIAL_TOKENS: Final = (
     "<|output_start|>",
     "<|output_end|>",
 )
+# Backward-compatible name used by the first vertical slice. Both public names
+# intentionally reference the same immutable tuple.
+SPECIAL_TOKENS: Final = NANOCHAT_SPECIAL_TOKENS
 SPECIAL_TOKEN_IDS: Final[Mapping[str, int]] = MappingProxyType(
-    {token: BYTE_VOCAB_SIZE + offset for offset, token in enumerate(SPECIAL_TOKENS)}
+    {
+        token: BYTE_VOCAB_SIZE + offset
+        for offset, token in enumerate(NANOCHAT_SPECIAL_TOKENS)
+    }
 )
 _SPECIAL_TOKENS_BY_ID: Final[Mapping[int, str]] = MappingProxyType(
     {token_id: token for token, token_id in SPECIAL_TOKEN_IDS.items()}
 )
-VOCAB_SIZE: Final = BYTE_VOCAB_SIZE + len(SPECIAL_TOKENS)
+VOCAB_SIZE: Final = BYTE_VOCAB_SIZE + len(NANOCHAT_SPECIAL_TOKENS)
 
 
-class ByteTokenizer:
+class UnsupportedTokenizerOperationError(NotImplementedError):
+    """A tokenizer intentionally does not implement a lifecycle operation."""
+
+
+class Tokenizer(ABC):
+    """Shared tokenizer boundary used by data, training, and inference code.
+
+    Concrete tokenizers must implement the consumer-facing encode/decode and
+    vocabulary queries. Training and artifact persistence are optional
+    lifecycle capabilities; unsupported implementations inherit explicit,
+    actionable errors instead of omitting those methods.
+    """
+
+    def train(self, texts: Iterable[str]) -> None:
+        """Learn a vocabulary from ``texts`` when the tokenizer is trainable."""
+
+        raise UnsupportedTokenizerOperationError(
+            f"{type(self).__name__} does not support training"
+        )
+
+    @abstractmethod
+    def encode(
+        self,
+        text: str,
+        prepend: str | int | None = None,
+        append: str | int | None = None,
+    ) -> list[int]:
+        """Encode ordinary text, optionally wrapped by explicit special tokens."""
+
+    def __call__(
+        self,
+        text: str,
+        prepend: str | int | None = None,
+        append: str | int | None = None,
+    ) -> list[int]:
+        """Alias for :meth:`encode`."""
+
+        return self.encode(text, prepend=prepend, append=append)
+
+    @abstractmethod
+    def decode(self, token_ids: Iterable[int]) -> str:
+        """Decode token IDs, including generated malformed-byte handling."""
+
+    @abstractmethod
+    def encode_special(self, token: str) -> int:
+        """Return the ID for one explicitly requested special token."""
+
+    @abstractmethod
+    def decode_single_token_bytes(self, token_id: int) -> bytes:
+        """Return the raw bytes represented by one token ID."""
+
+    @abstractmethod
+    def get_vocab_size(self) -> int:
+        """Return the complete vocabulary size."""
+
+    @abstractmethod
+    def get_bos_token_id(self) -> int:
+        """Return the beginning-of-sequence token ID."""
+
+    @abstractmethod
+    def get_special_tokens(self) -> set[str]:
+        """Return a copy of the supported special-token names."""
+
+    def save(self, path: str | PathLike[str]) -> None:
+        """Persist tokenizer artifacts when the implementation supports it."""
+
+        raise UnsupportedTokenizerOperationError(
+            f"{type(self).__name__} does not support saving tokenizer artifacts"
+        )
+
+    @classmethod
+    def load(cls, path: str | PathLike[str]) -> Tokenizer:
+        """Load tokenizer artifacts when the implementation supports it."""
+
+        raise UnsupportedTokenizerOperationError(
+            f"{cls.__name__} does not support loading tokenizer artifacts"
+        )
+
+
+class ByteTokenizer(Tokenizer):
     """Encode text as UTF-8 bytes plus a small, fixed control vocabulary."""
 
     def encode(
@@ -51,21 +140,19 @@ class ByteTokenizer:
             token_ids.append(self._resolve_special_token(append, argument="append"))
         return token_ids
 
-    def __call__(
-        self,
-        text: str,
-        prepend: str | int | None = None,
-        append: str | int | None = None,
-    ) -> list[int]:
-        """Alias for :meth:`encode`."""
-
-        return self.encode(text, prepend=prepend, append=append)
-
     def decode(self, token_ids: Iterable[int]) -> str:
         """Decode IDs to text, replacing malformed generated UTF-8 sequences."""
 
+        try:
+            token_id_iterator = iter(token_ids)
+        except TypeError as error:
+            raise TypeError(
+                "token IDs must be an iterable of integers, "
+                f"got {type(token_ids).__name__}"
+            ) from error
+
         encoded = bytearray()
-        for position, token_id in enumerate(token_ids):
+        for position, token_id in enumerate(token_id_iterator):
             token_id = self._validate_token_id(token_id, position=position)
             if token_id < BYTE_VOCAB_SIZE:
                 encoded.append(token_id)
@@ -106,7 +193,7 @@ class ByteTokenizer:
     def get_special_tokens(self) -> set[str]:
         """Return a copy of the supported special-token names."""
 
-        return set(SPECIAL_TOKENS)
+        return set(NANOCHAT_SPECIAL_TOKENS)
 
     def _resolve_special_token(self, token: str | int, *, argument: str) -> int:
         if isinstance(token, str):
@@ -135,3 +222,15 @@ class ByteTokenizer:
                 f"{label} must be in range [0, {VOCAB_SIZE}); got {token_id}"
             )
         return token_id
+
+
+__all__ = [
+    "BYTE_VOCAB_SIZE",
+    "NANOCHAT_SPECIAL_TOKENS",
+    "SPECIAL_TOKEN_IDS",
+    "SPECIAL_TOKENS",
+    "VOCAB_SIZE",
+    "ByteTokenizer",
+    "Tokenizer",
+    "UnsupportedTokenizerOperationError",
+]
