@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
+import hashlib
+import json
 from os import PathLike
 from types import MappingProxyType
 from typing import Final, Mapping
@@ -36,6 +38,26 @@ _SPECIAL_TOKENS_BY_ID: Final[Mapping[int, str]] = MappingProxyType(
     {token_id: token for token, token_id in SPECIAL_TOKEN_IDS.items()}
 )
 VOCAB_SIZE: Final = BYTE_VOCAB_SIZE + len(NANOCHAT_SPECIAL_TOKENS)
+_BYTE_TOKENIZER_IDENTITY_PAYLOAD: Final = {
+    "byte_vocab_size": BYTE_VOCAB_SIZE,
+    "format": "scratch_llm_byte_tokenizer",
+    "format_version": 1,
+    "special_tokens": [
+        {"id": SPECIAL_TOKEN_IDS[token], "token": token}
+        for token in NANOCHAT_SPECIAL_TOKENS
+    ],
+}
+BYTE_TOKENIZER_IDENTITY: Final = (
+    "sha256:"
+    + hashlib.sha256(
+        json.dumps(
+            _BYTE_TOKENIZER_IDENTITY_PAYLOAD,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+)
 
 
 class UnsupportedTokenizerOperationError(NotImplementedError):
@@ -100,6 +122,10 @@ class Tokenizer(ABC):
     @abstractmethod
     def get_special_tokens(self) -> set[str]:
         """Return a copy of the supported special-token names."""
+
+    @abstractmethod
+    def get_identity(self) -> str:
+        """Return a stable identity for this tokenizer's complete token mapping."""
 
     def save(self, path: str | PathLike[str]) -> None:
         """Persist tokenizer artifacts when the implementation supports it."""
@@ -195,6 +221,11 @@ class ByteTokenizer(Tokenizer):
 
         return set(NANOCHAT_SPECIAL_TOKENS)
 
+    def get_identity(self) -> str:
+        """Return the stable hash of the byte vocabulary and control-token mapping."""
+
+        return BYTE_TOKENIZER_IDENTITY
+
     def _resolve_special_token(self, token: str | int, *, argument: str) -> int:
         if isinstance(token, str):
             return self.encode_special(token)
@@ -226,6 +257,7 @@ class ByteTokenizer(Tokenizer):
 
 __all__ = [
     "BYTE_VOCAB_SIZE",
+    "BYTE_TOKENIZER_IDENTITY",
     "NANOCHAT_SPECIAL_TOKENS",
     "SPECIAL_TOKEN_IDS",
     "SPECIAL_TOKENS",

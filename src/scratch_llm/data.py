@@ -18,7 +18,19 @@ from scratch_llm.climbmix import (
     CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX,
     DEFAULT_CLIMBMIX_DATA_DIR,
 )
-from scratch_llm.tokenizer import VOCAB_SIZE
+from scratch_llm.tokenized_data import (
+    TOKENIZED_MANIFEST_NAME,
+    TOKENIZED_SHARD_FORMAT,
+    TOKENIZED_SHARD_FORMAT_VERSION,
+    TokenizedDataError,
+    TokenizedDatasetManifest,
+    TokenizedShardManifest,
+    TokenizedShardReader,
+    TokenizedShardSource,
+    TokenizedSplitManifest,
+    write_tokenized_shards,
+)
+from scratch_llm.tokenizer import VOCAB_SIZE, Tokenizer
 
 
 _PARQUET_SHARD_NAME = re.compile(r"^shard_([0-9]+)\.parquet$")
@@ -108,12 +120,7 @@ def parquets_iter_batched(
             f"start must be less than step; got start={start}, step={step}"
         )
     batch_size = require_positive_integer(batch_size, name="batch_size")
-    if not isinstance(text_column, str):
-        raise TypeError(
-            f"text_column must be a non-empty string, got {type(text_column).__name__}"
-        )
-    if not text_column.strip():
-        raise ValueError("text_column must be a non-empty string")
+    _validate_text_column(text_column)
 
     files = select_parquet_files(
         list_parquet_files(data_dir),
@@ -122,42 +129,124 @@ def parquets_iter_batched(
         validation_shard_index=validation_shard_index,
     )
     for path in files[start::step]:
-        parquet_file = pq.ParquetFile(path)
-        schema = parquet_file.schema_arrow
-        column_indices = schema.get_all_field_indices(text_column)
-        if not column_indices:
-            raise ValueError(
-                f"text column {text_column!r} was not found in parquet shard "
-                f"{path.name}"
-            )
-        if len(column_indices) > 1:
-            raise ValueError(
-                f"text column {text_column!r} is ambiguous in parquet shard {path.name}"
-            )
-
-        column_type = schema.field(column_indices[0]).type
-        if not (
-            pa.types.is_string(column_type) or pa.types.is_large_string(column_type)
-        ):
-            raise TypeError(
-                f"text column {text_column!r} must have a string Arrow type; "
-                f"got {column_type} in parquet shard {path.name}"
-            )
-
-        for record_batch in parquet_file.iter_batches(
+        yield from _parquet_file_batches(
+            path,
             batch_size=batch_size,
-            columns=[text_column],
-            use_threads=False,
-        ):
-            text_array = record_batch.column(0)
-            if text_array.null_count:
-                raise ValueError(
-                    f"text column {text_column!r} contains null values in "
-                    f"parquet shard {path.name}"
-                )
-            texts = text_array.to_pylist()
-            if texts:
-                yield texts
+            text_column=text_column,
+        )
+
+
+def write_tokenized_parquet_shards(
+    data_dir: str | Path,
+    output_dir: str | Path,
+    *,
+    tokenizer: Tokenizer,
+    num_train_shards: int | None = None,
+    validation_shard_index: int = CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX,
+    batch_size: int = 1024,
+    text_column: str = "text",
+    overwrite: bool = False,
+) -> TokenizedDatasetManifest:
+    """Tokenize selected parquet shards into a validated local dataset."""
+
+    batch_size = require_positive_integer(batch_size, name="batch_size")
+    _validate_text_column(text_column)
+    files = list_parquet_files(data_dir)
+    train_files = select_parquet_files(
+        files,
+        "train",
+        num_train_shards=num_train_shards,
+        validation_shard_index=validation_shard_index,
+    )
+    val_files = select_parquet_files(
+        files,
+        "val",
+        validation_shard_index=validation_shard_index,
+    )
+    train_sources = tuple(
+        TokenizedShardSource(
+            identity=path.name,
+            documents=_parquet_file_documents(
+                path,
+                batch_size=batch_size,
+                text_column=text_column,
+            ),
+        )
+        for path in train_files
+    )
+    val_sources = tuple(
+        TokenizedShardSource(
+            identity=path.name,
+            documents=_parquet_file_documents(
+                path,
+                batch_size=batch_size,
+                text_column=text_column,
+            ),
+        )
+        for path in val_files
+    )
+    return write_tokenized_shards(
+        output_dir,
+        tokenizer=tokenizer,
+        train_sources=train_sources,
+        val_sources=val_sources,
+        overwrite=overwrite,
+    )
+
+
+def _parquet_file_documents(
+    path: Path,
+    *,
+    batch_size: int,
+    text_column: str,
+) -> Iterator[str]:
+    for batch in _parquet_file_batches(
+        path,
+        batch_size=batch_size,
+        text_column=text_column,
+    ):
+        yield from batch
+
+
+def _parquet_file_batches(
+    path: Path,
+    *,
+    batch_size: int,
+    text_column: str,
+) -> Iterator[list[str]]:
+    parquet_file = pq.ParquetFile(path)
+    schema = parquet_file.schema_arrow
+    column_indices = schema.get_all_field_indices(text_column)
+    if not column_indices:
+        raise ValueError(
+            f"text column {text_column!r} was not found in parquet shard {path.name}"
+        )
+    if len(column_indices) > 1:
+        raise ValueError(
+            f"text column {text_column!r} is ambiguous in parquet shard {path.name}"
+        )
+
+    column_type = schema.field(column_indices[0]).type
+    if not (pa.types.is_string(column_type) or pa.types.is_large_string(column_type)):
+        raise TypeError(
+            f"text column {text_column!r} must have a string Arrow type; "
+            f"got {column_type} in parquet shard {path.name}"
+        )
+
+    for record_batch in parquet_file.iter_batches(
+        batch_size=batch_size,
+        columns=[text_column],
+        use_threads=False,
+    ):
+        text_array = record_batch.column(0)
+        if text_array.null_count:
+            raise ValueError(
+                f"text column {text_column!r} contains null values in "
+                f"parquet shard {path.name}"
+            )
+        texts = text_array.to_pylist()
+        if texts:
+            yield texts
 
 
 def _index_parquet_files(
@@ -188,6 +277,15 @@ def _index_parquet_files(
 def _validate_parquet_split(split: object) -> None:
     if not isinstance(split, str) or split not in ("train", "val"):
         raise ValueError(f"split must be 'train' or 'val', got {split!r}")
+
+
+def _validate_text_column(text_column: object) -> None:
+    if not isinstance(text_column, str):
+        raise TypeError(
+            f"text_column must be a non-empty string, got {type(text_column).__name__}"
+        )
+    if not text_column.strip():
+        raise ValueError("text_column must be a non-empty string")
 
 
 def _require_non_negative_integer(value: object, *, name: str) -> int:
@@ -261,3 +359,24 @@ def _validate_token_id(token_id: object, *, position: int, vocab_size: int) -> i
             f"[0, {vocab_size}); got {token_id}"
         )
     return token_id
+
+
+__all__ = [
+    "CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX",
+    "DEFAULT_CLIMBMIX_DATA_DIR",
+    "NextTokenDataset",
+    "TOKENIZED_MANIFEST_NAME",
+    "TOKENIZED_SHARD_FORMAT",
+    "TOKENIZED_SHARD_FORMAT_VERSION",
+    "TokenizedDataError",
+    "TokenizedDatasetManifest",
+    "TokenizedShardManifest",
+    "TokenizedShardReader",
+    "TokenizedShardSource",
+    "TokenizedSplitManifest",
+    "list_parquet_files",
+    "parquets_iter_batched",
+    "select_parquet_files",
+    "write_tokenized_parquet_shards",
+    "write_tokenized_shards",
+]

@@ -94,6 +94,9 @@ class _IndependentByteCompatibleTokenizer(Tokenizer):
     def get_special_tokens(self) -> set[str]:
         return self._delegate.get_special_tokens()
 
+    def get_identity(self) -> str:
+        return self._delegate.get_identity()
+
 
 def _checkpoint_state() -> tuple[
     ProjectConfig,
