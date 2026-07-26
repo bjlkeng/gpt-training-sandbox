@@ -49,7 +49,9 @@ UNIMPLEMENTED_CHECKPOINT_COMMANDS = (
     "scripts.chat",
     "scripts.web_chat",
 )
-ROADMAP_COMMANDS = CONFIG_COMMANDS + CHECKPOINT_COMMANDS
+ROADMAP_COMMANDS = (
+    CONFIG_COMMANDS + CHECKPOINT_COMMANDS + ("scripts.download_climbmix",)
+)
 
 
 def _run_module(module: str, *arguments: str) -> subprocess.CompletedProcess[str]:

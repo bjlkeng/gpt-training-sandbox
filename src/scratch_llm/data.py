@@ -14,13 +14,14 @@ from torch import Tensor
 from torch.utils.data import Dataset
 
 from scratch_llm._validation import require_positive_integer
+from scratch_llm.climbmix import (
+    CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX,
+    DEFAULT_CLIMBMIX_DATA_DIR,
+)
 from scratch_llm.tokenizer import VOCAB_SIZE
 
 
 _PARQUET_SHARD_NAME = re.compile(r"^shard_([0-9]+)\.parquet$")
-DEFAULT_CLIMBMIX_DATA_DIR = Path("data/parquet/base_data_climbmix")
-# The validation shard is always the final ClimbMix shard, even for partial datasets.
-CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX = 6542
 
 
 def list_parquet_files(data_dir: str | Path) -> list[Path]:

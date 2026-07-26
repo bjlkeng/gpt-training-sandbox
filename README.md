@@ -74,6 +74,23 @@ The repository-wide formatting check is:
 uv run --extra dev ruff format --check .
 ```
 
+## Partial ClimbMix download
+
+Download a bounded training prefix plus the fixed validation shard with:
+
+```bash
+uv run python -m scripts.download_climbmix \
+  --num-train-shards 16 \
+  --include-val
+```
+
+The default destination is `data/parquet/base_data_climbmix/`. Each shard is
+streamed through a same-directory `.part` file, resumed only after a compatible
+HTTP range response, and atomically published after its declared size is
+present. Existing nonempty published shards are skipped. Human progress and
+retry state go to stderr; the final stdout line is a JSON object containing
+ready/downloaded/skipped shard counts and total bytes.
+
 ## Smoke dry-run
 
 Resolve the CPU-safe smoke configuration and prepare its run paths without
