@@ -83,6 +83,9 @@ def test_byte_tokenizer_implements_the_shared_contract() -> None:
     tokenizer: Tokenizer = ByteTokenizer()
 
     assert isinstance(tokenizer, Tokenizer)
+    assert tokenizer.get_identity().startswith("sha256:")
+    assert len(tokenizer.get_identity()) == len("sha256:") + 64
+    assert tokenizer.get_identity() == ByteTokenizer().get_identity()
     assert tokenizer("hello") == tokenizer.encode("hello")
 
 
