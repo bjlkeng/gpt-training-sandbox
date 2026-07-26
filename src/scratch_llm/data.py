@@ -19,7 +19,7 @@ from scratch_llm.tokenizer import VOCAB_SIZE
 
 _PARQUET_SHARD_NAME = re.compile(r"^shard_([0-9]+)\.parquet$")
 DEFAULT_CLIMBMIX_DATA_DIR = Path("data/parquet/base_data_climbmix")
-DEFAULT_VALIDATION_SHARD_INDEX = 6542
+CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX = 6542
 
 
 def list_parquet_files(data_dir: str | Path) -> list[Path]:
@@ -45,7 +45,7 @@ def select_parquet_files(
     split: str,
     *,
     num_train_shards: int | None = None,
-    validation_shard_index: int = DEFAULT_VALIDATION_SHARD_INDEX,
+    validation_shard_index: int = CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX,
 ) -> list[Path]:
     """Select a train prefix or the fixed validation shard from local files."""
 
@@ -92,7 +92,7 @@ def parquets_iter_batched(
     *,
     data_dir: str | Path = DEFAULT_CLIMBMIX_DATA_DIR,
     num_train_shards: int | None = None,
-    validation_shard_index: int = DEFAULT_VALIDATION_SHARD_INDEX,
+    validation_shard_index: int = CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX,
     batch_size: int = 1024,
     text_column: str = "text",
 ) -> Iterator[list[str]]:

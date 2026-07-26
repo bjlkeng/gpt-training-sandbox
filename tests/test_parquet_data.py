@@ -9,6 +9,7 @@ import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import pytest
 
 from scratch_llm.data import (
+    CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX,
     list_parquet_files,
     parquets_iter_batched,
     select_parquet_files,
@@ -106,6 +107,7 @@ def test_select_parquet_files_uses_train_prefix_and_fixed_validation_shard(
         "shard_00001.parquet",
     ]
     assert [path.name for path in validation] == ["shard_06542.parquet"]
+    assert CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX == 6542
 
 
 def test_select_parquet_files_handles_partial_local_datasets_without_leakage(
