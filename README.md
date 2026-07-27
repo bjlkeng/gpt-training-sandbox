@@ -91,6 +91,28 @@ present. Existing nonempty published shards are skipped. Human progress and
 retry state go to stderr; the final stdout line is a JSON object containing
 ready/downloaded/skipped shard counts and total bytes.
 
+## Raw ClimbMix statistics
+
+Inspect the same canonical train prefix and fixed validation shard used by data
+preparation without loading a full corpus into memory:
+
+```bash
+uv run python -m scripts.data_stats \
+  --data-dir data/fixtures/parquet \
+  --num-train-shards 2 \
+  --include-val \
+  --output metrics/data_stats.json
+```
+
+The human summary distinguishes documents, Unicode characters, and UTF-8
+bytes. The JSON report contains immutable split and total fields and is written
+atomically. `--doc-cap` counts documents, including empty strings;
+`--max-chars` applies an exact per-split character budget and may retain a final
+document prefix; and `--doc-cap-chars` truncates each document first. These
+aliases match `tokenizer.doc_cap`, `tokenizer.max_chars`, and
+`data.doc_cap_chars`, respectively. Supplying any cap marks the report as
+bounded. Use `--no-val` to select only training data.
+
 ## Smoke dry-run
 
 Resolve the CPU-safe smoke configuration and prepare its run paths without

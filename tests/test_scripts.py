@@ -50,7 +50,9 @@ UNIMPLEMENTED_CHECKPOINT_COMMANDS = (
     "scripts.web_chat",
 )
 ROADMAP_COMMANDS = (
-    CONFIG_COMMANDS + CHECKPOINT_COMMANDS + ("scripts.download_climbmix",)
+    CONFIG_COMMANDS
+    + CHECKPOINT_COMMANDS
+    + ("scripts.data_stats", "scripts.download_climbmix")
 )
 
 
