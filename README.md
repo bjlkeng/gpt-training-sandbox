@@ -91,20 +91,6 @@ present. Existing nonempty published shards are skipped. Human progress and
 retry state go to stderr; the final stdout line is a JSON object containing
 ready/downloaded/skipped shard counts and total bytes.
 
-## Random token batches
-
-`RandomOffsetTokenLoader` consumes a validated `TokenizedShardReader` and
-samples uniformly from every shard-local start that has `seq_len + 1` tokens.
-It returns shifted CPU `torch.long` tensors and never concatenates the token
-corpus: only the sampled windows are copied from the read-only memmaps.
-
-The loader owns a seeded CPU generator. Its `state_dict()` and
-`load_state_dict()` methods preserve the canonical manifest identity, split,
-batch and sequence settings, generator bytes, and emitted-sample position. The
-state is JSON-compatible and restores the exact next batch in a fresh process.
-Changing the dataset manifest or any loader setting makes old state fail before
-sampling.
-
 ## Smoke dry-run
 
 Resolve the CPU-safe smoke configuration and prepare its run paths without
@@ -328,6 +314,20 @@ uv run python -m scripts.pretrain \
 This first-sprint resume contract restores the model, optimizer, and scheduler
 and advances from the saved step. Exact RNG and dataloader-position continuity
 remain later roadmap work.
+
+### Random token batches
+
+`RandomOffsetTokenLoader` consumes a validated `TokenizedShardReader` and
+samples uniformly from every shard-local start that has `seq_len + 1` tokens.
+It returns shifted CPU `torch.long` tensors and never concatenates the token
+corpus: only the sampled windows are copied from the read-only memmaps.
+
+The loader owns a seeded CPU generator. Its `state_dict()` and
+`load_state_dict()` methods preserve the canonical manifest identity, split,
+batch and sequence settings, generator bytes, and emitted-sample position. The
+state is JSON-compatible and restores the exact next batch in a fresh process.
+Changing the dataset manifest or any loader setting makes old state fail before
+sampling.
 
 The sampling command loads the model, byte tokenizer, and generation defaults
 from a versioned checkpoint. Pass `--prompt` more than once to sample multiple
