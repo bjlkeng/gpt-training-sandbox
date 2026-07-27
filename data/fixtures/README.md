@@ -7,3 +7,7 @@ under the repository's MIT license.
 
 The [`parquet`](parquet/) directory contains the separately documented
 synthetic ClimbMix-style fixture used by the raw-data pipeline tests.
+
+The [`tokenizer`](tokenizer/) directory contains separately documented,
+network-independent regex-boundary parity cases with their pinned upstream
+provenance and refresh procedure.

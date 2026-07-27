@@ -1,0 +1,167 @@
+{
+  "cases": [
+    {
+      "chunks": [],
+      "name": "empty",
+      "text": ""
+    },
+    {
+      "chunks": [
+        "Hello",
+        " world"
+      ],
+      "name": "ascii_words",
+      "text": "Hello world"
+    },
+    {
+      "chunks": [
+        "I",
+        "'m",
+        " we",
+        "'d",
+        " I",
+        "'LL",
+        " you",
+        "'ve",
+        " can",
+        "'t"
+      ],
+      "name": "contraction_case",
+      "text": "I'm we'd I'LL you've can't"
+    },
+    {
+      "chunks": [
+        "1",
+        " ",
+        "12",
+        " ",
+        "12",
+        "3",
+        " ",
+        "٤٥",
+        "٦",
+        " ",
+        "１２",
+        "３"
+      ],
+      "name": "one_two_digit_groups",
+      "text": "1 12 123 ٤٥٦ １２３"
+    },
+    {
+      "chunks": [
+        "word",
+        " ",
+        " next",
+        " \t  "
+      ],
+      "name": "ambiguous_trailing_whitespace",
+      "text": "word  next \t  "
+    },
+    {
+      "chunks": [
+        "wow",
+        "!!!\r\n",
+        "next",
+        "??\n"
+      ],
+      "name": "punctuation_plus_newline",
+      "text": "wow!!!\r\nnext??\n"
+    },
+    {
+      "chunks": [
+        "\talpha",
+        "\t \r\n\n",
+        "beta",
+        "\t"
+      ],
+      "name": "tabs_crlf_newlines",
+      "text": "\talpha\t \r\n\nbeta\t"
+    },
+    {
+      "chunks": [
+        "def",
+        " f",
+        "(x",
+        "=",
+        "42",
+        "):\n",
+        "\treturn",
+        " x",
+        "+",
+        "1",
+        "\n"
+      ],
+      "name": "code",
+      "text": "def f(x=42):\n\treturn x+1\n"
+    },
+    {
+      "chunks": [
+        "∑_{",
+        "i",
+        "=",
+        "1",
+        "}^{",
+        "12",
+        "}",
+        " xᵢ",
+        "²",
+        " +",
+        " π",
+        "≈",
+        "3",
+        ".",
+        "14",
+        "\n"
+      ],
+      "name": "math",
+      "text": "∑_{i=1}^{12} xᵢ² + π≈3.14\n"
+    },
+    {
+      "chunks": [
+        "café",
+        " Καλημέρα",
+        " 中文",
+        "१२",
+        "३"
+      ],
+      "name": "unicode_letters_numbers",
+      "text": "café Καλημέρα 中文१२३"
+    },
+    {
+      "chunks": [
+        "안녕하세요",
+        ",",
+        " 세계",
+        " ",
+        "20",
+        "26",
+        "!"
+      ],
+      "name": "korean",
+      "text": "안녕하세요, 세계 2026!"
+    },
+    {
+      "chunks": [
+        "Hi",
+        " 👩🏽‍💻🚀!\n"
+      ],
+      "name": "emoji",
+      "text": "Hi 👩🏽‍💻🚀!\n"
+    },
+    {
+      "chunks": [
+        " \t  "
+      ],
+      "name": "spaces_only",
+      "text": " \t  "
+    }
+  ],
+  "format": "scratch_llm_regex_chunk_parity",
+  "format_version": 1,
+  "pattern": "'(?i:[sdmt]|ll|ve|re)|[^\\r\\n\\p{L}\\p{N}]?+\\p{L}+|\\p{N}{1,2}| ?[^\\s\\p{L}\\p{N}]++[\\r\\n]*|\\s*[\\r\\n]|\\s+(?!\\S)|\\s+",
+  "upstream": {
+    "commit": "41865401f73ff1c5321ae53297bceb2b78d4c8b4",
+    "path": "nanochat/tokenizer.py",
+    "repository": "https://github.com/karpathy/nanochat"
+  }
+}
