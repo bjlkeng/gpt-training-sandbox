@@ -10,6 +10,15 @@ from os import PathLike
 from types import MappingProxyType
 from typing import Final, Mapping
 
+from scratch_llm.regex_chunking import (
+    SPLIT_PATTERN,
+    RegexChunkingDependencyError,
+    bpe_encoding_chunks,
+    iter_bpe_training_chunks,
+    split_regex_byte_chunks,
+    split_regex_chunks,
+)
+
 
 BYTE_VOCAB_SIZE: Final = 256
 # nanochat intentionally defines no padding token. Categorical chat evaluation
@@ -259,10 +268,16 @@ __all__ = [
     "BYTE_VOCAB_SIZE",
     "BYTE_TOKENIZER_IDENTITY",
     "NANOCHAT_SPECIAL_TOKENS",
+    "SPLIT_PATTERN",
     "SPECIAL_TOKEN_IDS",
     "SPECIAL_TOKENS",
     "VOCAB_SIZE",
     "ByteTokenizer",
+    "RegexChunkingDependencyError",
     "Tokenizer",
     "UnsupportedTokenizerOperationError",
+    "bpe_encoding_chunks",
+    "iter_bpe_training_chunks",
+    "split_regex_byte_chunks",
+    "split_regex_chunks",
 ]
