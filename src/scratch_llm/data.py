@@ -57,7 +57,7 @@ _RANDOM_OFFSET_LOADER_STATE_KEYS = frozenset(
 )
 _MAX_TORCH_SEED = 2**63 - 1
 DOCUMENT_PACKING_LOADER_STATE_FORMAT = "scratch_llm_document_packing_loader_state"
-DOCUMENT_PACKING_LOADER_STATE_FORMAT_VERSION = 1
+DOCUMENT_PACKING_LOADER_STATE_FORMAT_VERSION = 2
 _DOCUMENT_PACKING_LOADER_STATE_KEYS = frozenset(
     {
         "batch_size",
@@ -593,9 +593,13 @@ class _DocumentPiece:
     shard_index: int
     start: int
     token_count: int
+    is_continuation: bool
+    is_document_end: bool
 
     @property
     def packed_token_count(self) -> int:
+        """Count the piece's BOS or carried-token prefix plus new tokens."""
+
         return self.token_count + 1
 
 
@@ -608,13 +612,14 @@ class _PackedRow:
 class DocumentPackingTokenLoader(
     Iterator[tuple[Tensor, Tensor, Tensor]],
 ):
-    """Yield deterministic BOS-delimited batches without corpus concatenation.
+    """Yield deterministic boundary-aware batches without corpus concatenation.
 
-    Each document contributes ``BOS + document tokens``. Documents longer than
-    ``seq_len`` are split into deterministic ``BOS + seq_len-token`` pieces.
-    Best-fit placement combines pieces that fit in one ``seq_len + 1`` row.
-    Residual positions and residual batch rows use BOS, with an explicit
-    boolean loss mask that selects only ordinary document-token targets.
+    A document starts with BOS. Continuation windows instead carry the previous
+    real token as context, so an artificial chunk boundary is never presented
+    as a document opening. Best-fit placement combines complete documents that
+    fit in one ``seq_len + 1`` row. Residual positions and residual batch rows
+    use BOS, with an explicit boolean loss mask that selects ordinary document
+    tokens and the first BOS after a real document end.
     """
 
     def __init__(
@@ -699,6 +704,11 @@ class DocumentPackingTokenLoader(
         for row_index, row in enumerate(batch_rows):
             packed_offset = 0
             for piece in row.pieces:
+                if piece.is_continuation:
+                    previous_token = int(
+                        self._mapped_shards[piece.shard_index][piece.start - 1]
+                    )
+                    windows[row_index, packed_offset] = previous_token
                 content_start = packed_offset + 1
                 content_stop = content_start + piece.token_count
                 if piece.token_count:
@@ -718,6 +728,8 @@ class DocumentPackingTokenLoader(
                         packed_offset : packed_offset + piece.token_count,
                     ] = True
                 packed_offset += piece.packed_token_count
+                if piece.is_document_end and packed_offset < self.seq_len + 1:
+                    loss_mask[row_index, packed_offset - 1] = True
 
         self.row_position += self.batch_size
         self.position += self.batch_size
@@ -920,17 +932,26 @@ def _best_fit_document_rows(
         document_offset = 0
         while remaining > 0:
             piece_token_count = min(remaining, seq_len)
+            is_continuation = document_offset > 0
             piece = _DocumentPiece(
                 shard_index=span.shard_index,
                 start=span.start + document_offset,
                 token_count=piece_token_count,
+                is_continuation=is_continuation,
+                is_document_end=piece_token_count == remaining,
             )
-            _place_best_fit_piece(
-                mutable_rows,
-                used_token_counts,
-                piece,
-                row_token_count=row_token_count,
-            )
+            if is_continuation:
+                # The carried prefix must be the preceding source token, never
+                # an unrelated document that happened to leave residual room.
+                mutable_rows.append([piece])
+                used_token_counts.append(piece.packed_token_count)
+            else:
+                _place_best_fit_piece(
+                    mutable_rows,
+                    used_token_counts,
+                    piece,
+                    row_token_count=row_token_count,
+                )
             remaining -= piece_token_count
             document_offset += piece_token_count
         if span.token_count == 0:
@@ -941,6 +962,8 @@ def _best_fit_document_rows(
                     shard_index=span.shard_index,
                     start=span.start,
                     token_count=0,
+                    is_continuation=False,
+                    is_document_end=True,
                 ),
                 row_token_count=row_token_count,
             )

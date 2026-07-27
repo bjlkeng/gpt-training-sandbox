@@ -12,6 +12,7 @@ import pytest
 import torch
 
 from scratch_llm.data import (
+    DOCUMENT_PACKING_LOADER_STATE_FORMAT_VERSION,
     DocumentPackingTokenLoader,
     DocumentPackingTokenLoaderStateError,
     RandomOffsetTokenLoader,
@@ -61,7 +62,7 @@ def _batches_equal(
     return all(torch.equal(left, right) for left, right in zip(first, second))
 
 
-def test_packing_marks_only_within_document_content_targets(tmp_path: Path) -> None:
+def test_packing_supervises_content_and_real_bos_boundaries(tmp_path: Path) -> None:
     dataset_dir = tmp_path / "tokenized"
     tokenizer = _write_dataset(
         dataset_dir,
@@ -84,7 +85,7 @@ def test_packing_marks_only_within_document_content_targets(tmp_path: Path) -> N
     assert loss_mask.dtype == torch.bool
     assert inputs.tolist() == [[bos, ord("A"), ord("B"), bos]]
     assert targets.tolist() == [[ord("A"), ord("B"), bos, ord("C")]]
-    assert loss_mask.tolist() == [[True, True, False, True]]
+    assert loss_mask.tolist() == [[True, True, True, True]]
 
 
 def test_reader_exposes_validated_boundaries_without_changing_flat_tokens(
@@ -122,7 +123,7 @@ def test_packing_covers_empty_unicode_exact_fit_and_residual_space(
     tmp_path: Path,
 ) -> None:
     dataset_dir = tmp_path / "tokenized"
-    documents = ("AB", "", "é", "C")
+    documents = ("ABCDE", "", "é")
     tokenizer = _write_dataset(dataset_dir, train_sources=(documents,))
 
     with TokenizedShardReader(dataset_dir, tokenizer=tokenizer) as reader:
@@ -130,7 +131,7 @@ def test_packing_covers_empty_unicode_exact_fit_and_residual_space(
             reader,
             split="train",
             batch_size=2,
-            seq_len=4,
+            seq_len=5,
             seed=11,
         )
         batches = _epoch_batches(loader)
@@ -145,7 +146,9 @@ def test_packing_covers_empty_unicode_exact_fit_and_residual_space(
     bos = tokenizer.get_bos_token_id()
 
     assert torch.equal(targets[:, :-1], inputs[:, 1:])
-    assert sorted(targets[loss_mask].tolist()) == expected_content
+    supervised_content = targets[loss_mask & (targets != bos)]
+    assert sorted(supervised_content.tolist()) == expected_content
+    assert torch.any(loss_mask & (targets == bos))
     assert torch.all(targets[~loss_mask] == bos)
     assert (~loss_mask).any()
     assert "<|pad|>" not in tokenizer.get_special_tokens()
@@ -170,12 +173,54 @@ def test_oversized_documents_are_split_without_losing_or_duplicating_content(
 
     assert loader.packed_example_count == 3
     targets = torch.cat([batch[1] for batch in batches])
+    inputs = torch.cat([batch[0] for batch in batches])
     loss_mask = torch.cat([batch[2] for batch in batches])
     bos = tokenizer.get_bos_token_id()
 
-    assert targets[loss_mask].tolist() == tokenizer.encode(document)
+    encoded = tokenizer.encode(document)
+    assert inputs.tolist() == [
+        [bos, *encoded[0:3]],
+        encoded[3:7],
+        encoded[7:11],
+        [bos, bos, bos, bos],
+    ]
+    assert targets.tolist() == [
+        encoded[0:4],
+        encoded[4:8],
+        [*encoded[8:11], bos],
+        [bos, bos, bos, bos],
+    ]
+    assert targets[loss_mask & (targets != bos)].tolist() == encoded
+    assert targets[2, -1].item() == bos
+    assert loss_mask[2, -1].item()
     assert torch.all(targets[~loss_mask] == bos)
-    assert [int(mask.sum()) for mask in loss_mask] == [4, 4, 3, 0]
+    assert [int(mask.sum()) for mask in loss_mask] == [4, 4, 4, 0]
+
+
+def test_document_can_follow_a_continuation_with_a_supervised_bos_boundary(
+    tmp_path: Path,
+) -> None:
+    dataset_dir = tmp_path / "tokenized"
+    tokenizer = _write_dataset(
+        dataset_dir,
+        train_sources=(("ABCDE", "FG"),),
+    )
+
+    with TokenizedShardReader(dataset_dir, tokenizer=tokenizer) as reader:
+        loader = DocumentPackingTokenLoader(
+            reader,
+            split="train",
+            batch_size=2,
+            seq_len=4,
+            seed=0,
+        )
+        inputs, targets, loss_mask = next(loader)
+
+    bos = tokenizer.get_bos_token_id()
+    assert loader.packed_example_count == 2
+    assert inputs[1].tolist() == [ord("D"), ord("E"), bos, ord("F")]
+    assert targets[1].tolist() == [ord("E"), bos, ord("F"), ord("G")]
+    assert loss_mask[1].tolist() == [True, True, True, True]
 
 
 def test_seeded_document_order_repeats_and_different_seeds_vary(
@@ -254,6 +299,9 @@ def test_state_resumes_exactly_across_shards_and_epoch_boundaries(
         )
         next(source)
         state = json.loads(json.dumps(source.state_dict()))
+        assert (
+            state["format_version"] == DOCUMENT_PACKING_LOADER_STATE_FORMAT_VERSION == 2
+        )
         expected = [next(source) for _ in range(3)]
 
     with TokenizedShardReader(dataset_dir, tokenizer=tokenizer) as resumed_reader:
@@ -279,7 +327,7 @@ def test_state_resumes_exactly_across_shards_and_epoch_boundaries(
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
-        (lambda state: state.__setitem__("format_version", 2), "format version"),
+        (lambda state: state.__setitem__("format_version", 1), "format version"),
         (lambda state: state.__setitem__("batch_size", True), "batch_size"),
         (lambda state: state.__setitem__("row_position", 1), "row_position"),
         (lambda state: state.__setitem__("epoch_seed", -1), "epoch_seed"),
@@ -364,9 +412,12 @@ def test_readme_documents_packing_policy_and_resume_contract() -> None:
     readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(
         encoding="utf-8"
     )
+    normalized_readme = " ".join(readme.split())
 
     assert "`DocumentPackingTokenLoader`" in readme
     assert '`strategy="packed"`' in readme
     assert "No pad token is introduced" in readme
     assert "boolean loss mask" in readme
+    assert "previous real token" in normalized_readme
+    assert "real BOS boundary targets" in normalized_readme
     assert "exact next" in readme
