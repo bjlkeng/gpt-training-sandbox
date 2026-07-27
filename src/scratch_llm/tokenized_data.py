@@ -86,6 +86,23 @@ class TokenizedShardManifest:
 
 
 @dataclass(frozen=True)
+class TokenizedDocumentSpan:
+    """One validated document boundary within a mapped token shard."""
+
+    split: TokenizedSplit
+    shard_index: int
+    document_index: int
+    start: int
+    stop: int
+
+    @property
+    def token_count(self) -> int:
+        """Return the number of ordinary tokens in this document."""
+
+        return self.stop - self.start
+
+
+@dataclass(frozen=True)
 class TokenizedSplitManifest:
     """Validated totals and ordered shards for one dataset split."""
 
@@ -279,6 +296,10 @@ class TokenizedShardReader:
         self.dataset_dir = dataset_dir
         self.manifest = manifest
         self._shards = {split: tuple(arrays) for split, arrays in opened.items()}
+        self._document_spans = {
+            split: _document_spans(manifest.splits[split], split=split)
+            for split in _SPLITS
+        }
         self._closed = False
 
     def shards(self, split: TokenizedSplit) -> tuple[np.memmap, ...]:
@@ -289,6 +310,18 @@ class TokenizedShardReader:
         if split not in _SPLITS:
             raise ValueError(f"split must be 'train' or 'val', got {split!r}")
         return self._shards[split]
+
+    def document_spans(
+        self,
+        split: TokenizedSplit,
+    ) -> tuple[TokenizedDocumentSpan, ...]:
+        """Return ordered, validated document offsets for ``split``."""
+
+        if self._closed:
+            raise RuntimeError("tokenized shard reader is closed")
+        if split not in _SPLITS:
+            raise ValueError(f"split must be 'train' or 'val', got {split!r}")
+        return self._document_spans[split]
 
     def close(self) -> None:
         """Close every mapped shard. Repeated calls are harmless."""
@@ -1085,12 +1118,36 @@ def _close_memmaps(shards: Mapping[str, Sequence[np.memmap]]) -> None:
             _close_memmap(array)
 
 
+def _document_spans(
+    manifest: TokenizedSplitManifest,
+    *,
+    split: TokenizedSplit,
+) -> tuple[TokenizedDocumentSpan, ...]:
+    spans: list[TokenizedDocumentSpan] = []
+    for shard in manifest.shards:
+        start = 0
+        for document_index, token_count in enumerate(shard.document_token_counts):
+            stop = start + token_count
+            spans.append(
+                TokenizedDocumentSpan(
+                    split=split,
+                    shard_index=shard.index,
+                    document_index=document_index,
+                    start=start,
+                    stop=stop,
+                )
+            )
+            start = stop
+    return tuple(spans)
+
+
 __all__ = [
     "TOKENIZED_MANIFEST_NAME",
     "TOKENIZED_SHARD_FORMAT",
     "TOKENIZED_SHARD_FORMAT_VERSION",
     "TokenizedDataError",
     "TokenizedDatasetManifest",
+    "TokenizedDocumentSpan",
     "TokenizedShardManifest",
     "TokenizedShardReader",
     "TokenizedShardSource",

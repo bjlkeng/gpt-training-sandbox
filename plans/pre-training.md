@@ -1104,13 +1104,26 @@ y = x shifted by one token
 
 Implement random contiguous chunks from a flat memmap token array.
 
-Later version:
+Packed version:
 
-- BOS-aware best-fit packing.
+- Best-fit complete documents as `BOS + document tokens`.
 
-- Document boundary handling.
+- Supervise the transition from a document's final content token into BOS, and
+  reuse that BOS as the next packed document's opening marker.
 
-- Resumeable dataloader state.
+- For a long document, start the first window with BOS and every continuation
+  window with the previous real token. The carried token is context only; each
+  ordinary document token remains a target exactly once.
+
+- Use BOS-valued residual and batch padding, but distinguish real BOS boundary
+  targets from padding with an explicit boolean loss mask.
+
+- Keep standard causal attention across a packed row. Document isolation would
+  require a separate attention-mask policy and is not implied by loss masking.
+
+- Serialize the seeded epoch plan and row position for exact next-batch resume.
+  Bump the state format whenever packing semantics would reconstruct a
+  different plan.
 
 ## Acceptance Criteria
 
@@ -1127,6 +1140,12 @@ Later version:
 - `y[:, :-1] == x[:, 1:]` for simple contiguous batches.
 
 - Dataloader works without raw text once tokenized shards exist.
+
+- Packed long-document continuations carry the previous source token rather
+  than inserting an artificial BOS.
+
+- Packed multi-document rows supervise true BOS boundaries while masking
+  indistinguishable BOS-valued padding explicitly.
 
 ## Tickets
 
@@ -1986,6 +2005,71 @@ padding targets
 
 ```
 
+### 6.1.1 Validation Protocols and nanochat Comparability
+
+Do not silently reuse the training packer as the only validation protocol.
+Continuation-aware windows retain more source data and change the context
+distribution, so their BPB is useful but not directly interchangeable with a
+nanochat BPB.
+
+Implement two immutable, protocol-tagged results:
+
+1. `nanochat_compat_v1`
+
+   - Pin and record the exact nanochat reference commit and evaluator
+     configuration.
+   - Reproduce that reference's validation document order, BOS-prefixed
+     best-fit packing, and oversized-document prefix cropping/discard behavior.
+   - Keep special-token byte lengths at zero, so BOS targets do not contribute
+     to BPB.
+   - Publish this result under the existing `val_bpb` and `eval/val_bpb` keys.
+     Those unsuffixed keys are permanently reserved for the compatibility
+     protocol.
+
+2. `full_documents_v1`
+
+   - Use the continuation-aware policy from Phase 2: first window starts with
+     BOS, later windows carry the previous real token, and no ordinary source
+     token is discarded.
+   - Count each ordinary validation token and byte exactly once as a target.
+     Carried context tokens add model compute but not duplicate target weight.
+   - Publish this result under `val_bpb_full_documents` and
+     `eval/val_bpb_full_documents`.
+
+Both protocols must evaluate the same immutable checkpoint, tokenizer,
+validation manifest, loss implementation, and `token_bytes` table. Every
+result object and `base_eval.json` record must include:
+
+```text
+protocol_id
+protocol_version
+reference_commit
+checkpoint_identity
+tokenizer_identity
+validation_manifest_identity
+source_documents
+source_tokens
+source_bytes
+processed_model_tokens
+counted_target_tokens
+counted_target_bytes
+unique_source_tokens
+unique_source_bytes
+source_token_retention
+source_byte_retention
+total_nats
+bpb
+```
+
+The compatibility metric answers “how does this checkpoint compare under the
+pinned nanochat procedure?” The full-document metric answers “how well does it
+model the complete validation corpus under the training-aligned continuation
+policy?” Dashboards and comparison reports must label both and must not rank
+runs by mixing the two protocols.
+
+CORE is independent of either validation packer. Preserve the pinned CORE
+bundle, task configuration, prompt rendering, and scoring contract separately.
+
 ## 6.2 Base Eval Modes
 
 CLI:
@@ -2023,6 +2107,13 @@ My favorite color is
 If 5*x + 3 = 13, then x is
 
 ```
+
+Base sampling uses BOS as the document-end convention: stop immediately when
+the model generates BOS, without rendering that control token, and retain
+`max_new_tokens` as the fallback. SFT later teaches `<|assistant_end|>` as the
+expected chat-response terminator. Shared generation code should accept an
+explicit stop-token set so base evaluation uses BOS and chat inference uses
+`<|assistant_end|>` plus BOS as a safety stop.
 
 ## 6.4 CORE Metric
 
@@ -2084,9 +2175,18 @@ metrics/summary.json
 
 - Masked targets are ignored in BPB.
 
+- The pinned nanochat-compatible BPB and continuation-aware full-document BPB
+  are emitted under distinct stable keys with protocol and coverage metadata.
+
+- A fixture with an oversized document proves the compatibility protocol's
+  cropping and the full-document protocol's complete, exactly-once byte
+  coverage; the results are never conflated.
+
 - Base eval can run `bpb`, `sample`, and `core` independently.
 
 - Samples are saved to Markdown.
+
+- Base samples stop on generated BOS or `max_new_tokens`.
 
 - Eval metrics are logged to JSONL and optional W&B.
 
@@ -2234,6 +2334,12 @@ python_start/python_end around assistant tool calls
 
 ```
 
+This stop convention is intentionally stage-specific. Base pretraining teaches
+BOS as the next-document boundary and base sampling stops on generated BOS.
+SFT explicitly supervises `assistant_end`, so chat generation expects that
+token and may also treat BOS as a safety stop. BOS is not inserted at
+artificial long-document continuation boundaries.
+
 ## 7.4 SFT Data Sources
 
 Use both:
@@ -2380,7 +2486,7 @@ top_k
 
 max_new_tokens
 
-stop at assistant_end
+stop at assistant_end, with BOS as a safety stop
 
 transcript logging
 
@@ -2420,7 +2526,7 @@ CLI and web UI both call `ChatEngine`.
 
 - Can reset conversation.
 
-- Stops on assistant end token.
+- Stops on assistant end token and safely terminates on BOS.
 
 - Transcript can be saved.
 
@@ -3004,6 +3110,10 @@ val_bpb
 
 min_val_bpb
 
+val_bpb_full_documents
+
+min_val_bpb_full_documents
+
 core_metric
 
 total_training_flops
@@ -3037,6 +3147,12 @@ Checkpoint artifact logging should be opt-in.
 ```text
 
 eval/val_bpb
+
+eval/val_bpb_full_documents
+
+eval/val_bpb_nanochat_source_byte_retention
+
+eval/val_bpb_full_document_source_byte_retention
 
 eval/core_metric
 
@@ -4519,6 +4635,14 @@ Use token_bytes, not decoded string lengths.
 Zero special-token byte counts.
 
 Ignore masked labels.
+
+Freeze protocol ids and the nanochat reference commit.
+
+Keep compatibility and full-document BPB under distinct metric keys.
+
+Record processed tokens, counted bytes, and source retention with every result.
+
+Test cropping and continuation coverage on the same oversized-document fixture.
 
 ```
 

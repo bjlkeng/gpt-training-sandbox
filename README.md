@@ -351,6 +351,43 @@ state is JSON-compatible and restores the exact next batch in a fresh process.
 Changing the dataset manifest or any loader setting makes old state fail before
 sampling.
 
+`DocumentPackingTokenLoader` is the explicit `strategy="packed"` alternative;
+the flat random-offset path remains available as `strategy="flat"`. It shuffles
+validated document spans with a seeded generator and best-fit packs complete
+documents into fixed `seq_len + 1` rows. The first window of a document is
+`BOS + document tokens`; a long document's later windows carry the previous
+real token as context instead of inserting an artificial BOS. Every ordinary
+token therefore appears exactly once as a supervised target per epoch without
+teaching the model that an arbitrary continuation is a document opening.
+
+No pad token is introduced. Residual row space and incomplete batches contain
+only BOS, while the returned boolean loss mask distinguishes real BOS boundary
+targets from identical BOS-valued padding. When multiple documents share a
+row, the last content token predicts BOS and that BOS predicts the next
+document's first token, matching nanochat's dual use of BOS as both start and
+document-boundary marker. Ordinary causal attention is unchanged, so a later
+packed document can attend to earlier row content; this loader does not add a
+per-document attention mask. Only the first BOS after a real document end is
+supervised; remaining residual and batch padding is masked.
+
+The JSON-compatible `state_dict()` records the current epoch plan seed, row
+position, manifest identity, and next-epoch RNG state; `load_state_dict()`
+reconstructs the same plan and resumes at the exact next batch, including when
+documents span multiple tokenized shards. Continuation-aware packing is state
+format version 2, so version 1 states fail explicitly instead of silently
+resuming into a different batch plan.
+
+The future BPB evaluator will keep comparison and coverage questions separate.
+The existing `val_bpb` name is reserved for a frozen nanochat-compatible
+packing/cropping protocol. A distinct `val_bpb_full_documents` metric will use
+continuation-aware windows and count every validation byte once. Reports will
+record the protocol identity, processed model tokens, counted source
+tokens/bytes, and retention; the two BPB values must not be compared as if
+their evaluation distributions were identical. CORE remains an independent
+fixed-task metric. Base sampling will stop on generated BOS, while chat/SFT
+generation learns and stops on `<|assistant_end|>` (with BOS also retained as a
+safety stop).
+
 The sampling command loads the model, byte tokenizer, and generation defaults
 from a versioned checkpoint. Pass `--prompt` more than once to sample multiple
 prompts, or override checkpoint settings with `--device`, `--max-new-tokens`,
