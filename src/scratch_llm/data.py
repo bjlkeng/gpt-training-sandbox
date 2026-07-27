@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from bisect import bisect_right
+from collections.abc import Iterator, Mapping, Sequence
+import hashlib
+import json
 import re
-from collections.abc import Iterator, Sequence
 from operator import index as integer_index
 from pathlib import Path
+from typing import Literal
 
+import numpy as np
 import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import torch
@@ -34,6 +39,21 @@ from scratch_llm.tokenizer import VOCAB_SIZE, Tokenizer
 
 
 _PARQUET_SHARD_NAME = re.compile(r"^shard_([0-9]+)\.parquet$")
+RANDOM_OFFSET_LOADER_STATE_FORMAT = "scratch_llm_random_offset_loader_state"
+RANDOM_OFFSET_LOADER_STATE_FORMAT_VERSION = 1
+_RANDOM_OFFSET_LOADER_STATE_KEYS = frozenset(
+    {
+        "batch_size",
+        "format",
+        "format_version",
+        "manifest_identity",
+        "position",
+        "rng_state",
+        "seq_len",
+        "split",
+    }
+)
+_MAX_TORCH_SEED = 2**63 - 1
 
 
 def list_parquet_files(data_dir: str | Path) -> list[Path]:
@@ -347,6 +367,239 @@ class NextTokenDataset(Dataset[tuple[Tensor, Tensor]]):
         return inputs, targets
 
 
+class RandomOffsetTokenLoaderStateError(ValueError):
+    """A saved random-offset loader state is malformed or incompatible."""
+
+
+class RandomOffsetTokenLoader(
+    Iterator[tuple[Tensor, Tensor]],
+):
+    """Yield restartable random contiguous batches from validated token shards.
+
+    Sampling is uniform over the union of every shard-local start with
+    ``seq_len + 1`` available tokens. Shards stay memory-mapped; only the
+    requested windows are copied into a CPU ``torch.long`` batch.
+    """
+
+    def __init__(
+        self,
+        reader: TokenizedShardReader,
+        *,
+        split: Literal["train", "val"],
+        batch_size: int,
+        seq_len: int,
+        seed: int,
+    ) -> None:
+        if not isinstance(reader, TokenizedShardReader):
+            raise TypeError(
+                f"reader must be a TokenizedShardReader, got {type(reader).__name__}"
+            )
+        if not isinstance(split, str) or split not in ("train", "val"):
+            raise ValueError(f"split must be 'train' or 'val', got {split!r}")
+        self.batch_size = require_positive_integer(batch_size, name="batch_size")
+        self.seq_len = require_positive_integer(seq_len, name="seq_len")
+        if not isinstance(seed, int) or isinstance(seed, bool):
+            raise TypeError(f"seed must be an integer, got {type(seed).__name__}")
+        if not 0 <= seed <= _MAX_TORCH_SEED:
+            raise ValueError(
+                f"seed must be in range [0, {_MAX_TORCH_SEED}], got {seed}"
+            )
+
+        mapped_shards = reader.shards(split)
+        cumulative_starts: list[int] = []
+        valid_start_count = 0
+        for shard in mapped_shards:
+            valid_start_count += max(len(shard) - self.seq_len, 0)
+            cumulative_starts.append(valid_start_count)
+        if valid_start_count == 0:
+            required_tokens = self.seq_len + 1
+            lengths = [len(shard) for shard in mapped_shards]
+            raise ValueError(
+                f"{split} split has no complete windows requiring "
+                f"{required_tokens} tokens; shard lengths={lengths}"
+            )
+        if valid_start_count > torch.iinfo(torch.int64).max:
+            raise ValueError(
+                "valid random-offset start count exceeds torch.int64 capacity: "
+                f"{valid_start_count}"
+            )
+
+        self.reader = reader
+        self.split = split
+        self.valid_start_count = valid_start_count
+        self._mapped_shards = mapped_shards
+        self._cumulative_starts = tuple(cumulative_starts)
+        self._manifest_identity = _tokenized_manifest_identity(reader.manifest)
+        self._generator = torch.Generator(device="cpu")
+        self._generator.manual_seed(seed)
+        self.position = 0
+
+    def __iter__(self) -> RandomOffsetTokenLoader:
+        return self
+
+    def __next__(self) -> tuple[Tensor, Tensor]:
+        return self.next_batch()
+
+    def next_batch(self) -> tuple[Tensor, Tensor]:
+        """Sample and materialize the next CPU batch."""
+
+        # This also turns a reader closed after loader construction into an
+        # actionable error before touching a closed memmap.
+        self.reader.shards(self.split)
+        offsets = torch.randint(
+            0,
+            self.valid_start_count,
+            (self.batch_size,),
+            generator=self._generator,
+            dtype=torch.int64,
+            device="cpu",
+        )
+        windows = torch.empty(
+            (self.batch_size, self.seq_len + 1),
+            dtype=torch.long,
+            device="cpu",
+        )
+        for row, global_offset in enumerate(offsets.tolist()):
+            shard_index = bisect_right(
+                self._cumulative_starts,
+                global_offset,
+            )
+            previous_end = (
+                self._cumulative_starts[shard_index - 1] if shard_index > 0 else 0
+            )
+            local_offset = global_offset - previous_end
+            mapped_window = self._mapped_shards[shard_index][
+                local_offset : local_offset + self.seq_len + 1
+            ]
+            copied_window = np.array(mapped_window, dtype=np.int64, copy=True)
+            windows[row].copy_(torch.from_numpy(copied_window))
+
+        self.position += self.batch_size
+        return windows[:, :-1], windows[:, 1:]
+
+    def state_dict(self) -> dict[str, object]:
+        """Return a small backend-neutral state for exact next-batch resume."""
+
+        return {
+            "batch_size": self.batch_size,
+            "format": RANDOM_OFFSET_LOADER_STATE_FORMAT,
+            "format_version": RANDOM_OFFSET_LOADER_STATE_FORMAT_VERSION,
+            "manifest_identity": self._manifest_identity,
+            "position": self.position,
+            "rng_state": self._generator.get_state().tolist(),
+            "seq_len": self.seq_len,
+            "split": self.split,
+        }
+
+    def load_state_dict(self, state: Mapping[str, object]) -> None:
+        """Validate and restore state without partially mutating this loader."""
+
+        if not isinstance(state, Mapping):
+            raise RandomOffsetTokenLoaderStateError(
+                f"loader state must be a mapping, got {type(state).__name__}"
+            )
+        state_keys = set(state)
+        if state_keys != _RANDOM_OFFSET_LOADER_STATE_KEYS:
+            missing = sorted(_RANDOM_OFFSET_LOADER_STATE_KEYS - state_keys)
+            unexpected = sorted(
+                state_keys - _RANDOM_OFFSET_LOADER_STATE_KEYS,
+                key=str,
+            )
+            raise RandomOffsetTokenLoaderStateError(
+                "loader state fields do not match format version "
+                f"{RANDOM_OFFSET_LOADER_STATE_FORMAT_VERSION}; "
+                f"missing={missing}, unexpected={unexpected}"
+            )
+        if state["format"] != RANDOM_OFFSET_LOADER_STATE_FORMAT:
+            raise RandomOffsetTokenLoaderStateError(
+                f"unknown loader state format {state['format']!r}"
+            )
+        format_version = _loader_state_integer(
+            state["format_version"],
+            name="format version",
+        )
+        if format_version != RANDOM_OFFSET_LOADER_STATE_FORMAT_VERSION:
+            raise RandomOffsetTokenLoaderStateError(
+                f"unknown loader state format version {format_version}; "
+                f"expected {RANDOM_OFFSET_LOADER_STATE_FORMAT_VERSION}"
+            )
+        if state["manifest_identity"] != self._manifest_identity:
+            raise RandomOffsetTokenLoaderStateError(
+                "loader state manifest identity does not match the mapped dataset"
+            )
+        _require_loader_setting(state, "split", self.split)
+        _require_loader_setting(state, "batch_size", self.batch_size)
+        _require_loader_setting(state, "seq_len", self.seq_len)
+
+        position = _loader_state_integer(state["position"], name="position")
+        if position < 0 or position % self.batch_size != 0:
+            raise RandomOffsetTokenLoaderStateError(
+                "loader state position must be a non-negative multiple of "
+                f"batch_size={self.batch_size}, got {position}"
+            )
+        raw_rng_state = state["rng_state"]
+        if not isinstance(raw_rng_state, list) or not raw_rng_state:
+            raise RandomOffsetTokenLoaderStateError(
+                "loader state rng_state must be a non-empty list of bytes"
+            )
+        if any(
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or not 0 <= value <= 255
+            for value in raw_rng_state
+        ):
+            raise RandomOffsetTokenLoaderStateError(
+                "loader state rng_state must contain only integer bytes"
+            )
+        rng_state = torch.tensor(raw_rng_state, dtype=torch.uint8, device="cpu")
+        candidate_generator = torch.Generator(device="cpu")
+        try:
+            candidate_generator.set_state(rng_state)
+        except RuntimeError as error:
+            raise RandomOffsetTokenLoaderStateError(
+                f"loader state rng_state is invalid: {error}"
+            ) from error
+
+        self._generator.set_state(rng_state)
+        self.position = position
+
+
+def _tokenized_manifest_identity(manifest: TokenizedDatasetManifest) -> str:
+    payload = json.dumps(
+        manifest.to_dict(),
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _loader_state_integer(value: object, *, name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise RandomOffsetTokenLoaderStateError(
+            f"loader state {name} must be an integer"
+        )
+    return value
+
+
+def _require_loader_setting(
+    state: Mapping[str, object],
+    name: str,
+    expected: object,
+) -> None:
+    actual = state[name]
+    if isinstance(expected, int):
+        actual = _loader_state_integer(actual, name=name)
+    elif isinstance(expected, str) and not isinstance(actual, str):
+        raise RandomOffsetTokenLoaderStateError(f"loader state {name} must be a string")
+    if actual != expected:
+        raise RandomOffsetTokenLoaderStateError(
+            f"loader state {name} does not match this loader: "
+            f"state has {actual!r}, loader requires {expected!r}"
+        )
+
+
 def _validate_token_id(token_id: object, *, position: int, vocab_size: int) -> int:
     if not isinstance(token_id, int) or isinstance(token_id, bool):
         raise TypeError(
@@ -365,6 +618,10 @@ __all__ = [
     "CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX",
     "DEFAULT_CLIMBMIX_DATA_DIR",
     "NextTokenDataset",
+    "RANDOM_OFFSET_LOADER_STATE_FORMAT",
+    "RANDOM_OFFSET_LOADER_STATE_FORMAT_VERSION",
+    "RandomOffsetTokenLoader",
+    "RandomOffsetTokenLoaderStateError",
     "TOKENIZED_MANIFEST_NAME",
     "TOKENIZED_SHARD_FORMAT",
     "TOKENIZED_SHARD_FORMAT_VERSION",
