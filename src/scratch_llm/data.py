@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from bisect import bisect_right
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 import hashlib
 import json
 import re
@@ -29,6 +30,7 @@ from scratch_llm.tokenized_data import (
     TOKENIZED_SHARD_FORMAT_VERSION,
     TokenizedDataError,
     TokenizedDatasetManifest,
+    TokenizedDocumentSpan,
     TokenizedShardManifest,
     TokenizedShardReader,
     TokenizedShardSource,
@@ -54,6 +56,24 @@ _RANDOM_OFFSET_LOADER_STATE_KEYS = frozenset(
     }
 )
 _MAX_TORCH_SEED = 2**63 - 1
+DOCUMENT_PACKING_LOADER_STATE_FORMAT = "scratch_llm_document_packing_loader_state"
+DOCUMENT_PACKING_LOADER_STATE_FORMAT_VERSION = 1
+_DOCUMENT_PACKING_LOADER_STATE_KEYS = frozenset(
+    {
+        "batch_size",
+        "epoch",
+        "epoch_seed",
+        "format",
+        "format_version",
+        "manifest_identity",
+        "position",
+        "rng_state",
+        "row_position",
+        "seq_len",
+        "split",
+    }
+)
+_BOS_TOKEN = "<|bos|>"
 
 
 def list_parquet_files(data_dir: str | Path) -> list[Path]:
@@ -564,6 +584,437 @@ class RandomOffsetTokenLoader(
         self.position = position
 
 
+class DocumentPackingTokenLoaderStateError(ValueError):
+    """A saved document-packing loader state is malformed or incompatible."""
+
+
+@dataclass(frozen=True)
+class _DocumentPiece:
+    shard_index: int
+    start: int
+    token_count: int
+
+    @property
+    def packed_token_count(self) -> int:
+        return self.token_count + 1
+
+
+@dataclass(frozen=True)
+class _PackedRow:
+    pieces: tuple[_DocumentPiece, ...]
+    used_token_count: int
+
+
+class DocumentPackingTokenLoader(
+    Iterator[tuple[Tensor, Tensor, Tensor]],
+):
+    """Yield deterministic BOS-delimited batches without corpus concatenation.
+
+    Each document contributes ``BOS + document tokens``. Documents longer than
+    ``seq_len`` are split into deterministic ``BOS + seq_len-token`` pieces.
+    Best-fit placement combines pieces that fit in one ``seq_len + 1`` row.
+    Residual positions and residual batch rows use BOS, with an explicit
+    boolean loss mask that selects only ordinary document-token targets.
+    """
+
+    def __init__(
+        self,
+        reader: TokenizedShardReader,
+        *,
+        split: Literal["train", "val"],
+        batch_size: int,
+        seq_len: int,
+        seed: int,
+    ) -> None:
+        if not isinstance(reader, TokenizedShardReader):
+            raise TypeError(
+                f"reader must be a TokenizedShardReader, got {type(reader).__name__}"
+            )
+        if not isinstance(split, str) or split not in ("train", "val"):
+            raise ValueError(f"split must be 'train' or 'val', got {split!r}")
+        self.batch_size = require_positive_integer(batch_size, name="batch_size")
+        self.seq_len = require_positive_integer(seq_len, name="seq_len")
+        if not isinstance(seed, int) or isinstance(seed, bool):
+            raise TypeError(f"seed must be an integer, got {type(seed).__name__}")
+        if not 0 <= seed <= _MAX_TORCH_SEED:
+            raise ValueError(
+                f"seed must be in range [0, {_MAX_TORCH_SEED}], got {seed}"
+            )
+
+        mapped_shards = reader.shards(split)
+        document_spans = reader.document_spans(split)
+        if not document_spans:
+            raise ValueError(f"{split} split has no documents to pack")
+        try:
+            bos_token_id = reader.manifest.special_token_ids[_BOS_TOKEN]
+        except KeyError as error:
+            raise TokenizedDataError(
+                f"tokenized manifest does not define required {_BOS_TOKEN!r}"
+            ) from error
+
+        self.reader = reader
+        self.split = split
+        self._mapped_shards = mapped_shards
+        self._document_spans = document_spans
+        self._bos_token_id = bos_token_id
+        self._manifest_identity = _tokenized_manifest_identity(reader.manifest)
+        self._generator = torch.Generator(device="cpu")
+        self._generator.manual_seed(seed)
+        self.position = 0
+        self.epoch = -1
+        self.epoch_seed = 0
+        self.row_position = 0
+        self._rows: tuple[_PackedRow, ...] = ()
+        self.packed_example_count = 0
+        self._start_next_epoch()
+
+    def __iter__(self) -> DocumentPackingTokenLoader:
+        return self
+
+    def __next__(self) -> tuple[Tensor, Tensor, Tensor]:
+        return self.next_batch()
+
+    def next_batch(self) -> tuple[Tensor, Tensor, Tensor]:
+        """Materialize the next packed CPU batch and its explicit loss mask."""
+
+        self.reader.shards(self.split)
+        if self.row_position == len(self._rows):
+            self._start_next_epoch()
+
+        batch_rows = self._rows[self.row_position : self.row_position + self.batch_size]
+        if len(batch_rows) != self.batch_size:
+            raise RuntimeError("document-packing plan ended with an incomplete batch")
+
+        windows = torch.full(
+            (self.batch_size, self.seq_len + 1),
+            self._bos_token_id,
+            dtype=torch.long,
+            device="cpu",
+        )
+        loss_mask = torch.zeros(
+            (self.batch_size, self.seq_len),
+            dtype=torch.bool,
+            device="cpu",
+        )
+        for row_index, row in enumerate(batch_rows):
+            packed_offset = 0
+            for piece in row.pieces:
+                content_start = packed_offset + 1
+                content_stop = content_start + piece.token_count
+                if piece.token_count:
+                    mapped_tokens = self._mapped_shards[piece.shard_index][
+                        piece.start : piece.start + piece.token_count
+                    ]
+                    copied_tokens = np.array(
+                        mapped_tokens,
+                        dtype=np.int64,
+                        copy=True,
+                    )
+                    windows[row_index, content_start:content_stop].copy_(
+                        torch.from_numpy(copied_tokens)
+                    )
+                    loss_mask[
+                        row_index,
+                        packed_offset : packed_offset + piece.token_count,
+                    ] = True
+                packed_offset += piece.packed_token_count
+
+        self.row_position += self.batch_size
+        self.position += self.batch_size
+        return windows[:, :-1], windows[:, 1:], loss_mask
+
+    def state_dict(self) -> dict[str, object]:
+        """Return JSON-compatible state for exact next-packed-batch resume."""
+
+        return {
+            "batch_size": self.batch_size,
+            "epoch": self.epoch,
+            "epoch_seed": self.epoch_seed,
+            "format": DOCUMENT_PACKING_LOADER_STATE_FORMAT,
+            "format_version": DOCUMENT_PACKING_LOADER_STATE_FORMAT_VERSION,
+            "manifest_identity": self._manifest_identity,
+            "position": self.position,
+            "rng_state": self._generator.get_state().tolist(),
+            "row_position": self.row_position,
+            "seq_len": self.seq_len,
+            "split": self.split,
+        }
+
+    def load_state_dict(self, state: Mapping[str, object]) -> None:
+        """Validate and restore state without partially mutating this loader."""
+
+        if not isinstance(state, Mapping):
+            raise DocumentPackingTokenLoaderStateError(
+                f"loader state must be a mapping, got {type(state).__name__}"
+            )
+        state_keys = set(state)
+        if state_keys != _DOCUMENT_PACKING_LOADER_STATE_KEYS:
+            missing = sorted(_DOCUMENT_PACKING_LOADER_STATE_KEYS - state_keys)
+            unexpected = sorted(
+                state_keys - _DOCUMENT_PACKING_LOADER_STATE_KEYS,
+                key=str,
+            )
+            raise DocumentPackingTokenLoaderStateError(
+                "loader state fields do not match format version "
+                f"{DOCUMENT_PACKING_LOADER_STATE_FORMAT_VERSION}; "
+                f"missing={missing}, unexpected={unexpected}"
+            )
+        if state["format"] != DOCUMENT_PACKING_LOADER_STATE_FORMAT:
+            raise DocumentPackingTokenLoaderStateError(
+                f"unknown loader state format {state['format']!r}"
+            )
+        format_version = _packing_state_integer(
+            state["format_version"],
+            name="format version",
+        )
+        if format_version != DOCUMENT_PACKING_LOADER_STATE_FORMAT_VERSION:
+            raise DocumentPackingTokenLoaderStateError(
+                f"unknown loader state format version {format_version}; "
+                f"expected {DOCUMENT_PACKING_LOADER_STATE_FORMAT_VERSION}"
+            )
+        if state["manifest_identity"] != self._manifest_identity:
+            raise DocumentPackingTokenLoaderStateError(
+                "loader state manifest identity does not match the mapped dataset"
+            )
+        _require_packing_loader_setting(state, "split", self.split)
+        _require_packing_loader_setting(state, "batch_size", self.batch_size)
+        _require_packing_loader_setting(state, "seq_len", self.seq_len)
+
+        epoch = _packing_state_integer(state["epoch"], name="epoch")
+        epoch_seed = _packing_state_integer(state["epoch_seed"], name="epoch_seed")
+        position = _packing_state_integer(state["position"], name="position")
+        row_position = _packing_state_integer(
+            state["row_position"],
+            name="row_position",
+        )
+        if epoch < 0:
+            raise DocumentPackingTokenLoaderStateError(
+                f"loader state epoch must be non-negative, got {epoch}"
+            )
+        if not 0 <= epoch_seed <= _MAX_TORCH_SEED:
+            raise DocumentPackingTokenLoaderStateError(
+                "loader state epoch_seed must be in range "
+                f"[0, {_MAX_TORCH_SEED}], got {epoch_seed}"
+            )
+        if position < 0 or position % self.batch_size != 0:
+            raise DocumentPackingTokenLoaderStateError(
+                "loader state position must be a non-negative multiple of "
+                f"batch_size={self.batch_size}, got {position}"
+            )
+
+        rows, packed_example_count = self._build_epoch(epoch_seed)
+        if (
+            row_position < 0
+            or row_position > len(rows)
+            or row_position % self.batch_size != 0
+        ):
+            raise DocumentPackingTokenLoaderStateError(
+                "loader state row_position must be a batch-aligned offset in "
+                f"[0, {len(rows)}], got {row_position}"
+            )
+        rng_state = _packing_rng_state(state["rng_state"])
+        candidate_generator = torch.Generator(device="cpu")
+        try:
+            candidate_generator.set_state(rng_state)
+        except RuntimeError as error:
+            raise DocumentPackingTokenLoaderStateError(
+                f"loader state rng_state is invalid: {error}"
+            ) from error
+
+        self._generator.set_state(rng_state)
+        self._rows = rows
+        self.packed_example_count = packed_example_count
+        self.epoch = epoch
+        self.epoch_seed = epoch_seed
+        self.position = position
+        self.row_position = row_position
+
+    def _start_next_epoch(self) -> None:
+        epoch_seed = int(
+            torch.randint(
+                0,
+                _MAX_TORCH_SEED,
+                (1,),
+                generator=self._generator,
+                dtype=torch.int64,
+                device="cpu",
+            ).item()
+        )
+        rows, packed_example_count = self._build_epoch(epoch_seed)
+        self.epoch += 1
+        self.epoch_seed = epoch_seed
+        self.row_position = 0
+        self._rows = rows
+        self.packed_example_count = packed_example_count
+
+    def _build_epoch(self, epoch_seed: int) -> tuple[tuple[_PackedRow, ...], int]:
+        order_generator = torch.Generator(device="cpu")
+        order_generator.manual_seed(epoch_seed)
+        order = torch.randperm(
+            len(self._document_spans),
+            generator=order_generator,
+            dtype=torch.int64,
+            device="cpu",
+        ).tolist()
+        rows = _best_fit_document_rows(
+            self._document_spans,
+            order=order,
+            seq_len=self.seq_len,
+        )
+        packed_example_count = len(rows)
+        padding_row_count = (-packed_example_count) % self.batch_size
+        if padding_row_count:
+            rows = (
+                *rows,
+                *(
+                    _PackedRow(pieces=(), used_token_count=0)
+                    for _ in range(padding_row_count)
+                ),
+            )
+        return tuple(rows), packed_example_count
+
+
+def create_token_loader(
+    reader: TokenizedShardReader,
+    *,
+    strategy: Literal["flat", "packed"],
+    split: Literal["train", "val"],
+    batch_size: int,
+    seq_len: int,
+    seed: int,
+) -> RandomOffsetTokenLoader | DocumentPackingTokenLoader:
+    """Select the explicit flat baseline or BOS-aware packing strategy."""
+
+    if strategy == "flat":
+        return RandomOffsetTokenLoader(
+            reader,
+            split=split,
+            batch_size=batch_size,
+            seq_len=seq_len,
+            seed=seed,
+        )
+    if strategy == "packed":
+        return DocumentPackingTokenLoader(
+            reader,
+            split=split,
+            batch_size=batch_size,
+            seq_len=seq_len,
+            seed=seed,
+        )
+    raise ValueError(f"strategy must be 'flat' or 'packed', got {strategy!r}")
+
+
+def _best_fit_document_rows(
+    spans: Sequence[TokenizedDocumentSpan],
+    *,
+    order: Sequence[int],
+    seq_len: int,
+) -> tuple[_PackedRow, ...]:
+    row_token_count = seq_len + 1
+    mutable_rows: list[list[_DocumentPiece]] = []
+    used_token_counts: list[int] = []
+
+    for document_index in order:
+        span = spans[document_index]
+        remaining = span.token_count
+        document_offset = 0
+        while remaining > 0:
+            piece_token_count = min(remaining, seq_len)
+            piece = _DocumentPiece(
+                shard_index=span.shard_index,
+                start=span.start + document_offset,
+                token_count=piece_token_count,
+            )
+            _place_best_fit_piece(
+                mutable_rows,
+                used_token_counts,
+                piece,
+                row_token_count=row_token_count,
+            )
+            remaining -= piece_token_count
+            document_offset += piece_token_count
+        if span.token_count == 0:
+            _place_best_fit_piece(
+                mutable_rows,
+                used_token_counts,
+                _DocumentPiece(
+                    shard_index=span.shard_index,
+                    start=span.start,
+                    token_count=0,
+                ),
+                row_token_count=row_token_count,
+            )
+
+    return tuple(
+        _PackedRow(pieces=tuple(pieces), used_token_count=used)
+        for pieces, used in zip(mutable_rows, used_token_counts, strict=True)
+    )
+
+
+def _place_best_fit_piece(
+    rows: list[list[_DocumentPiece]],
+    used_token_counts: list[int],
+    piece: _DocumentPiece,
+    *,
+    row_token_count: int,
+) -> None:
+    best_index: int | None = None
+    best_remaining: int | None = None
+    for row_index, used in enumerate(used_token_counts):
+        remaining = row_token_count - used - piece.packed_token_count
+        if remaining >= 0 and (best_remaining is None or remaining < best_remaining):
+            best_index = row_index
+            best_remaining = remaining
+    if best_index is None:
+        rows.append([piece])
+        used_token_counts.append(piece.packed_token_count)
+        return
+    rows[best_index].append(piece)
+    used_token_counts[best_index] += piece.packed_token_count
+
+
+def _packing_state_integer(value: object, *, name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise DocumentPackingTokenLoaderStateError(
+            f"loader state {name} must be an integer"
+        )
+    return value
+
+
+def _require_packing_loader_setting(
+    state: Mapping[str, object],
+    name: str,
+    expected: object,
+) -> None:
+    actual = state[name]
+    if isinstance(expected, int):
+        actual = _packing_state_integer(actual, name=name)
+    elif isinstance(expected, str) and not isinstance(actual, str):
+        raise DocumentPackingTokenLoaderStateError(
+            f"loader state {name} must be a string"
+        )
+    if actual != expected:
+        raise DocumentPackingTokenLoaderStateError(
+            f"loader state {name} does not match this loader: "
+            f"state has {actual!r}, loader requires {expected!r}"
+        )
+
+
+def _packing_rng_state(value: object) -> Tensor:
+    if not isinstance(value, list) or not value:
+        raise DocumentPackingTokenLoaderStateError(
+            "loader state rng_state must be a non-empty list of bytes"
+        )
+    if any(
+        not isinstance(item, int) or isinstance(item, bool) or not 0 <= item <= 255
+        for item in value
+    ):
+        raise DocumentPackingTokenLoaderStateError(
+            "loader state rng_state must contain only integer bytes"
+        )
+    return torch.tensor(value, dtype=torch.uint8, device="cpu")
+
+
 def _tokenized_manifest_identity(manifest: TokenizedDatasetManifest) -> str:
     payload = json.dumps(
         manifest.to_dict(),
@@ -617,6 +1068,10 @@ def _validate_token_id(token_id: object, *, position: int, vocab_size: int) -> i
 __all__ = [
     "CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX",
     "DEFAULT_CLIMBMIX_DATA_DIR",
+    "DOCUMENT_PACKING_LOADER_STATE_FORMAT",
+    "DOCUMENT_PACKING_LOADER_STATE_FORMAT_VERSION",
+    "DocumentPackingTokenLoader",
+    "DocumentPackingTokenLoaderStateError",
     "NextTokenDataset",
     "RANDOM_OFFSET_LOADER_STATE_FORMAT",
     "RANDOM_OFFSET_LOADER_STATE_FORMAT_VERSION",
@@ -627,10 +1082,12 @@ __all__ = [
     "TOKENIZED_SHARD_FORMAT_VERSION",
     "TokenizedDataError",
     "TokenizedDatasetManifest",
+    "TokenizedDocumentSpan",
     "TokenizedShardManifest",
     "TokenizedShardReader",
     "TokenizedShardSource",
     "TokenizedSplitManifest",
+    "create_token_loader",
     "list_parquet_files",
     "parquets_iter_batched",
     "select_parquet_files",

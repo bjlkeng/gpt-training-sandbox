@@ -351,6 +351,22 @@ state is JSON-compatible and restores the exact next batch in a fresh process.
 Changing the dataset manifest or any loader setting makes old state fail before
 sampling.
 
+`DocumentPackingTokenLoader` is the explicit `strategy="packed"` alternative;
+the flat random-offset path remains available as `strategy="flat"`. It shuffles
+validated document spans with a seeded generator and best-fit packs
+`BOS + document tokens` into fixed `seq_len + 1` rows. Documents longer than
+`seq_len` are split into deterministic BOS-prefixed pieces, and every ordinary
+token appears exactly once as a supervised target per epoch.
+
+No pad token is introduced. Residual row space and incomplete batches contain
+only BOS, while the returned boolean loss mask identifies real document-token
+targets explicitly. Transitions into BOS and all residual positions are masked
+out, so packed examples never infer padding from token values or train across a
+document boundary. The JSON-compatible `state_dict()` records the current
+epoch plan seed, row position, manifest identity, and next-epoch RNG state;
+`load_state_dict()` reconstructs the same plan and resumes at the exact next
+batch, including when documents span multiple tokenized shards.
+
 The sampling command loads the model, byte tokenizer, and generation defaults
 from a versioned checkpoint. Pass `--prompt` more than once to sample multiple
 prompts, or override checkpoint settings with `--device`, `--max-new-tokens`,
