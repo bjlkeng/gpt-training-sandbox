@@ -213,6 +213,54 @@ def test_jsonl_tracker_logs_one_matching_config_and_rejects_conflicts(
     ]
 
 
+def test_jsonl_tracker_identified_events_are_retry_safe_and_conflict_checked(
+    tmp_path: Path,
+) -> None:
+    destination = tmp_path / "metrics.jsonl"
+    tracker = JsonlTracker(destination)
+
+    assert tracker.log_once({"data/train_docs": 2}, event_id="data:metrics") is True
+    assert tracker.log_once({"data/train_docs": 2}, event_id="data:metrics") is False
+    assert (
+        tracker.log_artifact_once(
+            "artifacts/data_stats.json",
+            "data_stats",
+            "dataset",
+            event_id="data:artifact",
+        )
+        is True
+    )
+    assert (
+        tracker.log_artifact_once(
+            "artifacts/data_stats.json",
+            "data_stats",
+            "dataset",
+            event_id="data:artifact",
+        )
+        is False
+    )
+    with pytest.raises(ValueError, match="conflicting event"):
+        tracker.log_once({"data/train_docs": 3}, event_id="data:metrics")
+
+    tracker.finish()
+    with pytest.raises(RuntimeError, match="finished"):
+        tracker.log_once({"data/train_docs": 2}, event_id="data:metrics")
+    assert _read_jsonl(destination) == [
+        {
+            "event_id": "data:metrics",
+            "record_type": "metrics",
+            "metrics": {"data/train_docs": 2},
+        },
+        {
+            "event_id": "data:artifact",
+            "record_type": "artifact",
+            "path": "artifacts/data_stats.json",
+            "name": "data_stats",
+            "type": "dataset",
+        },
+    ]
+
+
 class _RecordingTracker(NullTracker):
     def __init__(
         self,

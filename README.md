@@ -113,6 +113,24 @@ aliases match `tokenizer.doc_cap`, `tokenizer.max_chars`, and
 `data.doc_cap_chars`, respectively. Supplying any cap marks the report as
 bounded. Use `--no-val` to select only training data.
 
+## Tracked data preparation
+
+`prepare_tracked_tokenized_parquet_shards` joins the raw-statistics and
+tokenized-shard contracts at their durable publication boundary. It writes the
+large `.bin` payloads only to the configured local tokenized-data directory,
+then emits one coherent metrics record with the nine roadmap `data/*` names.
+Only `artifacts/data_stats.json` and
+`artifacts/tokenized_shard_manifest.json` are registered with the run tracker;
+raw parquet, raw text, and tokenized payloads are never registered.
+
+Those artifact paths stay relative to the run directory in local JSONL.
+Optional W&B uploads resolve them against that run directory and occur only
+when `tracking.wandb.log_dataset_artifacts` is true. The local JSONL records are
+identical whether the W&B gate is on or off. A validated private completion
+record preserves the original shard-write duration and identifies each
+tracking event, so retrying a completed or partially logged preparation reuses
+the durable shards and does not append duplicate or contradictory totals.
+
 ## Smoke dry-run
 
 Resolve the CPU-safe smoke configuration and prepare its run paths without
