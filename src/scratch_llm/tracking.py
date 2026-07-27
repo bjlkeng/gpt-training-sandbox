@@ -304,6 +304,26 @@ class JsonlTracker(Tracker):
         self._stream.flush()
         self._records.append(json.loads(line))
 
+    def _append_once(self, record: dict[str, Any], *, event_id: str) -> bool:
+        if self._finished:
+            raise RuntimeError("cannot log after tracker is finished")
+        if not isinstance(event_id, str) or not event_id.strip():
+            raise ValueError("event_id must be a non-empty string")
+        identified_record = {**record, "event_id": event_id}
+        existing = [
+            candidate
+            for candidate in self._records
+            if candidate.get("event_id") == event_id
+        ]
+        if existing:
+            if len(existing) != 1 or existing[0] != identified_record:
+                raise ValueError(
+                    f"{self.path} contains a conflicting event for {event_id!r}"
+                )
+            return False
+        self._append(identified_record)
+        return True
+
     def log(self, metrics: dict[str, Any], step: int | None = None) -> None:
         """Append a metrics record and flush it for immediate local visibility."""
 
@@ -316,6 +336,26 @@ class JsonlTracker(Tracker):
         self._append(record)
         if self._summary is not None:
             self._summary.log(metrics, step=step)
+
+    def log_once(
+        self,
+        metrics: dict[str, Any],
+        *,
+        event_id: str,
+        step: int | None = None,
+    ) -> bool:
+        """Append one identified metrics event or validate its prior record."""
+
+        record: dict[str, Any] = {
+            "record_type": "metrics",
+            "metrics": metrics,
+        }
+        if step is not None:
+            record["step"] = step
+        appended = self._append_once(record, event_id=event_id)
+        if appended and self._summary is not None:
+            self._summary.log(metrics, step=step)
+        return appended
 
     def log_config(self, config: dict[str, Any]) -> None:
         """Append a resolved-configuration record and flush it."""
@@ -365,6 +405,26 @@ class JsonlTracker(Tracker):
             }
         )
 
+    def log_artifact_once(
+        self,
+        path: str,
+        name: str,
+        type: str,
+        *,
+        event_id: str,
+    ) -> bool:
+        """Append one identified artifact event or validate its prior record."""
+
+        return self._append_once(
+            {
+                "record_type": "artifact",
+                "path": path,
+                "name": name,
+                "type": type,
+            },
+            event_id=event_id,
+        )
+
     def finish(self) -> None:
         """Flush and close the JSONL stream, or do nothing when already finished."""
 
@@ -395,16 +455,22 @@ class WandbTracker(Tracker):
         tags: Sequence[str] = (),
         mode: str = "online",
         dir: str | os.PathLike[str] | None = None,
+        log_dataset_artifacts: bool = True,
+        artifact_root: str | os.PathLike[str] | None = None,
     ) -> None:
         if mode not in {"online", "offline", "disabled"}:
             raise ValueError(
                 f"wandb mode must be 'online', 'offline', or 'disabled', got {mode!r}"
             )
+        if not isinstance(log_dataset_artifacts, bool):
+            raise TypeError("log_dataset_artifacts must be a boolean")
 
         self._active = enabled and mode != "disabled"
         self._finished = False
         self._wandb: Any = None
         self._run: Any = None
+        self._log_dataset_artifacts = log_dataset_artifacts
+        self._artifact_root = Path(artifact_root) if artifact_root is not None else None
         if not self._active:
             return
 
@@ -468,8 +534,13 @@ class WandbTracker(Tracker):
         run = self._run_for_logging()
         if run is None:
             return
+        if type == "dataset" and not self._log_dataset_artifacts:
+            return
+        artifact_path = Path(path)
+        if not artifact_path.is_absolute() and self._artifact_root is not None:
+            artifact_path = self._artifact_root / artifact_path
         artifact = self._wandb.Artifact(name=name, type=type)
-        artifact.add_file(path)
+        artifact.add_file(str(artifact_path))
         run.log_artifact(artifact)
 
     def finish(self) -> None:
@@ -555,6 +626,69 @@ class RunTracker(CompositeTracker):
         super().__init__(*trackers)
         self.summary = summary
         self._lifecycle_finished = False
+
+    def _local_jsonl_tracker(self) -> JsonlTracker:
+        if not self._trackers or not isinstance(self._trackers[0], JsonlTracker):
+            raise RuntimeError(
+                "identified run events require JsonlTracker as the first child"
+            )
+        return self._trackers[0]
+
+    def log_once(
+        self,
+        metrics: dict[str, Any],
+        *,
+        event_id: str,
+        step: int | None = None,
+    ) -> bool:
+        """Record one durable metrics event without duplicating retries."""
+
+        self._ensure_open()
+        appended = self._local_jsonl_tracker().log_once(
+            metrics,
+            event_id=event_id,
+            step=step,
+        )
+        if appended:
+            first_error: Exception | None = None
+            for tracker in self._trackers[1:]:
+                try:
+                    tracker.log(metrics, step=step)
+                except Exception as error:
+                    if first_error is None:
+                        first_error = error
+            if first_error is not None:
+                raise first_error
+        return appended
+
+    def log_artifact_once(
+        self,
+        path: str,
+        name: str,
+        type: str,
+        *,
+        event_id: str,
+    ) -> bool:
+        """Record one durable artifact event without duplicating retries."""
+
+        self._ensure_open()
+        appended = self._local_jsonl_tracker().log_artifact_once(
+            path,
+            name,
+            type,
+            event_id=event_id,
+        )
+        if appended:
+            first_error: Exception | None = None
+            for tracker in self._trackers[1:]:
+                try:
+                    tracker.log_artifact(path, name, type)
+                except Exception as error:
+                    if first_error is None:
+                        first_error = error
+            if first_error is not None:
+                raise first_error
+        return appended
 
     def _finish_with_status(self, status: RunStatus) -> None:
         if self._lifecycle_finished:
@@ -659,6 +793,8 @@ def build_tracker(
             tags=tags,
             mode=wandb_config.mode,
             dir=wandb_dir,
+            log_dataset_artifacts=wandb_config.log_dataset_artifacts,
+            artifact_root=paths.run_dir,
         )
         trackers.append(remote)
         remote.log_config(resolved_config)
