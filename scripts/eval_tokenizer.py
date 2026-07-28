@@ -13,6 +13,7 @@ from scratch_llm.tokenizer_evaluation import (
     evaluate_tokenizer,
     write_tokenizer_evaluation_reports,
 )
+from scratch_llm.tokenizer_tracking import track_tokenizer_evaluation
 from scripts._common import (
     config_parser,
     prepare_tracked_run,
@@ -172,6 +173,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             json_path, markdown_path = write_tokenizer_evaluation_reports(
                 result,
                 paths.metrics_dir,
+            )
+            track_tokenizer_evaluation(
+                result,
+                json_path,
+                tracker=tracker,
+                run_dir=paths.run_dir,
             )
         except (OSError, RuntimeError, TypeError, ValueError) as error:
             parser.error(str(error))

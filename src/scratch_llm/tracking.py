@@ -456,6 +456,7 @@ class WandbTracker(Tracker):
         mode: str = "online",
         dir: str | os.PathLike[str] | None = None,
         log_dataset_artifacts: bool = True,
+        log_tokenizer_artifacts: bool = True,
         artifact_root: str | os.PathLike[str] | None = None,
     ) -> None:
         if mode not in {"online", "offline", "disabled"}:
@@ -464,12 +465,15 @@ class WandbTracker(Tracker):
             )
         if not isinstance(log_dataset_artifacts, bool):
             raise TypeError("log_dataset_artifacts must be a boolean")
+        if not isinstance(log_tokenizer_artifacts, bool):
+            raise TypeError("log_tokenizer_artifacts must be a boolean")
 
         self._active = enabled and mode != "disabled"
         self._finished = False
         self._wandb: Any = None
         self._run: Any = None
         self._log_dataset_artifacts = log_dataset_artifacts
+        self._log_tokenizer_artifacts = log_tokenizer_artifacts
         self._artifact_root = Path(artifact_root) if artifact_root is not None else None
         if not self._active:
             return
@@ -535,6 +539,8 @@ class WandbTracker(Tracker):
         if run is None:
             return
         if type == "dataset" and not self._log_dataset_artifacts:
+            return
+        if type == "tokenizer" and not self._log_tokenizer_artifacts:
             return
         artifact_path = Path(path)
         if not artifact_path.is_absolute() and self._artifact_root is not None:
@@ -794,6 +800,7 @@ def build_tracker(
             mode=wandb_config.mode,
             dir=wandb_dir,
             log_dataset_artifacts=wandb_config.log_dataset_artifacts,
+            log_tokenizer_artifacts=wandb_config.log_tokenizer_artifacts,
             artifact_root=paths.run_dir,
         )
         trackers.append(remote)

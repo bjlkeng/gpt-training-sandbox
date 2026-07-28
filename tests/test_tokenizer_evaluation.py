@@ -468,6 +468,12 @@ def test_eval_tokenizer_command_is_bounded_and_writes_run_reports(
     json_path = run_dir / "metrics" / "tokenizer_eval.json"
     markdown_path = run_dir / "metrics" / "tokenizer_eval.md"
     payload = json.loads(json_path.read_text(encoding="utf-8"))
+    records = [
+        json.loads(line)
+        for line in (run_dir / "metrics" / "metrics.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
     summary = json.loads(
         (run_dir / "metrics" / "summary.json").read_text(encoding="utf-8")
     )
@@ -507,6 +513,27 @@ def test_eval_tokenizer_command_is_bounded_and_writes_run_reports(
         "timed_iterations": 1,
         "warmup_iterations": 0,
     }
+    aggregate = payload["aggregate"]
+    assert [
+        record["metrics"] for record in records if record["record_type"] == "metrics"
+    ] == [
+        {
+            "tokenizer/vocab_size": 267,
+            "tokenizer/bytes": aggregate["bytes"],
+            "tokenizer/tokens": aggregate["tokens"],
+            "tokenizer/bytes_per_token": aggregate["bytes_per_token"],
+            "tokenizer/relative_diff_vs_gpt2": None,
+            "tokenizer/relative_diff_vs_gpt4": None,
+            "tokenizer/roundtrip_pass": True,
+            "tokenizer/encode_tokens_per_sec": aggregate["encode_tokens_per_second"],
+            "tokenizer/decode_tokens_per_sec": aggregate["decode_tokens_per_second"],
+        }
+    ]
+    assert [
+        (record["path"], record["name"], record["type"])
+        for record in records
+        if record["record_type"] == "artifact"
+    ] == [("metrics/tokenizer_eval.json", "tokenizer_eval", "tokenizer")]
     assert markdown_path.is_file()
     assert summary["status"] == "completed"
 
@@ -547,11 +574,18 @@ def test_eval_tokenizer_command_fails_cleanly_before_writing_reports(
 
     metrics_dir = tmp_path / "runs" / "missing-tokenizer" / "metrics"
     summary = json.loads((metrics_dir / "summary.json").read_text(encoding="utf-8"))
+    tracking_records = [
+        json.loads(line)
+        for line in (metrics_dir / "metrics.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
     assert completed.returncode != 0
     assert "tokenizer artifact directory does not exist" in completed.stderr
     assert "Traceback" not in completed.stderr
     assert not (metrics_dir / "tokenizer_eval.json").exists()
     assert not (metrics_dir / "tokenizer_eval.md").exists()
+    assert [record["record_type"] for record in tracking_records] == ["config"]
     assert summary["status"] == "failed"
 
 

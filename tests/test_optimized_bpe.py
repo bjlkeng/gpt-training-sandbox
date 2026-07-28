@@ -340,6 +340,16 @@ def test_train_tokenizer_command_uses_optimized_path_and_writes_artifacts(
             "3",
             "--benchmark-max-characters",
             "200",
+            "--eval-max-documents",
+            "2",
+            "--eval-max-characters",
+            "40",
+            "--eval-batch-size",
+            "1",
+            "--eval-benchmark-warmup",
+            "0",
+            "--eval-benchmark-iterations",
+            "1",
             "--no-wandb",
         ],
         cwd=PROJECT_ROOT,
@@ -352,8 +362,16 @@ def test_train_tokenizer_command_uses_optimized_path_and_writes_artifacts(
     artifact_dir = run_dir / "artifacts" / "tokenizer"
     report_path = run_dir / "metrics" / TOKENIZER_TRAINING_REPORT_FILENAME
     benchmark_path = run_dir / "metrics" / "bpe_training_benchmark.json"
+    evaluation_path = run_dir / "metrics" / "tokenizer_eval.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
     benchmark = json.loads(benchmark_path.read_text(encoding="utf-8"))
+    evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
+    tracking_records = [
+        json.loads(line)
+        for line in (run_dir / "metrics" / "metrics.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
     tokenizer = RegexBPETokenizer.load(artifact_dir)
     summary = json.loads(
         (run_dir / "metrics" / "summary.json").read_text(encoding="utf-8")
@@ -364,6 +382,7 @@ def test_train_tokenizer_command_uses_optimized_path_and_writes_artifacts(
     assert "Traceback" not in completed.stdout
     assert f"Tokenizer artifacts: {artifact_dir}" in completed.stdout
     assert f"Training report: {report_path}" in completed.stdout
+    assert f"Evaluation report: {evaluation_path}" in completed.stdout
     assert f"Trainer benchmark: {benchmark_path}" in completed.stdout
     assert tokenizer.get_vocab_size() == 270
     assert report["algorithm"] == "optimized"
@@ -381,6 +400,48 @@ def test_train_tokenizer_command_uses_optimized_path_and_writes_artifacts(
     assert [item["algorithm"] for item in benchmark["measurements"]] == [
         "reference",
         "optimized",
+    ]
+    aggregate = evaluation["aggregate"]
+    assert [
+        record["metrics"]
+        for record in tracking_records
+        if record["record_type"] == "metrics"
+    ] == [
+        {
+            "tokenizer/vocab_size": 270,
+            "tokenizer/max_chars": 200,
+            "tokenizer/doc_cap": 6,
+            "tokenizer/num_docs": report["corpus"]["document_count"],
+            "tokenizer/num_chars": report["corpus"]["character_count"],
+            "tokenizer/train_seconds": report["performance"]["elapsed_seconds"],
+            "tokenizer/bytes_per_token": aggregate["bytes_per_token"],
+            "tokenizer/encode_tokens_per_sec": aggregate["encode_tokens_per_second"],
+            "tokenizer/decode_tokens_per_sec": aggregate["decode_tokens_per_second"],
+        }
+    ]
+    assert [
+        (record["path"], record["name"], record["type"])
+        for record in tracking_records
+        if record["record_type"] == "artifact"
+    ] == [
+        ("artifacts/tokenizer/tokenizer.json", "tokenizer", "tokenizer"),
+        (
+            "artifacts/tokenizer/merges.json",
+            "tokenizer_merges",
+            "tokenizer",
+        ),
+        ("artifacts/tokenizer/vocab.json", "tokenizer_vocab", "tokenizer"),
+        (
+            "artifacts/tokenizer/special_tokens.json",
+            "tokenizer_special_tokens",
+            "tokenizer",
+        ),
+        (
+            "artifacts/tokenizer/token_bytes.pt",
+            "tokenizer_token_bytes",
+            "tokenizer",
+        ),
+        ("metrics/tokenizer_eval.json", "tokenizer_eval", "tokenizer"),
     ]
     assert summary["status"] == "completed"
 
@@ -432,11 +493,18 @@ def test_train_tokenizer_command_fails_without_partial_artifacts(
     summary = json.loads(
         (run_dir / "metrics" / "summary.json").read_text(encoding="utf-8")
     )
+    tracking_records = [
+        json.loads(line)
+        for line in (run_dir / "metrics" / "metrics.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
     assert completed.returncode != 0
     assert "exhausted all adjacent pairs" in completed.stderr
     assert "Traceback" not in completed.stderr
     assert not (run_dir / "artifacts" / "tokenizer").exists()
     assert not (run_dir / "metrics" / TOKENIZER_TRAINING_REPORT_FILENAME).exists()
+    assert [record["record_type"] for record in tracking_records] == ["config"]
     assert summary["status"] == "failed"
 
 
@@ -452,6 +520,10 @@ def test_real_train_tokenizer_path_reaches_32768_on_bounded_parquet(
     pq.write_table(
         pa.table({"text": [representative_text]}),
         data_dir / "shard_00000.parquet",
+    )
+    pq.write_table(
+        pa.table({"text": ["bounded validation"]}),
+        data_dir / "shard_06542.parquet",
     )
     config = ProjectConfig(
         run=RunConfig(
@@ -485,6 +557,14 @@ def test_real_train_tokenizer_path_reaches_32768_on_bounded_parquet(
             str(config_path),
             "--algorithm",
             "optimized",
+            "--eval-max-documents",
+            "1",
+            "--eval-max-characters",
+            "100",
+            "--eval-benchmark-warmup",
+            "0",
+            "--eval-benchmark-iterations",
+            "1",
             "--no-wandb",
         ],
         cwd=PROJECT_ROOT,
