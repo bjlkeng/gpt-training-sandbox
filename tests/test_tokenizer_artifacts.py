@@ -220,7 +220,7 @@ def test_load_rejects_unknown_versions_and_fields(tmp_path: Path) -> None:
     second_document["unexpected"] = True
     _write_json(tmp_path / "second" / "tokenizer.json", second_document)
 
-    with pytest.raises(TokenizerArtifactError, match="unknown fields"):
+    with pytest.raises(TokenizerArtifactError, match="unexpected=.*unexpected"):
         RegexBPETokenizer.load(tmp_path / "second")
 
 

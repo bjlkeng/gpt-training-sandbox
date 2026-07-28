@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Final
 
 import torch
 
+from scratch_llm._validation import JsonValueValidator
 from scratch_llm.tokenizer import (
     BYTE_VOCAB_SIZE,
     NANOCHAT_SPECIAL_TOKENS,
@@ -40,10 +41,14 @@ TOKEN_BYTE_LENGTHS_DTYPE: Final = torch.int32
 
 _JSON_FILENAMES: Final = TOKENIZER_ARTIFACT_FILENAMES[:-1]
 _TOKEN_BYTES_FILENAME: Final = TOKENIZER_ARTIFACT_FILENAMES[-1]
+_ARTIFACT_SCHEMA_LABEL: Final = f"artifact version {TOKENIZER_ARTIFACT_VERSION}"
 
 
 class TokenizerArtifactError(ValueError):
     """A tokenizer artifact set is missing, unsafe, or internally inconsistent."""
+
+
+_JSON_VALUES = JsonValueValidator(TokenizerArtifactError)
 
 
 def regex_bpe_identity(result: ReferenceBPETrainingResult) -> str:
@@ -236,30 +241,40 @@ def _parse_tokenizer_document(
     from scratch_llm.bpe import BPEMerge, ReferenceBPETrainingResult
 
     _validate_common_document(document, artifact_type="tokenizer")
-    _require_exact_keys(
+    _JSON_VALUES.require_object(
         document,
-        {
-            "artifact_type",
-            "format",
-            "format_version",
-            "mergeable_vocab_size",
-            "merges",
-            "special_tokens",
-            "tokenizer_identity",
-            "training",
-            "vocab_size",
-            "vocabulary",
-        },
         label="tokenizer.json",
+        expected_keys=frozenset(
+            {
+                "artifact_type",
+                "format",
+                "format_version",
+                "mergeable_vocab_size",
+                "merges",
+                "special_tokens",
+                "tokenizer_identity",
+                "training",
+                "vocab_size",
+                "vocabulary",
+            }
+        ),
+        schema_label=_ARTIFACT_SCHEMA_LABEL,
     )
 
-    vocab_size = _required_integer(document, "vocab_size", minimum=0)
-    mergeable_vocab_size = _required_integer(
-        document,
-        "mergeable_vocab_size",
+    vocab_size = _JSON_VALUES.require_integer(
+        document.get("vocab_size"),
+        label="vocab_size",
+        minimum=0,
+    )
+    mergeable_vocab_size = _JSON_VALUES.require_integer(
+        document.get("mergeable_vocab_size"),
+        label="mergeable_vocab_size",
         minimum=BYTE_VOCAB_SIZE,
     )
-    raw_merges = _required_list(document, "merges")
+    raw_merges = _JSON_VALUES.require_list(
+        document.get("merges"),
+        label="merges",
+    )
     expected_mergeable_vocab_size = BYTE_VOCAB_SIZE + len(raw_merges)
     if mergeable_vocab_size != expected_mergeable_vocab_size:
         raise TokenizerArtifactError(
@@ -275,28 +290,45 @@ def _parse_tokenizer_document(
 
     merges: list[BPEMerge] = []
     for rank, raw_merge in enumerate(raw_merges):
-        if not isinstance(raw_merge, dict):
-            raise TokenizerArtifactError(f"merge at rank {rank} must be an object")
-        _require_exact_keys(
+        merge_document = _JSON_VALUES.require_object(
             raw_merge,
-            {"count", "left_id", "rank", "right_id", "token_id"},
             label=f"merge at rank {rank}",
+            expected_keys=frozenset(
+                {"count", "left_id", "rank", "right_id", "token_id"}
+            ),
+            schema_label=_ARTIFACT_SCHEMA_LABEL,
         )
-        stored_rank = _required_integer(raw_merge, "rank", minimum=0)
+        stored_rank = _JSON_VALUES.require_integer(
+            merge_document.get("rank"),
+            label="rank",
+            minimum=0,
+        )
         if stored_rank != rank:
             raise TokenizerArtifactError(
                 "merge ranks must be contiguous from zero; "
                 f"expected rank {rank}, got {stored_rank}"
             )
-        token_id = _required_integer(raw_merge, "token_id", minimum=0)
+        token_id = _JSON_VALUES.require_integer(
+            merge_document.get("token_id"),
+            label="token_id",
+            minimum=0,
+        )
         expected_token_id = BYTE_VOCAB_SIZE + rank
         if token_id != expected_token_id:
             raise TokenizerArtifactError(
                 "merge token IDs must be contiguous from 256 in rank order; "
                 f"expected {expected_token_id}, got {token_id}"
             )
-        left_id = _required_integer(raw_merge, "left_id", minimum=0)
-        right_id = _required_integer(raw_merge, "right_id", minimum=0)
+        left_id = _JSON_VALUES.require_integer(
+            merge_document.get("left_id"),
+            label="left_id",
+            minimum=0,
+        )
+        right_id = _JSON_VALUES.require_integer(
+            merge_document.get("right_id"),
+            label="right_id",
+            minimum=0,
+        )
         if left_id >= token_id or right_id >= token_id:
             raise TokenizerArtifactError(
                 "merge inputs must refer to earlier token IDs; "
@@ -306,11 +338,18 @@ def _parse_tokenizer_document(
             BPEMerge(
                 pair=(left_id, right_id),
                 token_id=token_id,
-                count=_required_integer(raw_merge, "count", minimum=1),
+                count=_JSON_VALUES.require_integer(
+                    merge_document.get("count"),
+                    label="count",
+                    minimum=1,
+                ),
             )
         )
 
-    raw_vocabulary = _required_list(document, "vocabulary")
+    raw_vocabulary = _JSON_VALUES.require_list(
+        document.get("vocabulary"),
+        label="vocabulary",
+    )
     if len(raw_vocabulary) != vocab_size:
         raise TokenizerArtifactError(
             "vocabulary IDs must be contiguous across vocab_size; "
@@ -318,22 +357,23 @@ def _parse_tokenizer_document(
         )
     vocabulary: dict[int, bytes] = {}
     for position, raw_token in enumerate(raw_vocabulary):
-        if not isinstance(raw_token, dict):
-            raise TokenizerArtifactError(
-                f"vocabulary entry at position {position} must be an object"
-            )
-        _require_exact_keys(
+        token_document = _JSON_VALUES.require_object(
             raw_token,
-            {"bytes_hex", "id"},
             label=f"vocabulary entry at position {position}",
+            expected_keys=frozenset({"bytes_hex", "id"}),
+            schema_label=_ARTIFACT_SCHEMA_LABEL,
         )
-        token_id = _required_integer(raw_token, "id", minimum=0)
+        token_id = _JSON_VALUES.require_integer(
+            token_document.get("id"),
+            label="id",
+            minimum=0,
+        )
         if token_id != position:
             raise TokenizerArtifactError(
                 "vocabulary IDs must be contiguous from zero; "
                 f"expected {position}, got {token_id}"
             )
-        raw_hex = raw_token.get("bytes_hex")
+        raw_hex = token_document.get("bytes_hex")
         if not isinstance(raw_hex, str):
             raise TokenizerArtifactError(
                 f"vocabulary bytes_hex for token ID {token_id} must be a string"
@@ -363,7 +403,10 @@ def _parse_tokenizer_document(
                 f"{merge.token_id} do not match its ranked input pair"
             )
 
-    raw_special_tokens = _required_list(document, "special_tokens")
+    raw_special_tokens = _JSON_VALUES.require_list(
+        document.get("special_tokens"),
+        label="special_tokens",
+    )
     expected_special_tokens = [
         {"id": mergeable_vocab_size + offset, "token": token}
         for offset, token in enumerate(NANOCHAT_SPECIAL_TOKENS)
@@ -383,13 +426,11 @@ def _parse_tokenizer_document(
                 f"raw bytes for special token {token!r} do not match its UTF-8 bytes"
             )
 
-    training = document.get("training")
-    if not isinstance(training, dict):
-        raise TokenizerArtifactError("training metadata must be an object")
-    _require_exact_keys(
-        training,
-        {"character_count", "chunk_count", "document_count"},
+    training = _JSON_VALUES.require_object(
+        document.get("training"),
         label="training metadata",
+        expected_keys=frozenset({"character_count", "chunk_count", "document_count"}),
+        schema_label=_ARTIFACT_SCHEMA_LABEL,
     )
     result = ReferenceBPETrainingResult(
         vocab_size=vocab_size,
@@ -397,9 +438,21 @@ def _parse_tokenizer_document(
         merges=tuple(merges),
         vocabulary=MappingProxyType(vocabulary),
         special_token_ids=MappingProxyType(special_token_ids),
-        document_count=_required_integer(training, "document_count", minimum=0),
-        character_count=_required_integer(training, "character_count", minimum=0),
-        chunk_count=_required_integer(training, "chunk_count", minimum=0),
+        document_count=_JSON_VALUES.require_integer(
+            training.get("document_count"),
+            label="document_count",
+            minimum=0,
+        ),
+        character_count=_JSON_VALUES.require_integer(
+            training.get("character_count"),
+            label="character_count",
+            minimum=0,
+        ),
+        chunk_count=_JSON_VALUES.require_integer(
+            training.get("chunk_count"),
+            label="chunk_count",
+            minimum=0,
+        ),
     )
     expected_identity = document["tokenizer_identity"]
     if expected_identity != regex_bpe_identity(result):
@@ -458,7 +511,12 @@ def _validate_redundant_json_documents(
             "special_tokens.json": "special_tokens",
         }[filename]
         _validate_common_document(document, artifact_type=artifact_type)
-        _require_exact_keys(document, expected_keys, label=filename)
+        _JSON_VALUES.require_object(
+            document,
+            label=filename,
+            expected_keys=frozenset(expected_keys),
+            schema_label=_ARTIFACT_SCHEMA_LABEL,
+        )
         if document["tokenizer_identity"] != tokenizer_document["tokenizer_identity"]:
             raise TokenizerArtifactError(
                 f"{filename} is inconsistent with tokenizer.json identity"
@@ -627,32 +685,24 @@ def _require_complete_file_set(directory: Path) -> None:
 
 
 def _load_json_document(path: Path) -> dict[str, object]:
-    def reject_duplicate_keys(
-        pairs: list[tuple[str, object]],
-    ) -> dict[str, object]:
-        document: dict[str, object] = {}
-        for key, value in pairs:
-            if key in document:
-                raise TokenizerArtifactError(
-                    f"tokenizer artifact {path.name} contains duplicate key {key!r}"
-                )
-            document[key] = value
-        return document
-
     try:
         with path.open(encoding="utf-8") as json_file:
-            value = json.load(json_file, object_pairs_hook=reject_duplicate_keys)
+            value = json.load(
+                json_file,
+                object_pairs_hook=_JSON_VALUES.duplicate_object_hook(
+                    label=f"tokenizer artifact {path.name}"
+                ),
+            )
     except TokenizerArtifactError:
         raise
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise TokenizerArtifactError(
             f"could not load tokenizer artifact {path.name}: {error}"
         ) from error
-    if not isinstance(value, dict):
-        raise TokenizerArtifactError(
-            f"tokenizer artifact {path.name} must contain a JSON object"
-        )
-    return value
+    return _JSON_VALUES.require_object(
+        value,
+        label=f"tokenizer artifact {path.name}",
+    )
 
 
 def _validate_common_document(
@@ -684,46 +734,6 @@ def _validate_common_document(
         raise TokenizerArtifactError(
             "tokenizer_identity must be a sha256-prefixed digest"
         )
-
-
-def _required_integer(
-    document: Mapping[str, object],
-    key: str,
-    *,
-    minimum: int,
-) -> int:
-    value = document.get(key)
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise TokenizerArtifactError(f"{key} must be an integer")
-    if value < minimum:
-        raise TokenizerArtifactError(f"{key} must be at least {minimum}")
-    return value
-
-
-def _require_exact_keys(
-    document: Mapping[str, object],
-    expected: set[str],
-    *,
-    label: str,
-) -> None:
-    actual = set(document)
-    missing = sorted(expected - actual)
-    unknown = sorted(actual - expected)
-    if missing or unknown:
-        raise TokenizerArtifactError(
-            f"{label} has missing or unknown fields; "
-            f"missing={missing}, unknown fields={unknown}"
-        )
-
-
-def _required_list(
-    document: Mapping[str, object],
-    key: str,
-) -> list[object]:
-    value = document.get(key)
-    if not isinstance(value, list):
-        raise TokenizerArtifactError(f"{key} must be a list")
-    return value
 
 
 def _fsync_directory(path: Path) -> None:

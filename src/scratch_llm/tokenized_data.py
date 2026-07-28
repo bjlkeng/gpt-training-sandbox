@@ -16,6 +16,7 @@ from typing import Final, Literal
 
 import numpy as np
 
+from scratch_llm._validation import JsonValueValidator
 from scratch_llm.tokenizer import Tokenizer
 from scratch_llm.utils import save_json
 
@@ -23,6 +24,7 @@ from scratch_llm.utils import save_json
 TOKENIZED_SHARD_FORMAT: Final = "scratch_llm_tokenized_shards"
 TOKENIZED_SHARD_FORMAT_VERSION: Final = 1
 TOKENIZED_MANIFEST_NAME: Final = "manifest.json"
+_MANIFEST_SCHEMA_LABEL: Final = f"version {TOKENIZED_SHARD_FORMAT_VERSION}"
 _SPLITS: Final = ("train", "val")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MAX_UINT32_VOCAB_SIZE = 2**32
@@ -61,6 +63,9 @@ TokenizedSplit = Literal["train", "val"]
 
 class TokenizedDataError(ValueError):
     """A tokenized dataset violates its committed storage contract."""
+
+
+_JSON_VALUES = JsonValueValidator(TokenizedDataError)
 
 
 @dataclass(frozen=True)
@@ -644,7 +649,7 @@ def _load_manifest(path: Path) -> TokenizedDatasetManifest:
         with path.open(encoding="utf-8") as manifest_file:
             value = json.load(
                 manifest_file,
-                object_pairs_hook=_reject_duplicate_object_keys,
+                object_pairs_hook=_JSON_VALUES.duplicate_object_hook(label="manifest"),
             )
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise TokenizedDataError(
@@ -653,23 +658,20 @@ def _load_manifest(path: Path) -> TokenizedDatasetManifest:
     return _parse_manifest(value)
 
 
-def _reject_duplicate_object_keys(
-    pairs: list[tuple[str, object]],
-) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        if key in result:
-            raise TokenizedDataError(f"manifest contains duplicate key {key!r}")
-        result[key] = value
-    return result
-
-
 def _parse_manifest(value: object) -> TokenizedDatasetManifest:
-    root = _require_object(value, label="manifest", expected_keys=_MANIFEST_KEYS)
-    format_name = _require_string(root["format"], label="manifest format")
+    root = _JSON_VALUES.require_object(
+        value,
+        label="manifest",
+        expected_keys=_MANIFEST_KEYS,
+        schema_label=_MANIFEST_SCHEMA_LABEL,
+    )
+    format_name = _JSON_VALUES.require_string(
+        root["format"],
+        label="manifest format",
+    )
     if format_name != TOKENIZED_SHARD_FORMAT:
         raise TokenizedDataError(f"unknown tokenized manifest format {format_name!r}")
-    format_version = _require_integer(
+    format_version = _JSON_VALUES.require_integer(
         root["format_version"],
         label="manifest format_version",
         minimum=1,
@@ -679,19 +681,25 @@ def _parse_manifest(value: object) -> TokenizedDatasetManifest:
             f"unknown tokenized manifest version {format_version}; "
             f"expected {TOKENIZED_SHARD_FORMAT_VERSION}"
         )
-    byte_order = _require_string(root["byte_order"], label="manifest byte_order")
+    byte_order = _JSON_VALUES.require_string(
+        root["byte_order"],
+        label="manifest byte_order",
+    )
     if byte_order != "little":
         raise TokenizedDataError(
             f"manifest byte_order must be 'little', got {byte_order!r}"
         )
 
-    vocab_size = _require_integer(
+    vocab_size = _JSON_VALUES.require_integer(
         root["vocab_size"],
         label="manifest vocab_size",
         minimum=1,
         maximum=_MAX_UINT32_VOCAB_SIZE,
     )
-    raw_dtype = _require_string(root["dtype"], label="manifest dtype")
+    raw_dtype = _JSON_VALUES.require_string(
+        root["dtype"],
+        label="manifest dtype",
+    )
     if raw_dtype == "uint16":
         dtype: TokenDType = "uint16"
     elif raw_dtype == "uint32":
@@ -705,7 +713,7 @@ def _parse_manifest(value: object) -> TokenizedDatasetManifest:
             f"{vocab_size}; expected {expected_dtype!r}"
         )
 
-    tokenizer_identity = _require_string(
+    tokenizer_identity = _JSON_VALUES.require_string(
         root["tokenizer_identity"],
         label="manifest tokenizer_identity",
     )
@@ -714,10 +722,11 @@ def _parse_manifest(value: object) -> TokenizedDatasetManifest:
         vocab_size=vocab_size,
     )
 
-    raw_splits = _require_object(
+    raw_splits = _JSON_VALUES.require_object(
         root["splits"],
         label="manifest splits",
         expected_keys=frozenset(_SPLITS),
+        schema_label=_MANIFEST_SCHEMA_LABEL,
     )
     splits = {
         split: _parse_split(
@@ -729,17 +738,17 @@ def _parse_manifest(value: object) -> TokenizedDatasetManifest:
     }
     _validate_source_provenance(splits)
 
-    token_count = _require_integer(
+    token_count = _JSON_VALUES.require_integer(
         root["token_count"],
         label="manifest token_count",
         minimum=1,
     )
-    document_count = _require_integer(
+    document_count = _JSON_VALUES.require_integer(
         root["document_count"],
         label="manifest document_count",
         minimum=1,
     )
-    byte_count = _require_integer(
+    byte_count = _JSON_VALUES.require_integer(
         root["byte_count"],
         label="manifest byte_count",
         minimum=1,
@@ -778,13 +787,16 @@ def _parse_special_token_ids(
     *,
     vocab_size: int,
 ) -> dict[str, int]:
-    values = _require_object(value, label="manifest special_token_ids")
+    values = _JSON_VALUES.require_object(
+        value,
+        label="manifest special_token_ids",
+    )
     parsed: dict[str, int] = {}
     used_ids: set[int] = set()
     for token, raw_token_id in values.items():
         if not token:
             raise TokenizedDataError("manifest special-token names must not be empty")
-        token_id = _require_integer(
+        token_id = _JSON_VALUES.require_integer(
             raw_token_id,
             label=f"manifest special_token_ids[{token!r}]",
             minimum=0,
@@ -822,14 +834,17 @@ def _parse_split(
     split: str,
     dtype: TokenDType,
 ) -> TokenizedSplitManifest:
-    parsed = _require_object(
+    parsed = _JSON_VALUES.require_object(
         value,
         label=f"manifest {split} split",
         expected_keys=_SPLIT_KEYS,
+        schema_label=_MANIFEST_SCHEMA_LABEL,
     )
-    raw_shards = parsed["shards"]
-    if not isinstance(raw_shards, list) or not raw_shards:
-        raise TokenizedDataError(f"manifest {split} shards must be a non-empty list")
+    raw_shards = _JSON_VALUES.require_list(
+        parsed["shards"],
+        label=f"manifest {split} shards",
+        non_empty=True,
+    )
     shards = tuple(
         _parse_shard(
             raw_shard,
@@ -839,17 +854,17 @@ def _parse_split(
         )
         for index, raw_shard in enumerate(raw_shards)
     )
-    token_count = _require_integer(
+    token_count = _JSON_VALUES.require_integer(
         parsed["token_count"],
         label=f"manifest {split} token_count",
         minimum=1,
     )
-    document_count = _require_integer(
+    document_count = _JSON_VALUES.require_integer(
         parsed["document_count"],
         label=f"manifest {split} document_count",
         minimum=1,
     )
-    byte_count = _require_integer(
+    byte_count = _JSON_VALUES.require_integer(
         parsed["byte_count"],
         label=f"manifest {split} byte_count",
         minimum=1,
@@ -885,15 +900,23 @@ def _parse_shard(
     dtype: TokenDType,
 ) -> TokenizedShardManifest:
     label = f"manifest {split} shard {expected_index}"
-    parsed = _require_object(value, label=label, expected_keys=_SHARD_KEYS)
-    index = _require_integer(
+    parsed = _JSON_VALUES.require_object(
+        value,
+        label=label,
+        expected_keys=_SHARD_KEYS,
+        schema_label=_MANIFEST_SCHEMA_LABEL,
+    )
+    index = _JSON_VALUES.require_integer(
         parsed["index"],
         label=f"{label} index",
         minimum=0,
     )
     if index != expected_index:
         raise TokenizedDataError(f"{label} index must be {expected_index}, got {index}")
-    filename = _require_string(parsed["filename"], label=f"{label} filename")
+    filename = _JSON_VALUES.require_string(
+        parsed["filename"],
+        label=f"{label} filename",
+    )
     expected_filename = f"{split}_{expected_index:06d}.bin"
     if filename != expected_filename or Path(filename).name != filename:
         raise TokenizedDataError(
@@ -901,17 +924,17 @@ def _parse_shard(
             f"expected {expected_filename!r}"
         )
 
-    token_count = _require_integer(
+    token_count = _JSON_VALUES.require_integer(
         parsed["token_count"],
         label=f"{label} token_count",
         minimum=1,
     )
-    document_count = _require_integer(
+    document_count = _JSON_VALUES.require_integer(
         parsed["document_count"],
         label=f"{label} document_count",
         minimum=1,
     )
-    byte_count = _require_integer(
+    byte_count = _JSON_VALUES.require_integer(
         parsed["byte_count"],
         label=f"{label} byte_count",
         minimum=1,
@@ -923,11 +946,12 @@ def _parse_shard(
         label=f"{label} byte_count",
     )
 
-    raw_document_counts = parsed["document_token_counts"]
-    if not isinstance(raw_document_counts, list):
-        raise TokenizedDataError(f"{label} document_token_counts must be a list")
+    raw_document_counts = _JSON_VALUES.require_list(
+        parsed["document_token_counts"],
+        label=f"{label} document_token_counts",
+    )
     document_token_counts = tuple(
-        _require_integer(
+        _JSON_VALUES.require_integer(
             count,
             label=f"{label} document_token_counts[{index}]",
             minimum=0,
@@ -945,16 +969,24 @@ def _parse_shard(
         label=f"{label} document token total",
     )
 
-    sha256 = _require_string(parsed["sha256"], label=f"{label} sha256")
+    sha256 = _JSON_VALUES.require_string(
+        parsed["sha256"],
+        label=f"{label} sha256",
+    )
     if _SHA256.fullmatch(sha256) is None:
         raise TokenizedDataError(
             f"{label} sha256 must contain 64 lowercase hexadecimal characters"
         )
-    raw_sources = parsed["source_shards"]
-    if not isinstance(raw_sources, list) or not raw_sources:
-        raise TokenizedDataError(f"{label} source_shards must be a non-empty list")
+    raw_sources = _JSON_VALUES.require_list(
+        parsed["source_shards"],
+        label=f"{label} source_shards",
+        non_empty=True,
+    )
     source_shards = tuple(
-        _require_string(source, label=f"{label} source_shards[{index}]")
+        _JSON_VALUES.require_string(
+            source,
+            label=f"{label} source_shards[{index}]",
+        )
         for index, source in enumerate(raw_sources)
     )
     if len(set(source_shards)) != len(source_shards):
@@ -970,50 +1002,6 @@ def _parse_shard(
         sha256=sha256,
         source_shards=source_shards,
     )
-
-
-def _require_object(
-    value: object,
-    *,
-    label: str,
-    expected_keys: frozenset[str] | None = None,
-) -> dict[str, object]:
-    if not isinstance(value, dict):
-        raise TokenizedDataError(
-            f"{label} must be an object, got {type(value).__name__}"
-        )
-    if not all(isinstance(key, str) for key in value):
-        raise TokenizedDataError(f"{label} keys must be strings")
-    if expected_keys is not None and set(value) != expected_keys:
-        missing = sorted(expected_keys - set(value))
-        unexpected = sorted(set(value) - expected_keys)
-        raise TokenizedDataError(
-            f"{label} fields do not match version "
-            f"{TOKENIZED_SHARD_FORMAT_VERSION}; missing={missing}, "
-            f"unexpected={unexpected}"
-        )
-    return value
-
-
-def _require_string(value: object, *, label: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise TokenizedDataError(f"{label} must be a non-empty string")
-    return value
-
-
-def _require_integer(
-    value: object,
-    *,
-    label: str,
-    minimum: int,
-    maximum: int | None = None,
-) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise TokenizedDataError(f"{label} must be an integer")
-    if value < minimum or (maximum is not None and value > maximum):
-        interval = f"[{minimum}, {maximum}]" if maximum is not None else f">= {minimum}"
-        raise TokenizedDataError(f"{label} must be {interval}, got {value}")
-    return value
 
 
 def _require_total(actual: int, expected: int, *, label: str) -> None:
