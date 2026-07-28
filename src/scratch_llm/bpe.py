@@ -5,11 +5,17 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+import hashlib
+import json
 from types import MappingProxyType
 from typing import Final
 
-from scratch_llm.regex_chunking import iter_bpe_training_chunks
-from scratch_llm.tokenizer import BYTE_VOCAB_SIZE, NANOCHAT_SPECIAL_TOKENS
+from scratch_llm.regex_chunking import bpe_encoding_chunks, iter_bpe_training_chunks
+from scratch_llm.tokenizer import (
+    BYTE_VOCAB_SIZE,
+    NANOCHAT_SPECIAL_TOKENS,
+    Tokenizer,
+)
 
 
 PAIR_TIE_BREAK: Final = (
@@ -52,6 +58,150 @@ class ReferenceBPETrainingResult:
     document_count: int
     character_count: int
     chunk_count: int
+
+
+class RegexBPETokenizer(Tokenizer):
+    """Readable regex byte-BPE runtime backed by a reference training result."""
+
+    def __init__(self, training_result: ReferenceBPETrainingResult) -> None:
+        if not isinstance(training_result, ReferenceBPETrainingResult):
+            raise TypeError(
+                "training_result must be a ReferenceBPETrainingResult, "
+                f"got {type(training_result).__name__}"
+            )
+        if tuple(training_result.special_token_ids) != NANOCHAT_SPECIAL_TOKENS:
+            raise ValueError(
+                "training result special tokens must exactly match the ordered "
+                "nanochat special tokens"
+            )
+
+        self._training_result = training_result
+        self._special_tokens_by_id = MappingProxyType(
+            {
+                token_id: token
+                for token, token_id in training_result.special_token_ids.items()
+            }
+        )
+        self._identity = _training_result_identity(training_result)
+
+    def encode(
+        self,
+        text: str,
+        prepend: str | int | None = None,
+        append: str | int | None = None,
+    ) -> list[int]:
+        """Apply learned ranks independently inside each regex chunk."""
+
+        if not isinstance(text, str):
+            raise TypeError(f"text must be a string, got {type(text).__name__}")
+
+        token_ids: list[int] = []
+        for byte_chunk in bpe_encoding_chunks(text):
+            encoded_chunk = tuple(byte_chunk)
+            for merge in self._training_result.merges:
+                encoded_chunk = merge_pair(
+                    encoded_chunk,
+                    merge.pair,
+                    merge.token_id,
+                )
+            token_ids.extend(encoded_chunk)
+
+        if prepend is not None:
+            token_ids.insert(
+                0, self._resolve_special_token(prepend, argument="prepend")
+            )
+        if append is not None:
+            token_ids.append(self._resolve_special_token(append, argument="append"))
+        return token_ids
+
+    def decode(self, token_ids: Iterable[int]) -> str:
+        """Concatenate raw token bytes before one replacement-mode UTF-8 decode."""
+
+        try:
+            token_id_iterator = iter(token_ids)
+        except TypeError as error:
+            raise TypeError(
+                "token IDs must be an iterable of integers, "
+                f"got {type(token_ids).__name__}"
+            ) from error
+
+        encoded = bytearray()
+        for position, token_id in enumerate(token_id_iterator):
+            normalized_id = self._validate_token_id(token_id, position=position)
+            encoded.extend(self._training_result.vocabulary[normalized_id])
+        return encoded.decode("utf-8", errors="replace")
+
+    def encode_special(self, token: str) -> int:
+        """Return the learned-vocabulary-final ID for one control token."""
+
+        if not isinstance(token, str):
+            raise TypeError(
+                f"special token must be a string, got {type(token).__name__}"
+            )
+        try:
+            return self._training_result.special_token_ids[token]
+        except KeyError as error:
+            raise ValueError(f"unsupported special token {token!r}") from error
+
+    def decode_single_token_bytes(self, token_id: int) -> bytes:
+        """Return one token's stored bytes without attempting UTF-8 decoding."""
+
+        normalized_id = self._validate_token_id(token_id)
+        return self._training_result.vocabulary[normalized_id]
+
+    def get_vocab_size(self) -> int:
+        """Return the complete mergeable-plus-control vocabulary size."""
+
+        return self._training_result.vocab_size
+
+    def get_bos_token_id(self) -> int:
+        """Return the beginning-of-sequence control token ID."""
+
+        return self._training_result.special_token_ids["<|bos|>"]
+
+    def get_special_tokens(self) -> set[str]:
+        """Return a copy of the canonical control-token names."""
+
+        return set(self._training_result.special_token_ids)
+
+    def get_identity(self) -> str:
+        """Return a stable hash of the learned ranks and complete token mapping."""
+
+        return self._identity
+
+    def _resolve_special_token(self, token: str | int, *, argument: str) -> int:
+        if isinstance(token, str):
+            return self.encode_special(token)
+        if not isinstance(token, int) or isinstance(token, bool):
+            raise TypeError(
+                f"{argument} special token must be a supported token string "
+                f"or integer ID, got {type(token).__name__}"
+            )
+        if token not in self._special_tokens_by_id:
+            raise ValueError(
+                f"{argument} special token ID must be in range "
+                f"[{self._training_result.mergeable_vocab_size}, "
+                f"{self._training_result.vocab_size}); got {token}"
+            )
+        return token
+
+    def _validate_token_id(
+        self,
+        token_id: object,
+        *,
+        position: int | None = None,
+    ) -> int:
+        label = "token ID" if position is None else f"token ID at position {position}"
+        if not isinstance(token_id, int) or isinstance(token_id, bool):
+            raise TypeError(
+                f"{label} must be an integer, got {type(token_id).__name__}"
+            )
+        if not 0 <= token_id < self._training_result.vocab_size:
+            raise ValueError(
+                f"{label} must be in range "
+                f"[0, {self._training_result.vocab_size}); got {token_id}"
+            )
+        return token_id
 
 
 def count_pairs(chunks: Iterable[Sequence[int]]) -> dict[TokenPair, int]:
@@ -224,6 +374,35 @@ def train_reference_bpe(
     )
 
 
+def _training_result_identity(result: ReferenceBPETrainingResult) -> str:
+    payload = {
+        "format": "scratch_llm_regex_byte_bpe",
+        "format_version": 1,
+        "merges": [
+            {
+                "left_id": merge.left_id,
+                "right_id": merge.right_id,
+                "token_id": merge.token_id,
+            }
+            for merge in result.merges
+        ],
+        "special_tokens": [
+            {"id": token_id, "token": token}
+            for token, token_id in result.special_token_ids.items()
+        ],
+        "vocabulary_hex": [
+            result.vocabulary[token_id].hex() for token_id in range(result.vocab_size)
+        ],
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
 def _collect_training_chunks(
     texts: Iterable[str],
     *,
@@ -371,6 +550,7 @@ __all__ = [
     "BPEMerge",
     "BPETrainingError",
     "ReferenceBPETrainingResult",
+    "RegexBPETokenizer",
     "TokenChunk",
     "TokenPair",
     "apply_merge",
