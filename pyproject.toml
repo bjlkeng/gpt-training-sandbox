@@ -22,6 +22,7 @@ dependencies = [
 
 [project.optional-dependencies]
 tracking = ["wandb"]
+tokenizer-comparison = ["tiktoken"]
 web = ["fastapi", "pydantic", "uvicorn", "websockets"]
 demo = ["gradio"]
 dev = ["matplotlib", "mypy", "pytest", "ruff==0.15.22"]

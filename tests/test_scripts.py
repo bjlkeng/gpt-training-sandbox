@@ -38,7 +38,9 @@ CONFIG_COMMANDS = (
     "scripts.eval_chat",
 )
 UNIMPLEMENTED_CONFIG_COMMANDS = tuple(
-    module for module in CONFIG_COMMANDS if module != "scripts.pretrain"
+    module
+    for module in CONFIG_COMMANDS
+    if module not in {"scripts.pretrain", "scripts.eval_tokenizer"}
 )
 CHECKPOINT_COMMANDS = (
     "scripts.sample",

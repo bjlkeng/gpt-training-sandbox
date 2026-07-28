@@ -5,8 +5,9 @@ A from-scratch PyTorch sandbox for pretraining, supervised finetuning, evaluatin
 The repository is being built in small vertical slices. The byte tokenizer,
 tiny decoder-only GPT, typed configuration, run layout, and local metrics
 foundations are present. The tiny-text pretraining path and checkpoint-backed
-sampling are executable; evaluation and chat commands have stable interfaces
-whose non-dry-run implementations land in later slices.
+sampling are executable, as is bounded tokenizer evaluation; the remaining
+evaluation and chat commands have stable interfaces whose non-dry-run
+implementations land in later slices.
 
 ## Roadmap status
 
@@ -53,8 +54,15 @@ uv sync --extra dev
 
 The core install deliberately excludes W&B and web/demo frameworks. Install an
 optional group only when working on it, for example `uv sync --extra tracking`
-or `uv sync --extra web`. Every command's `--help` path works with the core
-dependencies alone.
+or `uv sync --extra web`. GPT-2 and cl100k tokenizer comparisons are also
+optional:
+
+```bash
+uv sync --extra tokenizer-comparison
+```
+
+Every command's `--help` path and the default tokenizer evaluation work with
+the core dependencies alone.
 
 Ruff is pinned in the development extra because formatter output is
 version-dependent. Update that pin and `uv.lock` together when intentionally
@@ -144,6 +152,55 @@ directly with `len(decode_single_token_bytes(id))`, including tokens that are
 not valid standalone UTF-8; every special-token entry is exactly zero. Loading
 uses Torch's weights-only mode and verifies the tensor against the JSON
 vocabulary.
+
+## Tokenizer evaluation
+
+Evaluate a saved regex byte-BPE tokenizer on five fixed local categories plus
+bounded ClimbMix training and fixed-validation samples:
+
+```bash
+uv run python -m scripts.eval_tokenizer \
+  --config configs/smoke.yaml \
+  --override run.name=tokenizer-eval \
+  --override tokenizer.type=regex_byte_bpe \
+  --override tokenizer.vocab_size=32768 \
+  --override model.vocab_size=32768 \
+  --override data.parquet_dir=data/parquet/base_data_climbmix \
+  --tokenizer-artifacts runs/tokenizer/artifacts/tokenizer \
+  --max-documents 32 \
+  --max-characters 100000 \
+  --document-char-cap 10000
+```
+
+The immutable result records the exact data directory, selected shards,
+document counts, and character/document limits for every source. It writes
+deterministic, atomically replaced `metrics/tokenizer_eval.json` and
+`metrics/tokenizer_eval.md` reports from that same result. Both include
+vocabulary size, UTF-8 bytes, token counts, bytes per token, round-trip status,
+and aggregate encode/decode throughput.
+
+The benchmark performs explicit warmup iterations, uses a monotonic clock, and
+divides by the number of token IDs processed during timed calls. Adjust the
+bounded work with `--benchmark-warmup` and `--benchmark-iterations`; reports
+record both values and measured seconds.
+
+GPT-2 and GPT-4/cl100k token-count comparisons are opt-in:
+
+```bash
+uv run --extra tokenizer-comparison python -m scripts.eval_tokenizer \
+  --config configs/smoke.yaml \
+  --override run.name=tokenizer-eval-with-comparisons \
+  --override tokenizer.type=regex_byte_bpe \
+  --override tokenizer.vocab_size=32768 \
+  --override model.vocab_size=32768 \
+  --override data.parquet_dir=data/parquet/base_data_climbmix \
+  --tokenizer-artifacts runs/tokenizer/artifacts/tokenizer \
+  --compare
+```
+
+Without `--compare`, both baselines are marked skipped and `tiktoken` is never
+imported. If comparison is requested without the optional dependency, the
+local evaluation still succeeds and marks both baselines unavailable.
 
 ## Tracked data preparation
 
