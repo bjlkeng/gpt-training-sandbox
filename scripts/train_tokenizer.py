@@ -9,6 +9,12 @@ from scratch_llm.bpe_optimized import (
     benchmark_bpe_trainers,
     write_bpe_training_benchmark,
 )
+from scratch_llm.tokenizer_evaluation import (
+    collect_evaluation_corpora,
+    evaluate_tokenizer,
+    write_tokenizer_evaluation_reports,
+)
+from scratch_llm.tokenizer_tracking import track_tokenizer_training
 from scratch_llm.tokenizer_training import (
     collect_bounded_parquet_training_texts,
     train_tokenizer_from_parquet,
@@ -67,6 +73,52 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="Maximum benchmark Unicode characters (default: 100000).",
     )
+    parser.add_argument(
+        "--eval-max-documents",
+        type=int,
+        default=32,
+        metavar="N",
+        help=("Evaluate at most N documents from each ClimbMix split (default: 32)."),
+    )
+    parser.add_argument(
+        "--eval-max-characters",
+        type=int,
+        default=100_000,
+        metavar="N",
+        help=(
+            "Evaluate at most N Unicode characters from each ClimbMix split "
+            "(default: 100000)."
+        ),
+    )
+    parser.add_argument(
+        "--eval-batch-size",
+        type=int,
+        default=1024,
+        metavar="N",
+        help="Rows streamed for tokenizer evaluation at once (default: 1024).",
+    )
+    parser.add_argument(
+        "--eval-compare",
+        action="store_true",
+        help=(
+            "Opt in to GPT-2 and cl100k token-count comparisons during "
+            "post-training evaluation."
+        ),
+    )
+    parser.add_argument(
+        "--eval-benchmark-warmup",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Untimed post-training encode/decode iterations (default: 1).",
+    )
+    parser.add_argument(
+        "--eval-benchmark-iterations",
+        type=int,
+        default=3,
+        metavar="N",
+        help="Timed post-training encode/decode iterations (default: 3).",
+    )
     return parser
 
 
@@ -120,6 +172,35 @@ def main(argv: Sequence[str] | None = None) -> int:
                 paths,
                 algorithm=arguments.algorithm,
             )
+            corpora = collect_evaluation_corpora(
+                config.data.parquet_dir,
+                num_train_shards=config.data.num_tokenizer_train_shards,
+                max_documents=arguments.eval_max_documents,
+                max_characters=arguments.eval_max_characters,
+                document_char_cap=config.data.doc_cap_chars,
+                validation_shard_index=config.data.max_shard,
+                batch_size=arguments.eval_batch_size,
+                text_column=config.data.text_column,
+            )
+            evaluation = evaluate_tokenizer(
+                result.tokenizer,
+                corpora,
+                compare=arguments.eval_compare,
+                benchmark_warmup_iterations=arguments.eval_benchmark_warmup,
+                benchmark_iterations=arguments.eval_benchmark_iterations,
+            )
+            evaluation_json_path, evaluation_markdown_path = (
+                write_tokenizer_evaluation_reports(
+                    evaluation,
+                    paths.metrics_dir,
+                )
+            )
+            track_tokenizer_training(
+                result,
+                evaluation,
+                evaluation_json_path,
+                tracker=tracker,
+            )
         except (OSError, RuntimeError, TypeError, ValueError) as error:
             parser.error(str(error))
 
@@ -129,6 +210,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"Characters: {result.training_result.character_count}")
     print(f"Tokenizer artifacts: {result.artifact_dir}")
     print(f"Training report: {result.report_path}")
+    print(f"Evaluation report: {evaluation_json_path}")
+    print(f"Evaluation summary: {evaluation_markdown_path}")
     if benchmark_path is not None:
         print(f"Trainer benchmark: {benchmark_path}")
     return 0

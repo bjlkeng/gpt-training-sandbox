@@ -249,6 +249,12 @@ deterministic, atomically replaced `metrics/tokenizer_eval.json` and
 vocabulary size, UTF-8 bytes, token counts, bytes per token, round-trip status,
 and aggregate encode/decode throughput.
 
+`train_tokenizer` runs this bounded evaluation immediately after publishing
+the trained tokenizer. Tune that work independently with
+`--eval-max-documents`, `--eval-max-characters`, `--eval-batch-size`,
+`--eval-benchmark-warmup`, and `--eval-benchmark-iterations`; use
+`--eval-compare` only when the optional comparison dependency is installed.
+
 The benchmark performs explicit warmup iterations, uses a monotonic clock, and
 divides by the number of token IDs processed during timed calls. Adjust the
 bounded work with `--benchmark-warmup` and `--benchmark-iterations`; reports
@@ -271,6 +277,46 @@ uv run --extra tokenizer-comparison python -m scripts.eval_tokenizer \
 Without `--compare`, both baselines are marked skipped and `tiktoken` is never
 imported. If comparison is requested without the optional dependency, the
 local evaluation still succeeds and marks both baselines unavailable.
+
+## Tracked tokenizer outputs
+
+A successful tokenizer-training run appends one local JSONL metrics event with
+the exact roadmap names:
+
+```text
+tokenizer/vocab_size
+tokenizer/max_chars
+tokenizer/doc_cap
+tokenizer/num_docs
+tokenizer/num_chars
+tokenizer/train_seconds
+tokenizer/bytes_per_token
+tokenizer/encode_tokens_per_sec
+tokenizer/decode_tokens_per_sec
+```
+
+The first six values come from the completed training result. Compression and
+throughput are forwarded directly from the immutable post-training evaluation
+result, so reporting does not maintain a second tokenizer calculation.
+Standalone `eval_tokenizer` runs similarly forward bytes, tokens, compression,
+round-trip status, optional GPT-2/GPT-4 comparison values, and throughput.
+
+Only after every required file is durably present, training registers these
+stable run-relative artifacts with type `tokenizer`:
+
+```text
+artifacts/tokenizer/tokenizer.json
+artifacts/tokenizer/merges.json
+artifacts/tokenizer/vocab.json
+artifacts/tokenizer/special_tokens.json
+artifacts/tokenizer/token_bytes.pt
+metrics/tokenizer_eval.json
+```
+
+The files and their artifact metadata always remain local. Setting
+`tracking.wandb.log_tokenizer_artifacts: false` suppresses only their W&B
+uploads; it does not remove the files or their JSONL records. Tokenizer metrics
+continue to reach W&B when the remote backend is enabled.
 
 ## Tracked data preparation
 
