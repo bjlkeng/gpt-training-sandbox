@@ -113,6 +113,38 @@ aliases match `tokenizer.doc_cap`, `tokenizer.max_chars`, and
 `data.doc_cap_chars`, respectively. Supplying any cap marks the report as
 bounded. Use `--no-val` to select only training data.
 
+## Regex byte-BPE artifacts
+
+`RegexBPETokenizer.save(path)` publishes the learned tokenizer as one complete
+directory containing:
+
+```text
+tokenizer.json
+merges.json
+vocab.json
+special_tokens.json
+token_bytes.pt
+```
+
+`tokenizer.json` is the authoritative
+`scratch_llm_regex_byte_bpe` format. Its versioned, canonical merge ranks,
+raw-byte vocabulary, and ordered special-token mapping determine the stable
+`sha256:` tokenizer identity; corpus counts are retained as non-identity
+training metadata. The other JSON files are deterministic redundant views for
+inspection and interoperability. Loading validates every redundant value
+against the authoritative mapping and rejects unknown versions, missing or
+extra files, symlinks, traversal paths, noncontiguous IDs, invalid ranks, and
+mismatched raw bytes before constructing a tokenizer.
+
+Saving stages all five files beside the destination and publishes the directory
+with one atomic rename. The destination must be absent or empty; a nonempty
+directory is never overwritten. `token_bytes.pt` is a CPU tensor with
+`torch.int32` dtype and shape `(vocab_size,)`. Ordinary entries are measured
+directly with `len(decode_single_token_bytes(id))`, including tokens that are
+not valid standalone UTF-8; every special-token entry is exactly zero. Loading
+uses Torch's weights-only mode and verifies the tensor against the JSON
+vocabulary.
+
 ## Tracked data preparation
 
 `prepare_tracked_tokenized_parquet_shards` joins the raw-statistics and

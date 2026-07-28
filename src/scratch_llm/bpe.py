@@ -5,8 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-import hashlib
-import json
+from os import PathLike
 from types import MappingProxyType
 from typing import Final
 
@@ -16,6 +15,7 @@ from scratch_llm.tokenizer import (
     NANOCHAT_SPECIAL_TOKENS,
     Tokenizer,
 )
+from scratch_llm.tokenizer_artifacts import regex_bpe_identity
 
 
 PAIR_TIE_BREAK: Final = (
@@ -82,7 +82,7 @@ class RegexBPETokenizer(Tokenizer):
                 for token, token_id in training_result.special_token_ids.items()
             }
         )
-        self._identity = _training_result_identity(training_result)
+        self._identity = regex_bpe_identity(training_result)
 
     def encode(
         self,
@@ -168,6 +168,21 @@ class RegexBPETokenizer(Tokenizer):
         """Return a stable hash of the learned ranks and complete token mapping."""
 
         return self._identity
+
+    def save(self, path: str | PathLike[str]) -> None:
+        """Persist one complete versioned tokenizer artifact directory."""
+
+        from scratch_llm.tokenizer_artifacts import save_regex_bpe_artifacts
+
+        save_regex_bpe_artifacts(self, self._training_result, path)
+
+    @classmethod
+    def load(cls, path: str | PathLike[str]) -> RegexBPETokenizer:
+        """Load and validate a complete versioned tokenizer artifact directory."""
+
+        from scratch_llm.tokenizer_artifacts import load_regex_bpe_training_result
+
+        return cls(load_regex_bpe_training_result(path))
 
     def _resolve_special_token(self, token: str | int, *, argument: str) -> int:
         if isinstance(token, str):
@@ -372,35 +387,6 @@ def train_reference_bpe(
         character_count=character_count,
         chunk_count=len(chunks),
     )
-
-
-def _training_result_identity(result: ReferenceBPETrainingResult) -> str:
-    payload = {
-        "format": "scratch_llm_regex_byte_bpe",
-        "format_version": 1,
-        "merges": [
-            {
-                "left_id": merge.left_id,
-                "right_id": merge.right_id,
-                "token_id": merge.token_id,
-            }
-            for merge in result.merges
-        ],
-        "special_tokens": [
-            {"id": token_id, "token": token}
-            for token, token_id in result.special_token_ids.items()
-        ],
-        "vocabulary_hex": [
-            result.vocabulary[token_id].hex() for token_id in range(result.vocab_size)
-        ],
-    }
-    encoded = json.dumps(
-        payload,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 def _collect_training_chunks(
