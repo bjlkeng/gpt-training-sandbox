@@ -40,7 +40,12 @@ CONFIG_COMMANDS = (
 UNIMPLEMENTED_CONFIG_COMMANDS = tuple(
     module
     for module in CONFIG_COMMANDS
-    if module not in {"scripts.pretrain", "scripts.eval_tokenizer"}
+    if module
+    not in {
+        "scripts.pretrain",
+        "scripts.eval_tokenizer",
+        "scripts.train_tokenizer",
+    }
 )
 CHECKPOINT_COMMANDS = (
     "scripts.sample",

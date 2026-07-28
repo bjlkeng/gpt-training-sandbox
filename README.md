@@ -153,6 +153,76 @@ not valid standalone UTF-8; every special-token entry is exactly zero. Loading
 uses Torch's weights-only mode and verifies the tensor against the JSON
 vocabulary.
 
+## Optimized regex byte-BPE training
+
+The scalable trainer maintains an incremental index of active adjacent pairs
+inside each regex chunk. A lazy heap preserves the reference rule—highest
+frequency, then the lexicographically smallest pair—while each merge updates
+only its immediate neighbors. The readable full-recount implementation remains
+available as an executable specification and fallback.
+
+Run the real one-process CPU training path with the optimized default:
+
+```bash
+uv run python -m scripts.train_tokenizer \
+  --config configs/smoke.yaml \
+  --override run.name=tokenizer-32k \
+  --override tokenizer.type=regex_byte_bpe \
+  --override tokenizer.vocab_size=32768 \
+  --override tokenizer.max_chars=10000000 \
+  --override tokenizer.doc_cap=100000 \
+  --override model.vocab_size=32768 \
+  --override data.profile=nanochat_climbmix \
+  --override data.parquet_dir=data/parquet/base_data_climbmix \
+  --override data.num_tokenizer_train_shards=8 \
+  --override data.doc_cap_chars=10000 \
+  --algorithm optimized \
+  --no-wandb
+```
+
+The requested 32,768 vocabulary includes the nine final special tokens and
+therefore learns 32,503 mergeable entries. The bounded corpus must retain
+enough adjacent pairs to reach that target; exhaustion is an explicit failure,
+never a silently undersized tokenizer. A successful run publishes the same
+five canonical files under `artifacts/tokenizer/` and records algorithm,
+corpus limits/counts, elapsed time, and Python peak allocations in
+`metrics/tokenizer_training.json`.
+
+Capacity depends heavily on chunk diversity and pair frequency. For the first
+10-million-character, eight-shard trial, run on one process, budget at least
+16 GiB of free system RAM and allow minutes to hours on a modern CPU. Treat
+that as a planning envelope rather than a guaranteed ceiling: start with a
+smaller `tokenizer.max_chars`, inspect the recorded peak, and scale within the
+machine's RAM. Raw parquet rows are streamed, but the bounded token graph and
+pair occurrence index remain in memory during training.
+
+Before a large run, compare both implementations on a small common prefix:
+
+```bash
+uv run python -m scripts.train_tokenizer \
+  --config configs/smoke.yaml \
+  --override run.name=tokenizer-trainer-check \
+  --override tokenizer.type=regex_byte_bpe \
+  --override tokenizer.vocab_size=512 \
+  --override model.vocab_size=512 \
+  --override data.profile=nanochat_climbmix \
+  --override data.parquet_dir=data/parquet/base_data_climbmix \
+  --algorithm optimized \
+  --benchmark-trainers \
+  --benchmark-vocab-size 512 \
+  --benchmark-max-documents 64 \
+  --benchmark-max-characters 100000
+```
+
+`metrics/bpe_training_benchmark.json` records independent monotonic elapsed
+time and `tracemalloc` peak memory for `--algorithm reference` and
+`--algorithm optimized`, plus exact artifact-semantic equivalence. It does not
+enforce a flaky wall-clock ratio. Use `--algorithm reference` directly only
+for small debugging runs. Character/document caps and per-document truncation
+are shared by both paths. Training failures publish no tokenizer artifact set;
+artifact installation itself remains staged and atomic, so interruption cannot
+leave a valid-looking partial tokenizer.
+
 ## Tokenizer evaluation
 
 Evaluate a saved regex byte-BPE tokenizer on five fixed local categories plus
