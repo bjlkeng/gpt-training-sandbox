@@ -389,6 +389,38 @@ def train_reference_bpe(
     )
 
 
+def train_bpe(
+    texts: Iterable[str],
+    *,
+    vocab_size: int,
+    algorithm: str = "optimized",
+    special_tokens: Iterable[str] = NANOCHAT_SPECIAL_TOKENS,
+    max_documents: int | None = None,
+    max_characters: int | None = None,
+) -> ReferenceBPETrainingResult:
+    """Train with the scalable default or the readable reference fallback."""
+
+    if algorithm == "reference":
+        return train_reference_bpe(
+            texts,
+            vocab_size=vocab_size,
+            special_tokens=special_tokens,
+            max_documents=max_documents,
+            max_characters=max_characters,
+        )
+    if algorithm == "optimized":
+        from scratch_llm.bpe_optimized import train_optimized_bpe
+
+        return train_optimized_bpe(
+            texts,
+            vocab_size=vocab_size,
+            special_tokens=special_tokens,
+            max_documents=max_documents,
+            max_characters=max_characters,
+        )
+    raise ValueError(f"algorithm must be 'optimized' or 'reference', got {algorithm!r}")
+
+
 def _collect_training_chunks(
     texts: Iterable[str],
     *,
@@ -543,5 +575,6 @@ __all__ = [
     "count_pairs",
     "merge_pair",
     "select_best_pair",
+    "train_bpe",
     "train_reference_bpe",
 ]
