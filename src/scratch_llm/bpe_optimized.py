@@ -141,9 +141,8 @@ class IncrementalPairIndex:
                 )
                 self._active.append(1)
 
-        for left_node, right_node in enumerate(self._next):
-            if right_node != _MISSING_NODE:
-                self._add_occurrence_at(left_node)
+        for left_node in range(len(self._next)):
+            self._add_occurrence_at(left_node)
         self._rebuild_heap()
 
     def pair_counts(self) -> dict[TokenPair, int]:
