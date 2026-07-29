@@ -665,16 +665,26 @@ documents span multiple tokenized shards. Continuation-aware packing is state
 format version 2, so version 1 states fail explicitly instead of silently
 resuming into a different batch plan.
 
-The future BPB evaluator will keep comparison and coverage questions separate.
-The existing `val_bpb` name is reserved for a frozen nanochat-compatible
-packing/cropping protocol. A distinct `val_bpb_full_documents` metric will use
-continuation-aware windows and count every validation byte once. Reports will
-record the protocol identity, processed model tokens, counted source
-tokens/bytes, and retention; the two BPB values must not be compared as if
-their evaluation distributions were identical. CORE remains an independent
-fixed-task metric. Base sampling will stop on generated BOS, while chat/SFT
-generation learns and stops on `<|assistant_end|>` (with BOS also retained as a
-safety stop).
+The shared BPB kernel consumes unreduced cross-entropy nats, target IDs, the
+canonical `token_bytes` table, and an optional boolean supervision mask. Only
+non-negative, explicitly supervised targets with a positive raw byte length
+contribute to `total_nats` or counted bytes; special tokens, padding, and
+carried context are excluded. Chunked and one-shot accumulation share the same
+validated arithmetic, and model evaluation restores module modes and global
+RNG state.
+
+`BaseValidationResult` combines that arithmetic with immutable protocol,
+reference-config, checkpoint/tokenizer/manifest identity, and source-coverage
+metadata. It rejects inconsistent counts, retention ratios, non-finite values,
+and zero-byte results before callers can serialize its canonical JSON.
+Document selection and packing remain protocol-owned: the existing `val_bpb`
+name is reserved for a frozen nanochat-compatible packing/cropping protocol. A
+distinct `val_bpb_full_documents` metric will use continuation-aware windows
+and count every validation byte once. The two BPB values must not be compared
+as if their evaluation distributions were identical. CORE remains an
+independent fixed-task metric. Base sampling will stop on generated BOS, while
+chat/SFT generation learns and stops on `<|assistant_end|>` (with BOS also
+retained as a safety stop).
 
 The sampling command loads the model, byte tokenizer, and generation defaults
 from a versioned checkpoint. Pass `--prompt` more than once to sample multiple
