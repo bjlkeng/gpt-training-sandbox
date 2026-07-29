@@ -39,6 +39,7 @@ from scratch_llm.utils import atomic_write
 
 WandbMode = Literal["online", "offline", "disabled"]
 TokenizerType = Literal["byte", "regex_byte_bpe"]
+TokenLoaderStrategy = Literal["flat", "packed"]
 NormType = Literal["layernorm", "rmsnorm"]
 ActivationType = Literal["gelu", "relu_squared"]
 TrainDType = Literal["float32", "float16", "bfloat16"]
@@ -50,6 +51,7 @@ DEFAULT_SPECIAL_TOKENS = NANOCHAT_SPECIAL_TOKENS
 
 _WANDB_MODES: frozenset[str] = frozenset(get_args(WandbMode))
 _TOKENIZER_TYPES: frozenset[str] = frozenset(get_args(TokenizerType))
+_TOKEN_LOADER_STRATEGIES: frozenset[str] = frozenset(get_args(TokenLoaderStrategy))
 _NORM_TYPES: frozenset[str] = frozenset(get_args(NormType))
 _ACTIVATION_TYPES: frozenset[str] = frozenset(get_args(ActivationType))
 _TRAIN_DTYPES: frozenset[str] = frozenset(get_args(TrainDType))
@@ -230,6 +232,7 @@ class DataConfig(_SerializableConfig):
     base_dir: str = "data"
     parquet_dir: str = "data/parquet/base_data_climbmix"
     tokenized_dir: str = "data/tokenized"
+    loader_strategy: TokenLoaderStrategy = "packed"
     text_column: str = "text"
     num_tokenizer_train_shards: int = 8
     num_pretrain_train_shards: int = 16
@@ -249,6 +252,11 @@ class DataConfig(_SerializableConfig):
             "text_column",
         ):
             _require_non_empty(getattr(self, field_name), f"data.{field_name}")
+        _require_choice(
+            self.loader_strategy,
+            "data.loader_strategy",
+            _TOKEN_LOADER_STRATEGIES,
+        )
         _require_positive_int(
             self.num_tokenizer_train_shards, "data.num_tokenizer_train_shards"
         )
@@ -265,6 +273,7 @@ class TokenizerConfig(_SerializableConfig):
 
     type: TokenizerType = "regex_byte_bpe"
     vocab_size: int = 32_768
+    artifact_dir: str | None = None
     max_chars: int = 2_000_000_000
     doc_cap: int = 10_000
     special_tokens: list[str] = field(
@@ -277,6 +286,8 @@ class TokenizerConfig(_SerializableConfig):
     def validate(self) -> None:
         _require_choice(self.type, "tokenizer.type", _TOKENIZER_TYPES)
         _require_positive_int(self.vocab_size, "tokenizer.vocab_size")
+        if self.artifact_dir is not None:
+            _require_non_empty(self.artifact_dir, "tokenizer.artifact_dir")
         _require_positive_int(self.max_chars, "tokenizer.max_chars")
         _require_positive_int(self.doc_cap, "tokenizer.doc_cap")
         if not isinstance(self.special_tokens, list):
@@ -655,6 +666,7 @@ __all__ = [
     "NormType",
     "ProjectConfig",
     "RunConfig",
+    "TokenLoaderStrategy",
     "TokenizerConfig",
     "TokenizerType",
     "TrackingConfig",

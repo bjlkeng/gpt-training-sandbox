@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from scratch_llm.checkpoint import CheckpointError
-from scratch_llm.pretraining import PretrainingError, run_tiny_pretraining
+from scratch_llm.pretraining import PretrainingError, run_pretraining
 from scratch_llm.run import RunConflictError
 from scripts._common import (
     config_parser,
@@ -55,7 +55,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     paths, tracker = prepare_tracked_run(parser, config, command=COMMAND)
     with tracker:
         try:
-            result = run_tiny_pretraining(
+            result = run_pretraining(
                 config,
                 paths=paths,
                 tracker=tracker,

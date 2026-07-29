@@ -89,6 +89,7 @@ def test_defaults_cover_the_roadmap_sections_and_are_deterministic() -> None:
             "base_dir": "data",
             "parquet_dir": "data/parquet/base_data_climbmix",
             "tokenized_dir": "data/tokenized",
+            "loader_strategy": "packed",
             "text_column": "text",
             "num_tokenizer_train_shards": 8,
             "num_pretrain_train_shards": 16,
@@ -99,6 +100,7 @@ def test_defaults_cover_the_roadmap_sections_and_are_deterministic() -> None:
         "tokenizer": {
             "type": "regex_byte_bpe",
             "vocab_size": 32_768,
+            "artifact_dir": None,
             "max_chars": 2_000_000_000,
             "doc_cap": 10_000,
             "special_tokens": list(DEFAULT_SPECIAL_TOKENS),

@@ -180,7 +180,7 @@ def test_last_checkpoint_records_complete_resumable_state(tmp_path: Path) -> Non
         "step",
         "tokenizer",
     }
-    assert payload["format_version"] == 1
+    assert payload["format_version"] == 2
     _assert_nested_state_equal(payload["model"], model.state_dict())
     _assert_nested_state_equal(payload["optimizer"], optimizer.state_dict())
     _assert_nested_state_equal(payload["scheduler"], scheduler.state_dict())
@@ -188,11 +188,42 @@ def test_last_checkpoint_records_complete_resumable_state(tmp_path: Path) -> Non
     assert payload["step"] == scheduler.last_epoch == 2
     assert payload["tokenizer"] == {
         "type": "byte",
-        "byte_vocab_size": BYTE_VOCAB_SIZE,
+        "identity": tokenizer.get_identity(),
         "vocab_size": VOCAB_SIZE,
         "special_tokens": list(SPECIAL_TOKENS),
     }
     assert not list(checkpoint_path.parent.glob(".last.pt.*.tmp"))
+
+
+def test_version_one_byte_checkpoint_remains_readable(tmp_path: Path) -> None:
+    config, tokenizer, model, optimizer, scheduler, _ = _checkpoint_state()
+    current_path = save_checkpoint(
+        tmp_path / "current.pt",
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        config=config,
+        step=0,
+        tokenizer=tokenizer,
+    )
+    payload = torch.load(current_path, map_location="cpu", weights_only=True)
+    payload["format_version"] = 1
+    payload["tokenizer"] = {
+        "type": "byte",
+        "byte_vocab_size": BYTE_VOCAB_SIZE,
+        "vocab_size": VOCAB_SIZE,
+        "special_tokens": list(SPECIAL_TOKENS),
+    }
+    del payload["config"]["data"]["loader_strategy"]
+    del payload["config"]["tokenizer"]["artifact_dir"]
+    legacy_path = tmp_path / "legacy-v1-byte.pt"
+    torch.save(payload, legacy_path)
+
+    loaded = load_model_checkpoint(legacy_path)
+
+    assert loaded.config == config
+    assert loaded.step == 0
+    assert isinstance(loaded.tokenizer, ByteTokenizer)
 
 
 def test_shared_loaders_reconstruct_sampling_and_next_step_training_state(

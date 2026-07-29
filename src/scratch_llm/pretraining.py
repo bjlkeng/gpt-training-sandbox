@@ -1,28 +1,33 @@
-"""Command-level composition for the first-sprint tiny-text pretraining path."""
+"""Command-level composition for tiny-text and production pretraining."""
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import ExitStack
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import torch
+from torch import Tensor
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from torch.utils.data import DataLoader
 
+from scratch_llm.bpe import RegexBPETokenizer
 from scratch_llm.checkpoint import (
     load_model_checkpoint,
     load_training_checkpoint,
     save_checkpoint,
 )
 from scratch_llm.config import ProjectConfig
-from scratch_llm.data import NextTokenDataset
+from scratch_llm.data import NextTokenDataset, create_token_loader
 from scratch_llm.model import GPT
 from scratch_llm.optim import build_lr_scheduler, build_optimizer
 from scratch_llm.run import RunPaths
 from scratch_llm.tokenizer import NANOCHAT_SPECIAL_TOKENS, ByteTokenizer, Tokenizer
+from scratch_llm.tokenized_data import TokenizedShardReader
 from scratch_llm.tracking import Tracker
 from scratch_llm.training import (
     OptimizerStepResult,
@@ -33,7 +38,7 @@ from scratch_llm.utils import get_device, set_seed
 
 
 class PretrainingError(RuntimeError):
-    """The requested tiny-text pretraining run is unsafe or unsupported."""
+    """The requested pretraining composition is unsafe or unsupported."""
 
 
 @dataclass(frozen=True)
@@ -89,6 +94,86 @@ def _build_batches(
     )
 
 
+def prepare_pretraining_batch(
+    batch: tuple[Tensor, ...] | list[Tensor],
+    *,
+    strategy: Literal["flat", "packed"],
+) -> tuple[Tensor, Tensor]:
+    """Normalize one flat or packed loader batch for the shared model loop.
+
+    Packed padding positions are converted to the model's ``ignore_index=-1``
+    target without mutating the loader-owned target tensor.
+    """
+
+    if strategy not in ("flat", "packed"):
+        raise ValueError(f"strategy must be 'flat' or 'packed', got {strategy!r}")
+    expected_values = 2 if strategy == "flat" else 3
+    if not isinstance(batch, (tuple, list)) or len(batch) != expected_values:
+        raise TypeError(
+            f"{strategy} batches must contain exactly {expected_values} tensors"
+        )
+    if any(not isinstance(value, Tensor) for value in batch):
+        raise TypeError(f"{strategy} batch values must all be Tensors")
+
+    inputs, targets = batch[:2]
+    if inputs.shape != targets.shape:
+        raise ValueError(
+            "pretraining input and target shapes must match; "
+            f"got {tuple(inputs.shape)} and {tuple(targets.shape)}"
+        )
+    if strategy == "flat":
+        return inputs, targets
+
+    loss_mask = batch[2]
+    if loss_mask.dtype != torch.bool:
+        raise TypeError(
+            f"packed loss mask must have dtype torch.bool, got {loss_mask.dtype}"
+        )
+    if loss_mask.shape != targets.shape:
+        raise ValueError(
+            "packed loss mask shape must match targets; "
+            f"got {tuple(loss_mask.shape)} and {tuple(targets.shape)}"
+        )
+    masked_targets = targets.clone()
+    masked_targets.masked_fill_(~loss_mask, -1)
+    return inputs, masked_targets
+
+
+class _PreparedBatchIterator(Iterator[tuple[Tensor, Tensor]]):
+    """Adapt one infinite token loader to the shared two-tensor loop."""
+
+    def __init__(
+        self,
+        batches: Iterator[tuple[Tensor, ...]],
+        *,
+        strategy: Literal["flat", "packed"],
+    ) -> None:
+        self._batches = batches
+        self._strategy = strategy
+
+    def __iter__(self) -> _PreparedBatchIterator:
+        return self
+
+    def __next__(self) -> tuple[Tensor, Tensor]:
+        return prepare_pretraining_batch(
+            next(self._batches),
+            strategy=self._strategy,
+        )
+
+
+def _validate_training_runtime_config(config: ProjectConfig) -> None:
+    if config.train.dtype != "float32":
+        raise PretrainingError(
+            "pretraining currently supports train.dtype='float32' only"
+        )
+    if config.train.compile:
+        raise PretrainingError("pretraining does not support train.compile yet")
+    if config.train.activation_checkpointing:
+        raise PretrainingError(
+            "pretraining does not support train.activation_checkpointing yet"
+        )
+
+
 def _validate_tiny_text_config(config: ProjectConfig) -> None:
     config.validate()
     if config.tokenizer.type != "byte":
@@ -103,19 +188,55 @@ def _validate_tiny_text_config(config: ProjectConfig) -> None:
         raise PretrainingError(
             "tiny-text pretraining requires the ByteTokenizer special-token order"
         )
-    if config.train.dtype != "float32":
+    _validate_training_runtime_config(config)
+
+
+def _validate_production_config(config: ProjectConfig) -> None:
+    config.validate()
+    if config.data.profile != "nanochat_climbmix":
         raise PretrainingError(
-            "the first-sprint pretrain command supports train.dtype='float32' only"
+            "production pretraining requires data.profile='nanochat_climbmix'"
         )
-    if config.train.compile:
+    if config.tokenizer.type != "regex_byte_bpe":
         raise PretrainingError(
-            "the first-sprint pretrain command does not support train.compile yet"
+            "production pretraining requires tokenizer.type='regex_byte_bpe'"
         )
-    if config.train.activation_checkpointing:
+    if config.tokenizer.artifact_dir is None:
+        raise PretrainingError("production pretraining requires tokenizer.artifact_dir")
+    _validate_training_runtime_config(config)
+
+
+def _load_production_tokenizer(config: ProjectConfig) -> RegexBPETokenizer:
+    artifact_dir = config.tokenizer.artifact_dir
+    if artifact_dir is None:  # pragma: no cover - validated by the caller.
+        raise PretrainingError("production pretraining requires tokenizer.artifact_dir")
+    tokenizer = RegexBPETokenizer.load(artifact_dir)
+    if tokenizer.get_vocab_size() != config.tokenizer.vocab_size:
         raise PretrainingError(
-            "the first-sprint pretrain command does not support "
-            "train.activation_checkpointing yet"
+            f"tokenizer artifact {artifact_dir} has vocabulary size "
+            f"{tokenizer.get_vocab_size()}, but config requires "
+            f"{config.tokenizer.vocab_size}"
         )
+    if tokenizer.get_special_tokens() != set(config.tokenizer.special_tokens):
+        raise PretrainingError(
+            f"tokenizer artifact {artifact_dir} special tokens do not match "
+            "the resolved config"
+        )
+    actual_special_ids = [
+        tokenizer.encode_special(token) for token in config.tokenizer.special_tokens
+    ]
+    expected_special_ids = list(
+        range(
+            config.tokenizer.vocab_size - len(config.tokenizer.special_tokens),
+            config.tokenizer.vocab_size,
+        )
+    )
+    if actual_special_ids != expected_special_ids:
+        raise PretrainingError(
+            f"tokenizer artifact {artifact_dir} special-token IDs do not match "
+            "the canonical vocabulary-final range"
+        )
+    return tokenizer
 
 
 def _resume_comparison(config: ProjectConfig) -> dict[str, Any]:
@@ -197,14 +318,14 @@ def _validate_existing_outputs(
             )
 
 
-def run_tiny_pretraining(
+def run_pretraining(
     config: ProjectConfig,
     *,
     paths: RunPaths,
     tracker: Tracker,
     resume_from: str | Path | None = None,
 ) -> PretrainingResult:
-    """Train or resume the deterministic first-sprint tiny-text workflow."""
+    """Train or resume either supported data profile through one shared loop."""
 
     if not isinstance(config, ProjectConfig):
         raise TypeError(f"config must be a ProjectConfig, got {type(config).__name__}")
@@ -212,112 +333,180 @@ def run_tiny_pretraining(
         raise TypeError(f"paths must be RunPaths, got {type(paths).__name__}")
     if not isinstance(tracker, Tracker):
         raise TypeError(f"tracker must be a Tracker, got {type(tracker).__name__}")
-    _validate_tiny_text_config(config)
-    text = _read_tiny_text(config)
+    if config.data.profile == "tiny_text":
+        _validate_tiny_text_config(config)
+    elif config.data.profile == "nanochat_climbmix":
+        _validate_production_config(config)
+    else:
+        raise PretrainingError(
+            "pretraining data.profile must be 'tiny_text' or "
+            f"'nanochat_climbmix', got {config.data.profile!r}"
+        )
+
     set_seed(config.run.seed)
     device = get_device(config.run.device)
+    metrics_path = paths.run_dir / config.tracking.jsonl.path
 
-    model: GPT
-    tokenizer: Tokenizer
-    optimizer: Optimizer
-    scheduler: LRScheduler
-    if resume_from is None:
-        tokenizer = ByteTokenizer()
-        model = GPT(config.model).to(device)
-        optimizer = build_optimizer(model, config.train)
-        scheduler = build_lr_scheduler(optimizer, config.train)
-        initial_step = 0
-    else:
-        checkpoint = load_training_checkpoint(resume_from, device=device)
-        _validate_resume_config(config, checkpoint.config)
-        model = checkpoint.model
-        tokenizer = checkpoint.tokenizer
-        optimizer = checkpoint.optimizer
-        scheduler = checkpoint.scheduler
-        initial_step = checkpoint.step
-        if initial_step >= config.train.max_steps:
-            raise PretrainingError(
-                f"checkpoint step {initial_step} has already reached "
-                f"train.max_steps={config.train.max_steps}"
+    with ExitStack() as resources:
+        prepared_tokenizer: Tokenizer
+        batches: DataLoader[tuple[Tensor, Tensor]] | _PreparedBatchIterator
+        if config.data.profile == "tiny_text":
+            prepared_tokenizer = ByteTokenizer()
+            batches = _build_batches(
+                _read_tiny_text(config),
+                config,
+                prepared_tokenizer,
+            )
+        else:
+            prepared_tokenizer = _load_production_tokenizer(config)
+            reader = resources.enter_context(
+                TokenizedShardReader(
+                    config.data.tokenized_dir,
+                    tokenizer=prepared_tokenizer,
+                )
+            )
+            loader = create_token_loader(
+                reader,
+                strategy=config.data.loader_strategy,
+                split="train",
+                batch_size=config.train.device_batch_size,
+                seq_len=config.model.seq_len,
+                seed=config.run.seed,
+            )
+            batches = _PreparedBatchIterator(
+                iter(loader),  # type: ignore[arg-type]
+                strategy=config.data.loader_strategy,
             )
 
-    batches = _build_batches(text, config, tokenizer)
-    metrics_path = paths.run_dir / config.tracking.jsonl.path
-    _validate_existing_outputs(
-        paths,
-        metrics_path,
-        initial_step=initial_step,
-        is_resume=resume_from is not None,
-    )
+        model: GPT
+        tokenizer: Tokenizer
+        optimizer: Optimizer
+        scheduler: LRScheduler
+        if resume_from is None:
+            initial_step = 0
+            _validate_existing_outputs(
+                paths,
+                metrics_path,
+                initial_step=initial_step,
+                is_resume=False,
+            )
+            tokenizer = prepared_tokenizer
+            model = GPT(config.model).to(device)
+            optimizer = build_optimizer(model, config.train)
+            scheduler = build_lr_scheduler(optimizer, config.train)
+        else:
+            checkpoint = load_training_checkpoint(resume_from, device=device)
+            _validate_resume_config(config, checkpoint.config)
+            if checkpoint.tokenizer.get_identity() != prepared_tokenizer.get_identity():
+                raise PretrainingError(
+                    "resume checkpoint tokenizer identity does not match "
+                    "the configured training artifacts"
+                )
+            model = checkpoint.model
+            tokenizer = checkpoint.tokenizer
+            optimizer = checkpoint.optimizer
+            scheduler = checkpoint.scheduler
+            initial_step = checkpoint.step
+            if initial_step >= config.train.max_steps:
+                raise PretrainingError(
+                    f"checkpoint step {initial_step} has already reached "
+                    f"train.max_steps={config.train.max_steps}"
+                )
+            _validate_existing_outputs(
+                paths,
+                metrics_path,
+                initial_step=initial_step,
+                is_resume=True,
+            )
 
-    checkpoint_path = paths.checkpoints_dir / "last.pt"
+        checkpoint_path = paths.checkpoints_dir / "last.pt"
 
-    def save_periodic_checkpoint(
-        step: int,
-        _result: OptimizerStepResult,
-    ) -> None:
-        if step % config.train.save_every != 0:
-            return
-        save_checkpoint(
-            paths.checkpoints_dir / f"step_{step:06d}.pt",
-            model=model,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            config=config,
-            step=step,
-            tokenizer=tokenizer,
+        def save_periodic_checkpoint(
+            step: int,
+            _result: OptimizerStepResult,
+        ) -> None:
+            if step % config.train.save_every != 0:
+                return
+            save_checkpoint(
+                paths.checkpoints_dir / f"step_{step:06d}.pt",
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                config=config,
+                step=step,
+                tokenizer=tokenizer,
+            )
+            save_checkpoint(
+                checkpoint_path,
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                config=config,
+                step=step,
+                tokenizer=tokenizer,
+            )
+
+        grad_accum_steps = derive_grad_accum_steps(
+            device_batch_size=config.train.device_batch_size,
+            seq_len=config.model.seq_len,
+            total_batch_size_tokens=config.train.total_batch_size_tokens,
         )
+        step_results = run_training_steps(
+            model,
+            batches,
+            optimizer,
+            scheduler,
+            max_steps=config.train.max_steps,
+            grad_accum_steps=grad_accum_steps,
+            grad_clip=config.train.grad_clip,
+            device=device,
+            tracker=tracker,
+            log_every=config.train.log_every,
+            on_step=save_periodic_checkpoint,
+        )
+        final_step = scheduler.last_epoch
         save_checkpoint(
             checkpoint_path,
             model=model,
             optimizer=optimizer,
             scheduler=scheduler,
             config=config,
-            step=step,
+            step=final_step,
             tokenizer=tokenizer,
         )
+        return PretrainingResult(
+            paths=paths,
+            metrics_path=metrics_path,
+            checkpoint_path=checkpoint_path,
+            initial_step=initial_step,
+            final_step=final_step,
+            steps=tuple(step_results),
+        )
 
-    grad_accum_steps = derive_grad_accum_steps(
-        device_batch_size=config.train.device_batch_size,
-        seq_len=config.model.seq_len,
-        total_batch_size_tokens=config.train.total_batch_size_tokens,
-    )
-    step_results = run_training_steps(
-        model,
-        batches,
-        optimizer,
-        scheduler,
-        max_steps=config.train.max_steps,
-        grad_accum_steps=grad_accum_steps,
-        grad_clip=config.train.grad_clip,
-        device=device,
-        tracker=tracker,
-        log_every=config.train.log_every,
-        on_step=save_periodic_checkpoint,
-    )
-    final_step = scheduler.last_epoch
-    save_checkpoint(
-        checkpoint_path,
-        model=model,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        config=config,
-        step=final_step,
-        tokenizer=tokenizer,
-    )
 
-    return PretrainingResult(
+def run_tiny_pretraining(
+    config: ProjectConfig,
+    *,
+    paths: RunPaths,
+    tracker: Tracker,
+    resume_from: str | Path | None = None,
+) -> PretrainingResult:
+    """Backward-compatible entry point for the deterministic tiny-text profile."""
+
+    if isinstance(config, ProjectConfig) and config.data.profile != "tiny_text":
+        raise PretrainingError("run_tiny_pretraining requires data.profile='tiny_text'")
+    return run_pretraining(
+        config,
         paths=paths,
-        metrics_path=metrics_path,
-        checkpoint_path=checkpoint_path,
-        initial_step=initial_step,
-        final_step=final_step,
-        steps=tuple(step_results),
+        tracker=tracker,
+        resume_from=resume_from,
     )
 
 
 __all__ = [
     "PretrainingError",
     "PretrainingResult",
+    "prepare_pretraining_batch",
+    "run_pretraining",
     "run_tiny_pretraining",
 ]
