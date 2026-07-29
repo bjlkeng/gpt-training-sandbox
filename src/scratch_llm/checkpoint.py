@@ -14,6 +14,7 @@ from torch.optim import AdamW, Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
 from scratch_llm.config import ProjectConfig
+from scratch_llm.bpe import RegexBPETokenizer
 from scratch_llm.model import GPT
 from scratch_llm.optim import (
     WarmupConstantWarmdownLR,
@@ -29,7 +30,8 @@ from scratch_llm.tokenizer import (
 from scratch_llm.utils import get_device
 
 
-CHECKPOINT_FORMAT_VERSION = 1
+CHECKPOINT_FORMAT_VERSION = 2
+_SUPPORTED_CHECKPOINT_FORMAT_VERSIONS = frozenset({1, CHECKPOINT_FORMAT_VERSION})
 _CHECKPOINT_KEYS = frozenset(
     {
         "format_version",
@@ -116,8 +118,6 @@ def _validate_save_state(
         raise ValueError(
             f"step {step} exceeds configured max_steps {config.train.max_steps}"
         )
-    if config.tokenizer.type != "byte":
-        raise ValueError("base smoke checkpoints require tokenizer.type='byte'")
     if config.tokenizer.vocab_size != tokenizer.get_vocab_size():
         raise ValueError(
             "resolved tokenizer vocabulary size does not match the tokenizer"
@@ -132,8 +132,8 @@ def _validate_save_state(
         )
     expected_special_ids = list(
         range(
-            BYTE_VOCAB_SIZE,
-            BYTE_VOCAB_SIZE + len(NANOCHAT_SPECIAL_TOKENS),
+            config.tokenizer.vocab_size - len(NANOCHAT_SPECIAL_TOKENS),
+            config.tokenizer.vocab_size,
         )
     )
     actual_special_ids = [
@@ -141,12 +141,16 @@ def _validate_save_state(
     ]
     if actual_special_ids != expected_special_ids:
         raise ValueError(
-            "byte-checkpoint tokenizer special-token IDs do not match this runtime"
+            "tokenizer special-token IDs do not match the resolved vocabulary"
         )
     if tokenizer.get_bos_token_id() != expected_special_ids[0]:
         raise ValueError(
-            "byte-checkpoint tokenizer BOS token ID does not match this runtime"
+            "tokenizer BOS token ID does not match the resolved vocabulary"
         )
+    if config.tokenizer.type == "byte":
+        expected_identity = ByteTokenizer().get_identity()
+        if tokenizer.get_identity() != expected_identity:
+            raise ValueError("byte-tokenizer identity does not match this runtime")
 
 
 def _atomic_torch_save(value: object, destination: Path) -> Path:
@@ -179,6 +183,60 @@ def _atomic_torch_save(value: object, destination: Path) -> Path:
     return destination
 
 
+def _regex_artifact_metadata(
+    config: ProjectConfig,
+    tokenizer: Tokenizer,
+) -> dict[str, object]:
+    artifact_dir = config.tokenizer.artifact_dir
+    if artifact_dir is None:
+        raise ValueError("regex-BPE checkpoints require tokenizer.artifact_dir")
+    try:
+        canonical_path = Path(artifact_dir).resolve(strict=True)
+    except OSError as error:
+        raise ValueError(
+            f"could not resolve tokenizer artifact directory {artifact_dir}: {error}"
+        ) from error
+    try:
+        artifact_tokenizer = RegexBPETokenizer.load(canonical_path)
+    except (OSError, TypeError, ValueError) as error:
+        raise ValueError(
+            f"invalid regex-BPE tokenizer artifact directory {canonical_path}: {error}"
+        ) from error
+    if artifact_tokenizer.get_identity() != tokenizer.get_identity():
+        raise ValueError(
+            "resolved tokenizer does not match tokenizer.artifact_dir identity"
+        )
+    if artifact_tokenizer.get_vocab_size() != tokenizer.get_vocab_size():
+        raise ValueError(
+            "resolved tokenizer does not match tokenizer.artifact_dir vocabulary"
+        )
+    if artifact_tokenizer.get_special_tokens() != tokenizer.get_special_tokens():
+        raise ValueError(
+            "resolved tokenizer does not match tokenizer.artifact_dir special tokens"
+        )
+    return {
+        "artifact_path": str(canonical_path),
+        "identity": tokenizer.get_identity(),
+        "special_tokens": list(NANOCHAT_SPECIAL_TOKENS),
+        "type": "regex_byte_bpe",
+        "vocab_size": tokenizer.get_vocab_size(),
+    }
+
+
+def _tokenizer_metadata(
+    config: ProjectConfig,
+    tokenizer: Tokenizer,
+) -> dict[str, object]:
+    if config.tokenizer.type == "byte":
+        return {
+            "type": "byte",
+            "identity": tokenizer.get_identity(),
+            "vocab_size": tokenizer.get_vocab_size(),
+            "special_tokens": list(NANOCHAT_SPECIAL_TOKENS),
+        }
+    return _regex_artifact_metadata(config, tokenizer)
+
+
 def save_checkpoint(
     path: str | os.PathLike[str],
     *,
@@ -206,12 +264,7 @@ def save_checkpoint(
         "scheduler": scheduler.state_dict(),
         "config": config.to_dict(),
         "step": step,
-        "tokenizer": {
-            "type": "byte",
-            "byte_vocab_size": BYTE_VOCAB_SIZE,
-            "vocab_size": tokenizer.get_vocab_size(),
-            "special_tokens": list(NANOCHAT_SPECIAL_TOKENS),
-        },
+        "tokenizer": _tokenizer_metadata(config, tokenizer),
     }
     return _atomic_torch_save(payload, Path(path))
 
@@ -233,7 +286,10 @@ def _restore_config(value: object) -> ProjectConfig:
     return config
 
 
-def _restore_tokenizer(value: object, config: ProjectConfig) -> Tokenizer:
+def _restore_version_one_tokenizer(
+    value: object,
+    config: ProjectConfig,
+) -> Tokenizer:
     expected_metadata = {
         "type": "byte",
         "byte_vocab_size": BYTE_VOCAB_SIZE,
@@ -256,6 +312,111 @@ def _restore_tokenizer(value: object, config: ProjectConfig) -> Tokenizer:
             "checkpoint config special tokens do not match ByteTokenizer"
         )
     return tokenizer
+
+
+def _restore_version_two_tokenizer(
+    value: object,
+    config: ProjectConfig,
+) -> Tokenizer:
+    if config.tokenizer.type == "byte":
+        tokenizer: Tokenizer = ByteTokenizer()
+        expected_metadata = {
+            "type": "byte",
+            "identity": tokenizer.get_identity(),
+            "vocab_size": tokenizer.get_vocab_size(),
+            "special_tokens": list(NANOCHAT_SPECIAL_TOKENS),
+        }
+        if value != expected_metadata:
+            raise CheckpointError(
+                "checkpoint byte-tokenizer metadata does not match this runtime"
+            )
+    elif config.tokenizer.type == "regex_byte_bpe":
+        if not isinstance(value, dict):
+            raise CheckpointError(
+                "checkpoint regex-BPE tokenizer metadata must be a dictionary"
+            )
+        expected_keys = {
+            "artifact_path",
+            "identity",
+            "special_tokens",
+            "type",
+            "vocab_size",
+        }
+        if set(value) != expected_keys:
+            missing = sorted(expected_keys - set(value))
+            unexpected = sorted(set(value) - expected_keys)
+            raise CheckpointError(
+                "checkpoint regex-BPE tokenizer metadata fields do not match "
+                f"format version 2; missing={missing}, unexpected={unexpected}"
+            )
+        artifact_path = value["artifact_path"]
+        if not isinstance(artifact_path, str) or not artifact_path.strip():
+            raise CheckpointError(
+                "checkpoint regex-BPE artifact_path must be a non-empty string"
+            )
+        stored_artifact_path = Path(artifact_path)
+        if not stored_artifact_path.is_absolute():
+            raise CheckpointError(
+                "checkpoint regex-BPE artifact_path must be canonical and absolute"
+            )
+        if config.tokenizer.artifact_dir is None:
+            raise CheckpointError(
+                "checkpoint config must define tokenizer.artifact_dir for regex-BPE"
+            )
+        configured_artifact_path = Path(config.tokenizer.artifact_dir)
+        if (
+            configured_artifact_path.is_absolute()
+            and configured_artifact_path.resolve() != stored_artifact_path
+        ):
+            raise CheckpointError(
+                "checkpoint tokenizer artifact path conflicts with the resolved config: "
+                f"metadata={stored_artifact_path}, "
+                f"config={configured_artifact_path.resolve()}"
+            )
+        try:
+            tokenizer = RegexBPETokenizer.load(stored_artifact_path)
+        except (OSError, TypeError, ValueError) as error:
+            raise CheckpointError(
+                "could not restore regex-BPE tokenizer artifacts "
+                f"{stored_artifact_path}: {error}"
+            ) from error
+        expected_metadata = {
+            "artifact_path": str(stored_artifact_path),
+            "identity": tokenizer.get_identity(),
+            "special_tokens": list(NANOCHAT_SPECIAL_TOKENS),
+            "type": "regex_byte_bpe",
+            "vocab_size": tokenizer.get_vocab_size(),
+        }
+        if value != expected_metadata:
+            raise CheckpointError(
+                "checkpoint regex-BPE tokenizer metadata conflicts with "
+                "the loaded artifact"
+            )
+    else:  # pragma: no cover - ProjectConfig validates the supported choices.
+        raise CheckpointError(
+            f"unsupported checkpoint tokenizer type {config.tokenizer.type!r}"
+        )
+
+    if config.tokenizer.vocab_size != tokenizer.get_vocab_size():
+        raise CheckpointError(
+            "checkpoint config vocabulary size does not match the restored tokenizer"
+        )
+    if tuple(config.tokenizer.special_tokens) != NANOCHAT_SPECIAL_TOKENS:
+        raise CheckpointError(
+            "checkpoint config special tokens do not match the restored tokenizer"
+        )
+    return tokenizer
+
+
+def _restore_tokenizer(
+    value: object,
+    config: ProjectConfig,
+    *,
+    format_version: int,
+) -> Tokenizer:
+    if format_version == 1:
+        return _restore_version_one_tokenizer(value, config)
+    return _restore_version_two_tokenizer(value, config)
 
 
 def _load_checkpoint(
@@ -281,13 +442,19 @@ def _load_checkpoint(
         missing = sorted(_CHECKPOINT_KEYS - set(payload))
         unexpected = sorted(set(payload) - _CHECKPOINT_KEYS)
         raise CheckpointError(
-            "checkpoint fields do not match format version 1; "
+            "checkpoint fields do not match the supported schema; "
             f"missing={missing}, unexpected={unexpected}"
         )
-    if payload["format_version"] != CHECKPOINT_FORMAT_VERSION:
+    format_version = payload["format_version"]
+    if (
+        not isinstance(format_version, int)
+        or isinstance(format_version, bool)
+        or format_version not in _SUPPORTED_CHECKPOINT_FORMAT_VERSIONS
+    ):
         raise CheckpointError(
             "unsupported checkpoint format version "
-            f"{payload['format_version']!r}; expected {CHECKPOINT_FORMAT_VERSION}"
+            f"{format_version!r}; expected one of "
+            f"{sorted(_SUPPORTED_CHECKPOINT_FORMAT_VERSIONS)}"
         )
 
     step = payload["step"]
@@ -301,7 +468,11 @@ def _load_checkpoint(
             f"checkpoint step {step} exceeds configured max_steps "
             f"{config.train.max_steps}"
         )
-    tokenizer = _restore_tokenizer(payload["tokenizer"], config)
+    tokenizer = _restore_tokenizer(
+        payload["tokenizer"],
+        config,
+        format_version=format_version,
+    )
     return _DecodedCheckpoint(
         payload=payload,
         config=config,
@@ -325,7 +496,7 @@ def load_model_checkpoint(
     *,
     device: str | torch.device = "cpu",
 ) -> ModelCheckpoint:
-    """Reconstruct an evaluation-mode GPT and byte tokenizer for sampling."""
+    """Reconstruct an evaluation-mode GPT and its tokenizer for sampling."""
 
     checkpoint = _load_checkpoint(path, device=device)
     model = _restore_model(checkpoint)

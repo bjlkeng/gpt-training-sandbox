@@ -561,7 +561,7 @@ default to `false`.
 
 ## Training and sampling interfaces
 
-The first-sprint executable path is:
+The bounded byte-tokenizer executable path is:
 
 ```bash
 uv run python -m scripts.pretrain --config configs/smoke.yaml
@@ -584,9 +584,46 @@ uv run python -m scripts.pretrain \
   --resume runs/smoke/checkpoints/step_000075.pt
 ```
 
-This first-sprint resume contract restores the model, optimizer, and scheduler
+This byte-profile resume contract restores the model, optimizer, and scheduler
 and advances from the saved step. Exact RNG and dataloader-position continuity
 remain later roadmap work.
+
+### Production regex-BPE pretraining
+
+`scripts.pretrain` also composes the canonical tokenized-data path when
+`data.profile` is `nanochat_climbmix`. A resolved production configuration
+selects:
+
+```yaml
+data:
+  profile: nanochat_climbmix
+  tokenized_dir: data/tokenized
+  loader_strategy: packed  # or flat
+tokenizer:
+  type: regex_byte_bpe
+  vocab_size: 32768
+  artifact_dir: runs/tokenizer/artifacts/tokenizer
+```
+
+The command loads and validates the complete regex-BPE artifact directory,
+then opens the tokenized manifest through `TokenizedShardReader`. Tokenizer
+identity, vocabulary size, ordered special-token IDs, payload hashes, and the
+chosen loader strategy are checked before model construction. The reader owns
+all shard memmaps and closes them on successful completion or any failure.
+
+Both production strategies feed the same optimizer, scheduler, metrics, and
+checkpoint callbacks as `tiny_text`. `flat` uses random contiguous shard-local
+windows. `packed` preserves document boundaries and converts its boolean loss
+mask to `ignore_index=-1` targets immediately before the shared training loop;
+the loader's original target tensor is not changed.
+
+New checkpoints use format version 2. Byte checkpoints record their stable
+runtime tokenizer identity. Regex-BPE checkpoints record the canonical
+absolute artifact path plus tokenizer identity, vocabulary size, and special
+tokens, allowing the shared sampling and training loaders to reconstruct and
+cross-check the exact tokenizer. The loader retains explicit read
+compatibility for format-version-1 byte checkpoints; version 1 never attempts
+to represent regex-BPE artifacts.
 
 ### Random token batches
 
