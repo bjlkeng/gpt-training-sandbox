@@ -223,6 +223,34 @@ are shared by both paths. Training failures publish no tokenizer artifact set;
 artifact installation itself remains staged and atomic, so interruption cannot
 leave a valid-looking partial tokenizer.
 
+## Rank-driven regex byte-BPE encoding
+
+`RegexBPETokenizer` retains the from-scratch Python runtime while avoiding a
+full scan of every learned merge for every regex chunk. It builds one
+pair-to-rank lookup when the tokenizer is constructed, indexes only adjacent
+pairs that actually occur in each chunk, and keeps those candidates in a lazy
+rank heap over a linked node list. Applying a merge updates only its immediate
+left and right neighborhoods. Equal-rank overlaps retain deterministic
+left-to-right behavior.
+
+The clear `merge_pair` composition remains the executable test oracle, and
+randomized Unicode differential tests require the rank-driven path to emit
+identical IDs. Runtime encoding does not import `tiktoken`; that dependency
+remains optional and evaluation-only.
+
+On the first 10-million-character, 32,768-vocabulary ClimbMix tokenizer, the
+bounded 140,592-byte evaluation used one warmup and three timed iterations:
+
+| Python encoding path | Encode tokens/sec | Timed token IDs | Seconds |
+| --- | ---: | ---: | ---: |
+| Full merge-rank sweep | 21.212 | 89,442 | 4,216.626 |
+| Active-pair rank heap | 253,578.432 | 89,442 | 0.353 |
+
+The token count remained 29,814, bytes/token remained 4.716, and every
+round-trip passed. Throughput is machine-dependent; the deterministic
+regression instead proves that irrelevant vocabulary merges do not trigger
+full chunk scans.
+
 ## Tokenizer evaluation
 
 Evaluate a saved regex byte-BPE tokenizer on five fixed local categories plus

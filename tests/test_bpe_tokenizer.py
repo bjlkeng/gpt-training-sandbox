@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import random
 from types import MappingProxyType
 from typing import Any
 
 import pytest
 
+import scratch_llm.bpe as bpe
 from scratch_llm.bpe import (
     BPEMerge,
     ReferenceBPETrainingResult,
     RegexBPETokenizer,
     train_reference_bpe,
 )
+from scratch_llm.regex_chunking import bpe_encoding_chunks
 from scratch_llm.tokenizer import (
     BYTE_VOCAB_SIZE,
     NANOCHAT_SPECIAL_TOKENS,
@@ -82,6 +85,61 @@ def _synthetic_boundary_tokenizer() -> RegexBPETokenizer:
     return RegexBPETokenizer(result)
 
 
+def _synthetic_rank_chain_tokenizer(merge_count: int) -> RegexBPETokenizer:
+    """Build many valid ranks when only the first can match ``b"ab"``."""
+
+    mergeable_vocab_size = BYTE_VOCAB_SIZE + merge_count
+    special_token_ids = {
+        token: mergeable_vocab_size + offset
+        for offset, token in enumerate(NANOCHAT_SPECIAL_TOKENS)
+    }
+    vocabulary = {token_id: bytes([token_id]) for token_id in range(BYTE_VOCAB_SIZE)}
+    merges: list[BPEMerge] = []
+    previous_id = ord("a")
+    for offset in range(merge_count):
+        right_id = ord("b") if offset == 0 else ord("a")
+        token_id = BYTE_VOCAB_SIZE + offset
+        merges.append(
+            BPEMerge(pair=(previous_id, right_id), token_id=token_id, count=1)
+        )
+        vocabulary[token_id] = vocabulary[previous_id] + vocabulary[right_id]
+        previous_id = token_id
+    vocabulary.update(
+        {
+            token_id: token.encode("utf-8")
+            for token, token_id in special_token_ids.items()
+        }
+    )
+    return RegexBPETokenizer(
+        ReferenceBPETrainingResult(
+            vocab_size=mergeable_vocab_size + len(NANOCHAT_SPECIAL_TOKENS),
+            mergeable_vocab_size=mergeable_vocab_size,
+            merges=tuple(merges),
+            vocabulary=MappingProxyType(vocabulary),
+            special_token_ids=MappingProxyType(special_token_ids),
+            document_count=1,
+            character_count=2,
+            chunk_count=1,
+        )
+    )
+
+
+def _reference_rank_sweep(tokenizer: RegexBPETokenizer, text: str) -> list[int]:
+    """Apply the original obviously-correct merge-table sweep."""
+
+    token_ids: list[int] = []
+    for byte_chunk in bpe_encoding_chunks(text):
+        encoded_chunk = tuple(byte_chunk)
+        for merge in tokenizer._training_result.merges:
+            encoded_chunk = bpe.merge_pair(
+                encoded_chunk,
+                merge.pair,
+                merge.token_id,
+            )
+        token_ids.extend(encoded_chunk)
+    return token_ids
+
+
 @pytest.mark.parametrize("text", ROUND_TRIP_TEXTS)
 def test_unmerged_bpe_matches_byte_tokenizer_and_round_trips(text: str) -> None:
     byte_tokenizer = ByteTokenizer()
@@ -105,6 +163,71 @@ def test_encoder_applies_learned_ranks_inside_each_regex_chunk() -> None:
         0 <= token_id < tokenizer.get_vocab_size()
         for token_id in tokenizer.encode("aa aa")
     )
+
+
+def test_encoder_does_not_sweep_irrelevant_learned_merges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tokenizer = _synthetic_rank_chain_tokenizer(1_024)
+    merge_pair_calls = 0
+    reference_merge_pair = bpe.merge_pair
+
+    def record_merge_pair(
+        chunk: tuple[int, ...],
+        pair: tuple[int, int],
+        new_token_id: int,
+    ) -> tuple[int, ...]:
+        nonlocal merge_pair_calls
+        merge_pair_calls += 1
+        return reference_merge_pair(chunk, pair, new_token_id)
+
+    monkeypatch.setattr(bpe, "merge_pair", record_merge_pair)
+
+    assert tokenizer.encode("ab") == [BYTE_VOCAB_SIZE]
+    assert merge_pair_calls <= 1
+
+
+def test_ranked_encoder_resolves_overlaps_left_to_right() -> None:
+    tokenizer = _train(("aaaa",), merge_count=1)
+
+    assert tokenizer.encode("aaa") == [BYTE_VOCAB_SIZE, ord("a")]
+    assert tokenizer.encode("aaaa") == [BYTE_VOCAB_SIZE, BYTE_VOCAB_SIZE]
+    assert tokenizer.encode("aaaaa") == [
+        BYTE_VOCAB_SIZE,
+        BYTE_VOCAB_SIZE,
+        ord("a"),
+    ]
+
+
+def test_ranked_encoder_matches_reference_sweep_on_randomized_unicode() -> None:
+    random_generator = random.Random(20260729)
+    alphabet = "aaabbbccc  \n\t0123_+-=é한🚀"
+    training_texts = tuple(
+        "".join(
+            random_generator.choice(alphabet)
+            for _ in range(random_generator.randint(16, 64))
+        )
+        for _ in range(48)
+    )
+    tokenizer = _train(training_texts, merge_count=64)
+    evaluation_texts = (
+        *ROUND_TRIP_TEXTS,
+        "aaa",
+        "aaaa",
+        "abababa",
+        *(
+            "".join(
+                random_generator.choice(alphabet)
+                for _ in range(random_generator.randint(0, 96))
+            )
+            for _ in range(128)
+        ),
+    )
+
+    for text in evaluation_texts:
+        expected = _reference_rank_sweep(tokenizer, text)
+        assert tokenizer.encode(text) == expected
+        assert tokenizer.decode(expected) == text
 
 
 def test_encoder_never_applies_a_learned_pair_across_regex_chunks() -> None:

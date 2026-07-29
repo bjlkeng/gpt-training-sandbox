@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+import heapq
 from os import PathLike
 from types import MappingProxyType
 from typing import Final
@@ -21,6 +22,7 @@ from scratch_llm.tokenizer_artifacts import regex_bpe_identity
 PAIR_TIE_BREAK: Final = (
     "highest frequency, then lexicographically smallest (left_id, right_id)"
 )
+_MISSING_NODE: Final = -1
 TokenPair = tuple[int, int]
 TokenChunk = tuple[int, ...]
 
@@ -61,7 +63,7 @@ class ReferenceBPETrainingResult:
 
 
 class RegexBPETokenizer(Tokenizer):
-    """Readable regex byte-BPE runtime backed by a reference training result."""
+    """Regex byte-BPE runtime backed by one immutable training result."""
 
     def __init__(self, training_result: ReferenceBPETrainingResult) -> None:
         if not isinstance(training_result, ReferenceBPETrainingResult):
@@ -82,6 +84,12 @@ class RegexBPETokenizer(Tokenizer):
                 for token, token_id in training_result.special_token_ids.items()
             }
         )
+        ranked_merges: dict[TokenPair, tuple[int, int]] = {}
+        for rank, merge in enumerate(training_result.merges):
+            ranked_merges.setdefault(merge.pair, (rank, merge.token_id))
+        self._ranked_merges: Mapping[TokenPair, tuple[int, int]] = MappingProxyType(
+            ranked_merges
+        )
         self._identity = regex_bpe_identity(training_result)
 
     def encode(
@@ -97,14 +105,7 @@ class RegexBPETokenizer(Tokenizer):
 
         token_ids: list[int] = []
         for byte_chunk in bpe_encoding_chunks(text):
-            encoded_chunk = tuple(byte_chunk)
-            for merge in self._training_result.merges:
-                encoded_chunk = merge_pair(
-                    encoded_chunk,
-                    merge.pair,
-                    merge.token_id,
-                )
-            token_ids.extend(encoded_chunk)
+            token_ids.extend(self._encode_chunk(byte_chunk))
 
         if prepend is not None:
             token_ids.insert(
@@ -113,6 +114,62 @@ class RegexBPETokenizer(Tokenizer):
         if append is not None:
             token_ids.append(self._resolve_special_token(append, argument="append"))
         return token_ids
+
+    def _encode_chunk(self, byte_chunk: bytes) -> list[int]:
+        """Merge only learned pairs that are active inside one regex chunk."""
+
+        values = list(byte_chunk)
+        node_count = len(values)
+        if node_count < 2 or not self._ranked_merges:
+            return values
+
+        previous_nodes = [index - 1 for index in range(node_count)]
+        next_nodes = [index + 1 for index in range(node_count)]
+        next_nodes[-1] = _MISSING_NODE
+        candidate_heap: list[tuple[int, int, int]] = []
+
+        def add_candidate(left_node: int) -> None:
+            right_node = next_nodes[left_node]
+            if right_node == _MISSING_NODE:
+                return
+            ranked_merge = self._ranked_merges.get(
+                (values[left_node], values[right_node])
+            )
+            if ranked_merge is not None:
+                rank, _ = ranked_merge
+                heapq.heappush(candidate_heap, (rank, left_node, right_node))
+
+        for left_node in range(node_count - 1):
+            add_candidate(left_node)
+
+        while candidate_heap:
+            rank, left_node, right_node = heapq.heappop(candidate_heap)
+            if next_nodes[left_node] != right_node:
+                continue
+            ranked_merge = self._ranked_merges.get(
+                (values[left_node], values[right_node])
+            )
+            if ranked_merge is None or ranked_merge[0] != rank:
+                continue
+
+            values[left_node] = ranked_merge[1]
+            next_node = next_nodes[right_node]
+            next_nodes[left_node] = next_node
+            next_nodes[right_node] = _MISSING_NODE
+            if next_node != _MISSING_NODE:
+                previous_nodes[next_node] = left_node
+
+            previous_node = previous_nodes[left_node]
+            if previous_node != _MISSING_NODE:
+                add_candidate(previous_node)
+            add_candidate(left_node)
+
+        encoded: list[int] = []
+        node = 0
+        while node != _MISSING_NODE:
+            encoded.append(values[node])
+            node = next_nodes[node]
+        return encoded
 
     def decode(self, token_ids: Iterable[int]) -> str:
         """Concatenate raw token bytes before one replacement-mode UTF-8 decode."""
