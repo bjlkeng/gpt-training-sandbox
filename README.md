@@ -790,6 +790,16 @@ Only `val_bpb` and `eval/val_bpb` name this compatibility result. Full-document
 BPB and training-loader names are rejected as aliases, because they describe a
 different context and source-retention distribution.
 
+The separate `full_documents_v1` domain makes one finite manifest pass in
+manifest shard/document order. Complete first pieces use deterministic
+best-fit rows; oversized documents continue in dedicated windows whose context
+is the previous ordinary token. Every ordinary validation token and byte is
+supervised exactly once, while carried context, residual positions, and padded
+batch rows are excluded. Its reserved metric names are
+`val_bpb_full_documents` and `eval/val_bpb_full_documents`; it has no upstream
+reference commit or random seed because the protocol is local and
+deterministic.
+
 The shared BPB kernel consumes unreduced cross-entropy nats, target IDs, the
 canonical `token_bytes` table, and an optional boolean supervision mask. Only
 non-negative, explicitly supervised targets with a positive raw byte length
@@ -804,8 +814,8 @@ metadata. It rejects inconsistent counts, retention ratios, non-finite values,
 and zero-byte results before callers can serialize its canonical JSON.
 Document selection and packing remain protocol-owned: the existing `val_bpb`
 name is reserved for a frozen nanochat-compatible packing/cropping protocol. A
-distinct `val_bpb_full_documents` metric will use continuation-aware windows
-and count every validation byte once. The two BPB values must not be compared
+distinct `val_bpb_full_documents` metric uses continuation-aware windows and
+counts every validation byte once. The two BPB values must not be compared
 as if their evaluation distributions were identical. CORE remains an
 independent fixed-task metric. Base sampling will stop on generated BOS, while
 chat/SFT generation learns and stops on `<|assistant_end|>` (with BOS also
