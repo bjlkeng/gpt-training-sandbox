@@ -15,6 +15,10 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from torch.utils.data import DataLoader
 
+from scratch_llm.accelerator_memory import (
+    AcceleratorMemorySnapshot,
+    collect_accelerator_memory,
+)
 from scratch_llm.bpe import RegexBPETokenizer
 from scratch_llm.checkpoint import (
     load_model_checkpoint,
@@ -24,6 +28,10 @@ from scratch_llm.checkpoint import (
 from scratch_llm.config import ProjectConfig
 from scratch_llm.data import NextTokenDataset, create_token_loader
 from scratch_llm.model import GPT
+from scratch_llm.oom_diagnostics import (
+    PretrainingOOMError,
+    diagnose_out_of_memory,
+)
 from scratch_llm.optim import build_lr_scheduler, build_optimizer
 from scratch_llm.run import RunPaths
 from scratch_llm.tokenizer import NANOCHAT_SPECIAL_TOKENS, ByteTokenizer, Tokenizer
@@ -326,6 +334,36 @@ def run_pretraining(
     resume_from: str | Path | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> PretrainingResult:
+    """Run pretraining and transform only supported PyTorch OOM failures."""
+
+    try:
+        return _run_pretraining_impl(
+            config,
+            paths=paths,
+            tracker=tracker,
+            resume_from=resume_from,
+            progress=progress,
+        )
+    except torch.OutOfMemoryError as error:
+        memory = _collect_memory_after_oom(config.run.device)
+        diagnostic = diagnose_out_of_memory(
+            error,
+            config=config,
+            memory=memory,
+        )
+        assert diagnostic is not None
+        _clear_accelerator_cache_after_oom(config.run.device)
+        raise PretrainingOOMError(diagnostic) from error
+
+
+def _run_pretraining_impl(
+    config: ProjectConfig,
+    *,
+    paths: RunPaths,
+    tracker: Tracker,
+    resume_from: str | Path | None = None,
+    progress: Callable[[str], None] | None = None,
+) -> PretrainingResult:
     """Train or resume either supported data profile through one shared loop."""
 
     if not isinstance(config, ProjectConfig):
@@ -453,19 +491,26 @@ def run_pretraining(
             seq_len=config.model.seq_len,
             total_batch_size_tokens=config.train.total_batch_size_tokens,
         )
-        step_results = run_training_steps(
-            model,
-            batches,
-            optimizer,
-            scheduler,
-            max_steps=config.train.max_steps,
-            grad_accum_steps=grad_accum_steps,
-            grad_clip=config.train.grad_clip,
-            device=device,
-            tracker=tracker,
-            log_every=config.train.log_every,
-            on_step=save_periodic_checkpoint,
-        )
+        try:
+            step_results = run_training_steps(
+                model,
+                batches,
+                optimizer,
+                scheduler,
+                max_steps=config.train.max_steps,
+                grad_accum_steps=grad_accum_steps,
+                grad_clip=config.train.grad_clip,
+                device=device,
+                tracker=tracker,
+                log_every=config.train.log_every,
+                on_step=save_periodic_checkpoint,
+            )
+        except torch.OutOfMemoryError:
+            try:
+                optimizer.zero_grad(set_to_none=True)
+            except Exception:
+                pass
+            raise
         final_step = scheduler.last_epoch
         save_checkpoint(
             checkpoint_path,
@@ -484,6 +529,31 @@ def run_pretraining(
             final_step=final_step,
             steps=tuple(step_results),
         )
+
+
+def _collect_memory_after_oom(device: str) -> AcceleratorMemorySnapshot:
+    try:
+        return collect_accelerator_memory(device)
+    except Exception as error:
+        return AcceleratorMemorySnapshot(
+            device=torch.device(device),
+            available=False,
+            unavailable_reason=(
+                "memory snapshot collection failed after OOM: "
+                f"{type(error).__name__}: {error}"
+            ),
+        )
+
+
+def _clear_accelerator_cache_after_oom(device: str) -> None:
+    requested = torch.device(device)
+    if requested.type != "cuda":
+        return
+    try:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
 
 
 def run_tiny_pretraining(
@@ -507,6 +577,7 @@ def run_tiny_pretraining(
 
 __all__ = [
     "PretrainingError",
+    "PretrainingOOMError",
     "PretrainingResult",
     "prepare_pretraining_batch",
     "run_pretraining",
