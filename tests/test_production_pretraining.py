@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 import torch
@@ -114,6 +116,21 @@ def _run_module(module: str, *arguments: str) -> subprocess.CompletedProcess[str
         capture_output=True,
         text=True,
     )
+
+
+def _assert_nested_state_equal(actual: Any, expected: Any) -> None:
+    if isinstance(expected, torch.Tensor):
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    elif isinstance(expected, dict):
+        assert set(actual) == set(expected)
+        for key, value in expected.items():
+            _assert_nested_state_equal(actual[key], value)
+    elif isinstance(expected, (list, tuple)):
+        assert len(actual) == len(expected)
+        for actual_item, expected_item in zip(actual, expected, strict=True):
+            _assert_nested_state_equal(actual_item, expected_item)
+    else:
+        assert actual == expected
 
 
 def test_packed_batches_apply_ignore_index_without_mutating_loader_values() -> None:
@@ -259,7 +276,11 @@ def test_scripts_pretrain_runs_offline_regex_bpe_to_sample(
     assert [record["step"] for record in metric_records] == [1, 2]
 
     payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-    assert payload["format_version"] == 2
+    assert payload["format_version"] == 3
+    assert payload["continuation"]["loader_format"] == (
+        "scratch_llm_document_packing_loader_state"
+    )
+    assert payload["continuation"]["tracker_step"] == 2
     assert payload["tokenizer"] == {
         "artifact_path": str(artifact_dir.resolve()),
         "identity": tokenizer.get_identity(),
@@ -286,6 +307,110 @@ def test_scripts_pretrain_runs_offline_regex_bpe_to_sample(
     )
     assert generated.shape == (1, prompt.shape[1] + 3)
     assert torch.all((0 <= generated) & (generated < PRODUCTION_VOCAB_SIZE))
+
+
+@pytest.mark.parametrize("strategy", ["flat", "packed"])
+def test_exact_resume_matches_uninterrupted_batches_losses_and_state(
+    tmp_path: Path,
+    strategy: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, artifact_dir, tokenized_dir = _write_production_inputs(tmp_path)
+    consumed_batches: list[tuple[torch.Tensor, torch.Tensor]] = []
+    original_prepare = pretraining.prepare_pretraining_batch
+
+    def record_batch(
+        batch: tuple[torch.Tensor, ...] | list[torch.Tensor],
+        *,
+        strategy: str,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        prepared = original_prepare(
+            batch,
+            strategy=strategy,  # type: ignore[arg-type]
+        )
+        consumed_batches.append((prepared[0].clone(), prepared[1].clone()))
+        return prepared
+
+    monkeypatch.setattr(pretraining, "prepare_pretraining_batch", record_batch)
+    uninterrupted_config = _production_config(
+        tmp_path,
+        artifact_dir=artifact_dir,
+        tokenized_dir=tokenized_dir,
+        strategy=strategy,
+        run_name=f"uninterrupted-{strategy}",
+        max_steps=4,
+    )
+    uninterrupted = run_pretraining(
+        uninterrupted_config,
+        paths=prepare_run(uninterrupted_config),
+        tracker=NullTracker(),
+    )
+    uninterrupted_batches = tuple(consumed_batches)
+    consumed_batches.clear()
+    interruption = uninterrupted.paths.checkpoints_dir / "step_000002.pt"
+
+    resumed_config = deepcopy(uninterrupted_config)
+    resumed_config.run.name = f"resumed-{strategy}"
+    resumed = run_pretraining(
+        resumed_config,
+        paths=prepare_run(resumed_config),
+        tracker=NullTracker(),
+        resume_from=interruption,
+    )
+
+    assert len(uninterrupted_batches) == 4
+    assert len(consumed_batches) == 2
+    for resumed_batch, uninterrupted_batch in zip(
+        consumed_batches,
+        uninterrupted_batches[2:],
+        strict=True,
+    ):
+        _assert_nested_state_equal(resumed_batch, uninterrupted_batch)
+    assert resumed.initial_step == 2
+    assert resumed.final_step == uninterrupted.final_step == 4
+    assert [result.loss for result in resumed.steps] == pytest.approx(
+        [result.loss for result in uninterrupted.steps[2:]],
+        rel=0,
+        abs=0,
+    )
+    assert [result.grad_norm for result in resumed.steps] == pytest.approx(
+        [result.grad_norm for result in uninterrupted.steps[2:]],
+        rel=0,
+        abs=0,
+    )
+
+    uninterrupted_payload = torch.load(
+        uninterrupted.checkpoint_path,
+        map_location="cpu",
+        weights_only=True,
+    )
+    resumed_payload = torch.load(
+        resumed.checkpoint_path,
+        map_location="cpu",
+        weights_only=True,
+    )
+    assert uninterrupted_payload["format_version"] == 3
+    assert resumed_payload["format_version"] == 3
+    for field in ("model", "optimizer", "scheduler"):
+        _assert_nested_state_equal(
+            resumed_payload[field],
+            uninterrupted_payload[field],
+        )
+    assert (
+        resumed_payload["continuation"]["loader_state"]
+        == uninterrupted_payload["continuation"]["loader_state"]
+    )
+    assert (
+        resumed_payload["continuation"]["rng_state"]
+        == uninterrupted_payload["continuation"]["rng_state"]
+    )
+    assert resumed_payload["continuation"]["tracker_step"] == 4
+    assert (
+        resumed_payload["continuation"]["total_training_flops"]
+        == uninterrupted_payload["continuation"]["total_training_flops"]
+        == 0.0
+    )
+    assert resumed_payload["continuation"]["total_training_time_seconds"] >= 0.0
 
 
 @pytest.mark.parametrize(

@@ -584,9 +584,32 @@ uv run python -m scripts.pretrain \
   --resume runs/smoke/checkpoints/step_000075.pt
 ```
 
-This byte-profile resume contract restores the model, optimizer, and scheduler
-and advances from the saved step. Exact RNG and dataloader-position continuity
-remain later roadmap work.
+Pretraining checkpoints use checkpoint format version 3. State is captured at
+the completed optimizer-step boundary after all microbatches, the optimizer
+and scheduler updates, and the tracker step. The checkpoint atomically records
+the concrete loader format and next-batch state, its corpus or manifest
+identity, Python and NumPy RNG state, PyTorch CPU RNG state, every CUDA
+generator state available to a CUDA run, and cumulative training-time/FLOP
+counters. Resume reconstructs and validates the model, optimizer, scheduler,
+tokenizer, and data pipeline before installing the loader and RNG continuation
+as one transaction. Model-only sampling and evaluation loads preserve the
+caller's global RNG streams.
+
+Format-version-1 and version-2 checkpoints remain valid for sampling. They do
+not contain exact loader/RNG continuation, so training resume rejects them by
+default. To migrate one explicitly, accept a fresh data/RNG position and reset
+telemetry counters with:
+
+```bash
+uv run python -m scripts.pretrain \
+  --config configs/smoke.yaml \
+  --override run.name=smoke-migrated \
+  --resume runs/legacy/checkpoints/last.pt \
+  --allow-non-exact-resume
+```
+
+That opt-in migration restores the model, optimizer, scheduler, and completed
+step, but the resulting continuation is intentionally not bit-exact.
 
 ### Production regex-BPE pretraining
 
@@ -617,13 +640,13 @@ windows. `packed` preserves document boundaries and converts its boolean loss
 mask to `ignore_index=-1` targets immediately before the shared training loop;
 the loader's original target tensor is not changed.
 
-New checkpoints use format version 2. Byte checkpoints record their stable
-runtime tokenizer identity. Regex-BPE checkpoints record the canonical
-absolute artifact path plus tokenizer identity, vocabulary size, and special
-tokens, allowing the shared sampling and training loaders to reconstruct and
-cross-check the exact tokenizer. The loader retains explicit read
-compatibility for format-version-1 byte checkpoints; version 1 never attempts
-to represent regex-BPE artifacts.
+The version-2-and-newer tokenizer contract records a byte tokenizer's stable
+runtime identity. Regex-BPE checkpoints record the canonical absolute artifact
+path plus tokenizer identity, vocabulary size, and special tokens, allowing
+the shared sampling and training loaders to reconstruct and cross-check the
+exact tokenizer. The loader retains explicit read compatibility for
+format-version-1 byte checkpoints; version 1 never attempts to represent
+regex-BPE artifacts.
 
 ### Base-model preset matrix
 

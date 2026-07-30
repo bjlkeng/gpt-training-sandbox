@@ -32,6 +32,14 @@ def build_parser() -> argparse.ArgumentParser:
             "run.name and run.output_dir."
         ),
     )
+    parser.add_argument(
+        "--allow-non-exact-resume",
+        action="store_true",
+        help=(
+            "Explicitly migrate a legacy checkpoint without loader/RNG "
+            "continuity. The resumed run is not bit-exact."
+        ),
+    )
     return parser
 
 
@@ -41,6 +49,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
     config = resolve_config_arguments(parser, arguments)
+    if arguments.allow_non_exact_resume and arguments.resume is None:
+        parser.error("--allow-non-exact-resume requires --resume")
 
     if arguments.dry_run:
         if arguments.resume is not None:
@@ -62,6 +72,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 tracker=tracker,
                 resume_from=arguments.resume,
                 progress=lambda message: print(message, file=sys.stderr, flush=True),
+                allow_non_exact_resume=arguments.allow_non_exact_resume,
             )
         except (
             CheckpointError,

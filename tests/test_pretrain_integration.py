@@ -5,7 +5,11 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
+
+import torch
 
 from scratch_llm.checkpoint import load_model_checkpoint
 from scratch_llm.config import ProjectConfig, dump_config, load_config
@@ -59,6 +63,21 @@ def _metric_records(path: Path) -> list[dict[str, object]]:
         for line in path.read_text(encoding="utf-8").splitlines()
         if (record := json.loads(line))["record_type"] == "metrics"
     ]
+
+
+def _assert_nested_state_equal(actual: Any, expected: Any) -> None:
+    if isinstance(expected, torch.Tensor):
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    elif isinstance(expected, Mapping):
+        assert set(actual) == set(expected)
+        for key, value in expected.items():
+            _assert_nested_state_equal(actual[key], value)
+    elif isinstance(expected, Sequence) and not isinstance(expected, (str, bytes)):
+        assert len(actual) == len(expected)
+        for actual_item, expected_item in zip(actual, expected, strict=True):
+            _assert_nested_state_equal(actual_item, expected_item)
+    else:
+        assert actual == expected
 
 
 def test_pretrain_checkpoint_sample_metrics_and_resume_workflow(
@@ -144,3 +163,24 @@ def test_pretrain_checkpoint_sample_metrics_and_resume_workflow(
     assert [record["record_type"] for record in resumed_records].count("config") == 1
     assert load_model_checkpoint(resumed_checkpoint).step == 6
     assert "Resumed from step 5" in resumed.stdout
+
+    fresh_payload = torch.load(
+        final_checkpoint,
+        map_location="cpu",
+        weights_only=True,
+    )
+    resumed_payload = torch.load(
+        resumed_checkpoint,
+        map_location="cpu",
+        weights_only=True,
+    )
+    for field in ("model", "optimizer", "scheduler"):
+        _assert_nested_state_equal(resumed_payload[field], fresh_payload[field])
+    assert (
+        resumed_payload["continuation"]["loader_state"]
+        == fresh_payload["continuation"]["loader_state"]
+    )
+    assert (
+        resumed_payload["continuation"]["rng_state"]
+        == fresh_payload["continuation"]["rng_state"]
+    )

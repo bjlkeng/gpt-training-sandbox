@@ -374,6 +374,7 @@ def test_cpu_training_loop_runs_forward_backward_clip_optimizer_and_scheduler(
     original_forward = model.forward
     original_clip = training.clip_grad_norm_
     original_scheduler_step = scheduler.step
+    clock = iter((10.0, 12.5))
 
     def record_forward(*args: Any, **kwargs: Any) -> Tensor:
         events.append("forward")
@@ -401,10 +402,14 @@ def test_cpu_training_loop_runs_forward_backward_clip_optimizer_and_scheduler(
     def record_completed_step(step: int, result: Any) -> None:
         assert step == scheduler.last_epoch == 1
         assert torch.isfinite(torch.tensor(result.loss))
+        assert result.step_duration_seconds == 2.5
+        assert result.total_training_time_seconds == 10.0
+        assert result.total_training_flops == 123.0
         events.append("callback")
 
     monkeypatch.setattr(model, "forward", record_forward)
     monkeypatch.setattr(training, "clip_grad_norm_", record_clip)
+    monkeypatch.setattr(training, "perf_counter", lambda: next(clock))
     monkeypatch.setattr(scheduler, "step", record_scheduler_step)
     gradient_hook = model.token_embedding.weight.register_hook(record_backward)
     optimizer_hook = optimizer.register_step_post_hook(record_optimizer_step)
@@ -419,6 +424,8 @@ def test_cpu_training_loop_runs_forward_backward_clip_optimizer_and_scheduler(
         grad_clip=train_config.grad_clip,
         device="cpu",
         on_step=record_completed_step,
+        initial_total_training_time_seconds=7.5,
+        initial_total_training_flops=123.0,
     )
     gradient_hook.remove()
     optimizer_hook.remove()
@@ -434,6 +441,9 @@ def test_cpu_training_loop_runs_forward_backward_clip_optimizer_and_scheduler(
     assert len(results) == 1
     assert torch.isfinite(torch.tensor(results[0].loss))
     assert torch.isfinite(torch.tensor(results[0].grad_norm))
+    assert results[0].step_duration_seconds == 2.5
+    assert results[0].total_training_time_seconds == 10.0
+    assert results[0].total_training_flops == 123.0
     assert scheduler.last_epoch == 1
     assert all(parameter.device.type == "cpu" for parameter in model.parameters())
 
