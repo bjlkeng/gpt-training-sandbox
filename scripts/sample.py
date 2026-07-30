@@ -8,7 +8,7 @@ from collections.abc import Sequence
 import torch
 
 from scratch_llm.checkpoint import CheckpointError, load_model_checkpoint
-from scratch_llm.generation import generate
+from scratch_llm.generation import generate_sequences
 from scripts._common import checkpoint_parser
 
 
@@ -91,16 +91,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dtype=torch.long,
                 device=device,
             )
-            generated = generate(
+            bos_token_id = checkpoint.tokenizer.get_bos_token_id()
+            generated = generate_sequences(
                 checkpoint.model,
                 token_ids,
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
                 top_k=top_k,
                 seed=seed,
+                stop_token_ids={bos_token_id},
             )
             first_visible_token = 1 if used_synthetic_bos else 0
-            decoded_ids = generated[0, first_visible_token:].cpu().tolist()
+            decoded_ids = generated.sequences[0].token_ids[first_visible_token:]
             print(checkpoint.tokenizer.decode(decoded_ids))
     except (CheckpointError, OSError, RuntimeError, TypeError, ValueError) as error:
         parser.error(str(error))
