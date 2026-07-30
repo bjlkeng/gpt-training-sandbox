@@ -774,6 +774,22 @@ at 3.13 GiB RSS. This was a single-process CPU run on an AMD Ryzen 5 5600 with
 Python 3.12.13 and PyTorch 2.13.0; it is a measured planning envelope, not a
 cross-machine guarantee.
 
+The reserved compatibility domain `nanochat_compat_v1` pins nanochat commit
+[`41865401f73ff1c5321ae53297bceb2b78d4c8b4`](https://github.com/karpathy/nanochat/tree/41865401f73ff1c5321ae53297bceb2b78d4c8b4).
+It reads only the fixed final validation parquet, preserves row-group and
+document order across repeated cycles, tokenizes in batches of 128 with BOS
+prepended, and maintains nanochat's 1,000-document buffer. Each `T + 1` row
+repeatedly takes the first largest document that fits. When none fits, it takes
+the first shortest document, retains only the prefix needed to fill the row,
+and the cropped suffix is discarded rather than continued in another window.
+The resolved `B`, `T`, requested evaluation tokens, floor-divided evaluation
+steps, buffer settings, tie rules, pinned source-file hashes, and processed
+model-token count are embedded in every result's `reference_config`.
+
+Only `val_bpb` and `eval/val_bpb` name this compatibility result. Full-document
+BPB and training-loader names are rejected as aliases, because they describe a
+different context and source-retention distribution.
+
 The shared BPB kernel consumes unreduced cross-entropy nats, target IDs, the
 canonical `token_bytes` table, and an optional boolean supervision mask. Only
 non-negative, explicitly supervised targets with a positive raw byte length

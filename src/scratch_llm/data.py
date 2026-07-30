@@ -6,8 +6,6 @@ from bisect import bisect_right
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 import heapq
-import hashlib
-import json
 import logging
 import re
 from operator import index as integer_index
@@ -37,6 +35,7 @@ from scratch_llm.tokenized_data import (
     TokenizedShardReader,
     TokenizedShardSource,
     TokenizedSplitManifest,
+    tokenized_manifest_identity,
     write_tokenized_shards,
 )
 from scratch_llm.tokenizer import VOCAB_SIZE, Tokenizer
@@ -452,7 +451,7 @@ class RandomOffsetTokenLoader(
         self.valid_start_count = valid_start_count
         self._mapped_shards = mapped_shards
         self._cumulative_starts = tuple(cumulative_starts)
-        self._manifest_identity = _tokenized_manifest_identity(reader.manifest)
+        self._manifest_identity = tokenized_manifest_identity(reader.manifest)
         self._generator = torch.Generator(device="cpu")
         self._generator.manual_seed(seed)
         self.position = 0
@@ -792,7 +791,7 @@ class DocumentPackingTokenLoader(
         self._mapped_shards = mapped_shards
         self._document_spans = document_spans
         self._bos_token_id = bos_token_id
-        self._manifest_identity = _tokenized_manifest_identity(reader.manifest)
+        self._manifest_identity = tokenized_manifest_identity(reader.manifest)
         self._planning_progress = planning_progress
         self._generator = torch.Generator(device="cpu")
         self._generator.manual_seed(seed)
@@ -1216,17 +1215,6 @@ def _packing_rng_state(value: object) -> Tensor:
             "loader state rng_state must contain only integer bytes"
         )
     return torch.tensor(value, dtype=torch.uint8, device="cpu")
-
-
-def _tokenized_manifest_identity(manifest: TokenizedDatasetManifest) -> str:
-    payload = json.dumps(
-        manifest.to_dict(),
-        allow_nan=False,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
 def _loader_state_integer(value: object, *, name: str) -> int:
