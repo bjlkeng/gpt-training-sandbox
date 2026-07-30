@@ -21,7 +21,6 @@ from scratch_llm.data import (
     TokenizedDocumentSpan,
     TokenizedShardReader,
     TokenizedShardSource,
-    _best_fit_document_rows,
     _plan_best_fit_document_rows,
     create_token_loader,
     write_tokenized_shards,
@@ -164,7 +163,11 @@ def test_capacity_indexed_planner_matches_linear_reference(seed: int) -> None:
     order = list(range(len(spans)))
     rng.shuffle(order)
 
-    actual = _best_fit_document_rows(spans, order=order, seq_len=seq_len)
+    actual, _ = _plan_best_fit_document_rows(
+        spans,
+        order=order,
+        seq_len=seq_len,
+    )
     expected = _reference_best_fit_rows(spans, order=order, seq_len=seq_len)
 
     assert _row_signature(actual) == expected
@@ -182,7 +185,11 @@ def test_capacity_index_uses_earliest_row_for_equal_best_fit() -> None:
         for index, token_count in enumerate((5, 5, 3))
     )
 
-    rows = _best_fit_document_rows(spans, order=range(3), seq_len=9)
+    rows, _ = _plan_best_fit_document_rows(
+        spans,
+        order=range(3),
+        seq_len=9,
+    )
 
     assert [[piece.start for piece in row.pieces] for row in rows] == [
         [0, 20],

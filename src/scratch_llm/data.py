@@ -1025,20 +1025,6 @@ def create_token_loader(
     raise ValueError(f"strategy must be 'flat' or 'packed', got {strategy!r}")
 
 
-def _best_fit_document_rows(
-    spans: Sequence[TokenizedDocumentSpan],
-    *,
-    order: Sequence[int],
-    seq_len: int,
-) -> tuple[_PackedRow, ...]:
-    rows, _ = _plan_best_fit_document_rows(
-        spans,
-        order=order,
-        seq_len=seq_len,
-    )
-    return rows
-
-
 def _plan_best_fit_document_rows(
     spans: Sequence[TokenizedDocumentSpan],
     *,
