@@ -602,7 +602,7 @@ data:
 tokenizer:
   type: regex_byte_bpe
   vocab_size: 32768
-  artifact_dir: runs/tokenizer/artifacts/tokenizer
+  artifact_dir: runs/tokenizer-32k/artifacts/tokenizer
 ```
 
 The command loads and validates the complete regex-BPE artifact directory,
@@ -624,6 +624,55 @@ tokens, allowing the shared sampling and training loaders to reconstruct and
 cross-check the exact tokenizer. The loader retains explicit read
 compatibility for format-version-1 byte checkpoints; version 1 never attempts
 to represent regex-BPE artifacts.
+
+### Base-model preset matrix
+
+Three production base-pretraining presets share the regex byte-BPE and
+tokenized ClimbMix inputs above:
+
+| Config | Model shape | Unique parameters | Token budget |
+| --- | --- | ---: | --- |
+| `configs/base_smoke.yaml` | 2 layers, width 128, 2 heads, context 128 | 4,604,544 | 4 × 128 × 16 = 8,192 |
+| `configs/tiny_20m_3090.yaml` | 6 layers, width 384, 6 heads, context 512 | 23,401,344 | 4 × 512 × 32 = 65,536 |
+| `configs/small_45m_3090.yaml` | 8 layers, width 512, 8 heads, context 1,024 | 42,476,032 | 1 × 1,024 × 64 = 65,536 |
+
+The counts deduplicate each tied token-embedding/LM-head weight. All three are
+correctness-first float32 baselines with compilation and activation
+checkpointing disabled. They do not require autocast or `GradScaler`; mixed
+precision, scaling, and checkpointed-activation variants belong to the later
+performance phase. `configs/smoke.yaml` remains the smaller CPU-only,
+byte-tokenizer first-sprint regression.
+
+The three named presets and repeatable dotted overrides are the orchestration
+boundary. Hydra is not justified for this matrix: it does not yet need config
+groups, multirun launchers, sweep directories, or another override language.
+
+Validate the tiny preset without allocating a model, loading artifacts, or
+requiring a GPU:
+
+```bash
+uv run python -m scripts.pretrain --config configs/tiny_20m_3090.yaml --dry-run
+```
+
+After `runs/tokenizer-32k/artifacts/tokenizer/` and
+`data/tokenized/manifest.json` exist, verify the complete tiny path on an RTX
+3090 with two optimizer steps:
+
+```bash
+uv run python -m scripts.pretrain \
+  --config configs/tiny_20m_3090.yaml \
+  --override run.name=tiny-20m-3090-smoke \
+  --override train.max_steps=2 \
+  --override train.warmup_steps=0 \
+  --override train.warmdown_ratio=0.0 \
+  --override train.save_every=1 \
+  --override train.log_every=1 \
+  --no-wandb
+```
+
+Use a fresh run name for each verification. A successful command completes
+both steps and writes `runs/tiny-20m-3090-smoke/checkpoints/last.pt`; GPU
+hardware is deliberately not required by the test suite.
 
 ### Random token batches
 
