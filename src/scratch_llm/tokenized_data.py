@@ -169,6 +169,24 @@ class TokenizedDatasetManifest:
         }
 
 
+def tokenized_manifest_identity(manifest: TokenizedDatasetManifest) -> str:
+    """Return the canonical SHA-256 identity of a validated manifest."""
+
+    if not isinstance(manifest, TokenizedDatasetManifest):
+        raise TypeError(
+            "manifest must be a TokenizedDatasetManifest, got "
+            f"{type(manifest).__name__}"
+        )
+    payload = json.dumps(
+        manifest.to_dict(),
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
 def write_tokenized_shards(
     output_dir: str | os.PathLike[str],
     *,
@@ -1140,5 +1158,6 @@ __all__ = [
     "TokenizedShardReader",
     "TokenizedShardSource",
     "TokenizedSplitManifest",
+    "tokenized_manifest_identity",
     "write_tokenized_shards",
 ]

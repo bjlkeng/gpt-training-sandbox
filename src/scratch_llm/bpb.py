@@ -380,10 +380,16 @@ class BaseValidationResult:
             raise ValueError("unique_source_tokens must not exceed source_tokens")
         if self.unique_source_bytes > self.source_bytes:
             raise ValueError("unique_source_bytes must not exceed source_bytes")
-        if self.counted_target_tokens != self.unique_source_tokens:
-            raise ValueError("counted_target_tokens must equal unique_source_tokens")
-        if self.counted_target_bytes != self.unique_source_bytes:
-            raise ValueError("counted_target_bytes must equal unique_source_bytes")
+        if self.counted_target_tokens < self.unique_source_tokens:
+            raise ValueError(
+                "counted_target_tokens must be greater than or equal to "
+                "unique_source_tokens"
+            )
+        if self.counted_target_bytes < self.unique_source_bytes:
+            raise ValueError(
+                "counted_target_bytes must be greater than or equal to "
+                "unique_source_bytes"
+            )
         if self.processed_model_tokens < self.counted_target_tokens:
             raise ValueError(
                 "processed_model_tokens must be greater than or equal to "
@@ -437,6 +443,18 @@ class BaseValidationResult:
         object.__setattr__(self, "source_byte_retention", source_byte_retention)
         object.__setattr__(self, "total_nats", total_nats)
         object.__setattr__(self, "bpb", bpb)
+
+    @property
+    def discarded_source_tokens(self) -> int:
+        """Return source tokens never retained by this protocol."""
+
+        return self.source_tokens - self.unique_source_tokens
+
+    @property
+    def discarded_source_bytes(self) -> int:
+        """Return source bytes never retained by this protocol."""
+
+        return self.source_bytes - self.unique_source_bytes
 
     @classmethod
     def from_accumulation(
