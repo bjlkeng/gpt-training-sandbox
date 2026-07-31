@@ -714,6 +714,21 @@ documents span multiple tokenized shards. Continuation-aware packing is state
 format version 2, so version 1 states fail explicitly instead of silently
 resuming into a different batch plan.
 
+Planning uses residual-capacity buckets with earliest-row priority, so choosing
+a best-fit row is bounded by the `seq_len + 1` capacity domain instead of
+scanning every row already created. The pretraining command reports the start,
+each 100,000-document milestone, and completion counters to stderr; these
+messages distinguish CPU planning from a stalled accelerator run.
+
+As a reference envelope, the 16-shard `small_45m_3090` training manifest
+(1,354,752 documents, 871,904,857 tokens, and 1,607,935 planned pieces) reached
+its first packed batch in 10.0 seconds after artifact loading began, including
+3.6 seconds of tokenizer/manifest validation and 6.4 seconds of planning. The
+whole benchmark process, including Python imports, took 12.9 seconds and peaked
+at 3.13 GiB RSS. This was a single-process CPU run on an AMD Ryzen 5 5600 with
+Python 3.12.13 and PyTorch 2.13.0; it is a measured planning envelope, not a
+cross-machine guarantee.
+
 The shared BPB kernel consumes unreduced cross-entropy nats, target IDs, the
 canonical `token_bytes` table, and an optional boolean supervision mask. Only
 non-negative, explicitly supervised targets with a positive raw byte length

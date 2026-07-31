@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from bisect import bisect_right
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+import heapq
 import hashlib
 import json
+import logging
 import re
 from operator import index as integer_index
 from pathlib import Path
@@ -56,6 +58,7 @@ _RANDOM_OFFSET_LOADER_STATE_KEYS = frozenset(
     }
 )
 _MAX_TORCH_SEED = 2**63 - 1
+_PACKING_PROGRESS_INTERVAL = 100_000
 DOCUMENT_PACKING_LOADER_STATE_FORMAT = "scratch_llm_document_packing_loader_state"
 DOCUMENT_PACKING_LOADER_STATE_FORMAT_VERSION = 2
 _DOCUMENT_PACKING_LOADER_STATE_KEYS = frozenset(
@@ -74,6 +77,7 @@ _DOCUMENT_PACKING_LOADER_STATE_KEYS = frozenset(
     }
 )
 _BOS_TOKEN = "<|bos|>"
+_LOGGER = logging.getLogger(__name__)
 
 
 def list_parquet_files(data_dir: str | Path) -> list[Path]:
@@ -424,7 +428,6 @@ class RandomOffsetTokenLoader(
             raise ValueError(
                 f"seed must be in range [0, {_MAX_TORCH_SEED}], got {seed}"
             )
-
         mapped_shards = reader.shards(split)
         cumulative_starts: list[int] = []
         valid_start_count = 0
@@ -609,6 +612,130 @@ class _PackedRow:
     used_token_count: int
 
 
+@dataclass(frozen=True)
+class DocumentPackingPlanStats:
+    """Deterministic work counters for one capacity-indexed epoch plan."""
+
+    document_count: int
+    piece_count: int
+    row_count: int
+    capacity_searches: int
+    row_candidate_checks: int
+    max_capacity_bucket_size: int
+
+
+class _AvailableCapacities:
+    """Ordered set of non-empty capacity buckets backed by an integer bitset."""
+
+    def __init__(self) -> None:
+        self._bits = 0
+
+    def add(self, capacity: int) -> None:
+        """Mark one exact residual-capacity bucket as non-empty."""
+
+        self._bits |= 1 << capacity
+
+    def discard(self, capacity: int) -> None:
+        """Mark one exact residual-capacity bucket as empty."""
+
+        self._bits &= ~(1 << capacity)
+
+    def smallest_at_least(self, required_capacity: int) -> int | None:
+        """Return the smallest available capacity that meets the requirement.
+
+        Bit position ``capacity`` records whether that exact bucket is non-empty.
+        Shifting by the requirement discards undersized buckets and moves an exact
+        fit to bit zero. The lowest remaining set bit is therefore the smallest
+        available capacity offset above the requirement.
+        """
+
+        eligible_capacity_bits = self._bits >> required_capacity
+        if eligible_capacity_bits == 0:
+            return None
+        smallest_offset_bit = eligible_capacity_bits & -eligible_capacity_bits
+        smallest_capacity_offset = smallest_offset_bit.bit_length() - 1
+        return required_capacity + smallest_capacity_offset
+
+
+class _CapacityIndexedRows:
+    """Mutable best-fit rows indexed by their exact residual capacity."""
+
+    def __init__(self, row_token_count: int) -> None:
+        self.row_token_count = row_token_count
+        self.rows: list[list[_DocumentPiece]] = []
+        self.used_token_counts: list[int] = []
+        self.capacity_searches = 0
+        self.row_candidate_checks = 0
+        self.max_capacity_bucket_size = 0
+        self._capacity_heaps: list[list[int]] = [[] for _ in range(row_token_count + 1)]
+        self._available_capacities = _AvailableCapacities()
+
+    def add_row(self, piece: _DocumentPiece) -> None:
+        """Append a row and make any residual capacity available for reuse."""
+
+        packed_token_count = piece.packed_token_count
+        if packed_token_count > self.row_token_count:
+            raise ValueError(
+                "document piece exceeds packed row capacity: "
+                f"{packed_token_count} > {self.row_token_count}"
+            )
+        row_index = len(self.rows)
+        self.rows.append([piece])
+        self.used_token_counts.append(packed_token_count)
+        self._register_capacity(
+            self.row_token_count - packed_token_count,
+            row_index,
+        )
+
+    def place_best_fit(self, piece: _DocumentPiece) -> None:
+        """Place one piece with bounded lookup and earliest-row tie behavior."""
+
+        packed_token_count = piece.packed_token_count
+        if packed_token_count > self.row_token_count:
+            raise ValueError(
+                "document piece exceeds packed row capacity: "
+                f"{packed_token_count} > {self.row_token_count}"
+            )
+        self.capacity_searches += 1
+        capacity = self._available_capacities.smallest_at_least(packed_token_count)
+        if capacity is None:
+            self.add_row(piece)
+            return
+
+        capacity_heap = self._capacity_heaps[capacity]
+        row_index = heapq.heappop(capacity_heap)
+        self.row_candidate_checks += 1
+        if not capacity_heap:
+            self._available_capacities.discard(capacity)
+
+        self.rows[row_index].append(piece)
+        self.used_token_counts[row_index] += packed_token_count
+        self._register_capacity(capacity - packed_token_count, row_index)
+
+    def freeze(self) -> tuple[_PackedRow, ...]:
+        """Return the immutable row plan."""
+
+        return tuple(
+            _PackedRow(pieces=tuple(pieces), used_token_count=used)
+            for pieces, used in zip(
+                self.rows,
+                self.used_token_counts,
+                strict=True,
+            )
+        )
+
+    def _register_capacity(self, capacity: int, row_index: int) -> None:
+        if capacity == 0:
+            return
+        capacity_heap = self._capacity_heaps[capacity]
+        heapq.heappush(capacity_heap, row_index)
+        self._available_capacities.add(capacity)
+        self.max_capacity_bucket_size = max(
+            self.max_capacity_bucket_size,
+            len(capacity_heap),
+        )
+
+
 class DocumentPackingTokenLoader(
     Iterator[tuple[Tensor, Tensor, Tensor]],
 ):
@@ -630,6 +757,7 @@ class DocumentPackingTokenLoader(
         batch_size: int,
         seq_len: int,
         seed: int,
+        planning_progress: Callable[[str], None] | None = None,
     ) -> None:
         if not isinstance(reader, TokenizedShardReader):
             raise TypeError(
@@ -645,6 +773,8 @@ class DocumentPackingTokenLoader(
             raise ValueError(
                 f"seed must be in range [0, {_MAX_TORCH_SEED}], got {seed}"
             )
+        if planning_progress is not None and not callable(planning_progress):
+            raise TypeError("planning_progress must be callable or None")
 
         mapped_shards = reader.shards(split)
         document_spans = reader.document_spans(split)
@@ -663,6 +793,7 @@ class DocumentPackingTokenLoader(
         self._document_spans = document_spans
         self._bos_token_id = bos_token_id
         self._manifest_identity = _tokenized_manifest_identity(reader.manifest)
+        self._planning_progress = planning_progress
         self._generator = torch.Generator(device="cpu")
         self._generator.manual_seed(seed)
         self.position = 0
@@ -671,6 +802,7 @@ class DocumentPackingTokenLoader(
         self.row_position = 0
         self._rows: tuple[_PackedRow, ...] = ()
         self.packed_example_count = 0
+        self.plan_stats = DocumentPackingPlanStats(0, 0, 0, 0, 0, 0)
         self._start_next_epoch()
 
     def __iter__(self) -> DocumentPackingTokenLoader:
@@ -814,7 +946,7 @@ class DocumentPackingTokenLoader(
                 f"batch_size={self.batch_size}, got {position}"
             )
 
-        rows, packed_example_count = self._build_epoch(epoch_seed)
+        rows, packed_example_count, plan_stats = self._build_epoch(epoch_seed)
         if (
             row_position < 0
             or row_position > len(rows)
@@ -836,6 +968,7 @@ class DocumentPackingTokenLoader(
         self._generator.set_state(rng_state)
         self._rows = rows
         self.packed_example_count = packed_example_count
+        self.plan_stats = plan_stats
         self.epoch = epoch
         self.epoch_seed = epoch_seed
         self.position = position
@@ -852,14 +985,18 @@ class DocumentPackingTokenLoader(
                 device="cpu",
             ).item()
         )
-        rows, packed_example_count = self._build_epoch(epoch_seed)
+        rows, packed_example_count, plan_stats = self._build_epoch(epoch_seed)
         self.epoch += 1
         self.epoch_seed = epoch_seed
         self.row_position = 0
         self._rows = rows
         self.packed_example_count = packed_example_count
+        self.plan_stats = plan_stats
 
-    def _build_epoch(self, epoch_seed: int) -> tuple[tuple[_PackedRow, ...], int]:
+    def _build_epoch(
+        self,
+        epoch_seed: int,
+    ) -> tuple[tuple[_PackedRow, ...], int, DocumentPackingPlanStats]:
         order_generator = torch.Generator(device="cpu")
         order_generator.manual_seed(epoch_seed)
         order = torch.randperm(
@@ -868,10 +1005,11 @@ class DocumentPackingTokenLoader(
             dtype=torch.int64,
             device="cpu",
         ).tolist()
-        rows = _best_fit_document_rows(
+        rows, plan_stats = _plan_best_fit_document_rows(
             self._document_spans,
             order=order,
             seq_len=self.seq_len,
+            progress=self._planning_progress,
         )
         packed_example_count = len(rows)
         padding_row_count = (-packed_example_count) % self.batch_size
@@ -883,7 +1021,7 @@ class DocumentPackingTokenLoader(
                     for _ in range(padding_row_count)
                 ),
             )
-        return tuple(rows), packed_example_count
+        return tuple(rows), packed_example_count, plan_stats
 
 
 def create_token_loader(
@@ -894,6 +1032,7 @@ def create_token_loader(
     batch_size: int,
     seq_len: int,
     seed: int,
+    planning_progress: Callable[[str], None] | None = None,
 ) -> RandomOffsetTokenLoader | DocumentPackingTokenLoader:
     """Select the explicit flat baseline or BOS-aware packing strategy."""
 
@@ -912,21 +1051,30 @@ def create_token_loader(
             batch_size=batch_size,
             seq_len=seq_len,
             seed=seed,
+            planning_progress=planning_progress,
         )
     raise ValueError(f"strategy must be 'flat' or 'packed', got {strategy!r}")
 
 
-def _best_fit_document_rows(
+def _plan_best_fit_document_rows(
     spans: Sequence[TokenizedDocumentSpan],
     *,
     order: Sequence[int],
     seq_len: int,
-) -> tuple[_PackedRow, ...]:
+    progress: Callable[[str], None] | None = None,
+) -> tuple[tuple[_PackedRow, ...], DocumentPackingPlanStats]:
     row_token_count = seq_len + 1
-    mutable_rows: list[list[_DocumentPiece]] = []
-    used_token_counts: list[int] = []
+    planner = _CapacityIndexedRows(row_token_count)
+    document_count = len(order)
+    piece_count = 0
+    _report_packing_progress(
+        progress,
+        "packing planner started: documents=%d row_tokens=%d",
+        document_count,
+        row_token_count,
+    )
 
-    for document_index in order:
+    for processed_documents, document_index in enumerate(order, start=1):
         span = spans[document_index]
         remaining = span.token_count
         document_offset = 0
@@ -940,38 +1088,70 @@ def _best_fit_document_rows(
                 is_continuation=is_continuation,
                 is_document_end=piece_token_count == remaining,
             )
+            piece_count += 1
             if is_continuation:
                 # The carried prefix must be the preceding source token, never
                 # an unrelated document that happened to leave residual room.
-                mutable_rows.append([piece])
-                used_token_counts.append(piece.packed_token_count)
+                planner.add_row(piece)
             else:
-                _place_best_fit_piece(
-                    mutable_rows,
-                    used_token_counts,
-                    piece,
-                    row_token_count=row_token_count,
-                )
+                planner.place_best_fit(piece)
             remaining -= piece_token_count
             document_offset += piece_token_count
         if span.token_count == 0:
-            _place_best_fit_piece(
-                mutable_rows,
-                used_token_counts,
+            piece_count += 1
+            planner.place_best_fit(
                 _DocumentPiece(
                     shard_index=span.shard_index,
                     start=span.start,
                     token_count=0,
                     is_continuation=False,
                     is_document_end=True,
-                ),
-                row_token_count=row_token_count,
+                )
+            )
+        if (
+            processed_documents % _PACKING_PROGRESS_INTERVAL == 0
+            and processed_documents < document_count
+        ):
+            _report_packing_progress(
+                progress,
+                "packing planner progress: documents=%d/%d rows=%d pieces=%d",
+                processed_documents,
+                document_count,
+                len(planner.rows),
+                piece_count,
             )
 
-    return tuple(
-        _PackedRow(pieces=tuple(pieces), used_token_count=used)
-        for pieces, used in zip(mutable_rows, used_token_counts, strict=True)
+    rows = planner.freeze()
+    stats = DocumentPackingPlanStats(
+        document_count=document_count,
+        piece_count=piece_count,
+        row_count=len(rows),
+        capacity_searches=planner.capacity_searches,
+        row_candidate_checks=planner.row_candidate_checks,
+        max_capacity_bucket_size=planner.max_capacity_bucket_size,
     )
+    _report_packing_progress(
+        progress,
+        "packing planner completed: documents=%d rows=%d pieces=%d "
+        "capacity_searches=%d row_candidate_checks=%d",
+        stats.document_count,
+        stats.row_count,
+        stats.piece_count,
+        stats.capacity_searches,
+        stats.row_candidate_checks,
+    )
+    return rows, stats
+
+
+def _report_packing_progress(
+    progress: Callable[[str], None] | None,
+    message: str,
+    *arguments: object,
+) -> None:
+    rendered = message % arguments
+    _LOGGER.info("%s", rendered)
+    if progress is not None:
+        progress(rendered)
 
 
 def _place_best_fit_piece(

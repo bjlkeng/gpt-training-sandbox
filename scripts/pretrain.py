@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 from pathlib import Path
+import sys
 
 from scratch_llm.checkpoint import CheckpointError
 from scratch_llm.pretraining import PretrainingError, run_pretraining
@@ -60,6 +61,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 paths=paths,
                 tracker=tracker,
                 resume_from=arguments.resume,
+                progress=lambda message: print(message, file=sys.stderr, flush=True),
             )
         except (
             CheckpointError,

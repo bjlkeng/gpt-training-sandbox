@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import ExitStack
 import json
 from dataclasses import dataclass
@@ -324,6 +324,7 @@ def run_pretraining(
     paths: RunPaths,
     tracker: Tracker,
     resume_from: str | Path | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> PretrainingResult:
     """Train or resume either supported data profile through one shared loop."""
 
@@ -372,6 +373,7 @@ def run_pretraining(
                 batch_size=config.train.device_batch_size,
                 seq_len=config.model.seq_len,
                 seed=config.run.seed,
+                planning_progress=progress,
             )
             batches = _PreparedBatchIterator(
                 iter(loader),  # type: ignore[arg-type]

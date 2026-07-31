@@ -6,6 +6,7 @@ from copy import deepcopy
 import json
 import math
 from pathlib import Path
+import random
 from typing import Any
 
 import pytest
@@ -17,8 +18,11 @@ from scratch_llm.data import (
     DocumentPackingTokenLoaderStateError,
     RandomOffsetTokenLoader,
     TokenizedDataError,
+    TokenizedDocumentSpan,
     TokenizedShardReader,
     TokenizedShardSource,
+    _AvailableCapacities,
+    _plan_best_fit_document_rows,
     create_token_loader,
     write_tokenized_shards,
 )
@@ -60,6 +64,215 @@ def _batches_equal(
     second: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
 ) -> bool:
     return all(torch.equal(left, right) for left, right in zip(first, second))
+
+
+def _reference_best_fit_rows(
+    spans: tuple[TokenizedDocumentSpan, ...],
+    *,
+    order: list[int],
+    seq_len: int,
+) -> list[list[tuple[int, int, int, bool, bool]]]:
+    """Small linear oracle preserving the original earliest-row tie behavior."""
+
+    row_token_count = seq_len + 1
+    rows: list[list[tuple[int, int, int, bool, bool]]] = []
+    used_token_counts: list[int] = []
+
+    def place(piece: tuple[int, int, int, bool, bool]) -> None:
+        packed_token_count = piece[2] + 1
+        best_index: int | None = None
+        best_remaining: int | None = None
+        for row_index, used in enumerate(used_token_counts):
+            remaining = row_token_count - used - packed_token_count
+            if remaining >= 0 and (
+                best_remaining is None or remaining < best_remaining
+            ):
+                best_index = row_index
+                best_remaining = remaining
+        if best_index is None:
+            rows.append([piece])
+            used_token_counts.append(packed_token_count)
+        else:
+            rows[best_index].append(piece)
+            used_token_counts[best_index] += packed_token_count
+
+    for document_index in order:
+        span = spans[document_index]
+        remaining = span.token_count
+        document_offset = 0
+        while remaining > 0:
+            piece_token_count = min(remaining, seq_len)
+            is_continuation = document_offset > 0
+            piece = (
+                span.shard_index,
+                span.start + document_offset,
+                piece_token_count,
+                is_continuation,
+                piece_token_count == remaining,
+            )
+            if is_continuation:
+                rows.append([piece])
+                used_token_counts.append(piece_token_count + 1)
+            else:
+                place(piece)
+            remaining -= piece_token_count
+            document_offset += piece_token_count
+        if span.token_count == 0:
+            place((span.shard_index, span.start, 0, False, True))
+    return rows
+
+
+def _row_signature(
+    rows: object,
+) -> list[list[tuple[int, int, int, bool, bool]]]:
+    return [
+        [
+            (
+                piece.shard_index,
+                piece.start,
+                piece.token_count,
+                piece.is_continuation,
+                piece.is_document_end,
+            )
+            for piece in row.pieces
+        ]
+        for row in rows
+    ]
+
+
+def test_available_capacities_returns_smallest_capacity_at_least_required() -> None:
+    capacities = _AvailableCapacities()
+    for capacity in (2, 5, 7):
+        capacities.add(capacity)
+
+    assert capacities.smallest_at_least(0) == 2
+    assert capacities.smallest_at_least(4) == 5
+    assert capacities.smallest_at_least(5) == 5
+    assert capacities.smallest_at_least(6) == 7
+    assert capacities.smallest_at_least(8) is None
+
+    capacities.discard(5)
+    assert capacities.smallest_at_least(4) == 7
+    capacities.discard(2)
+    capacities.discard(7)
+    assert capacities.smallest_at_least(0) is None
+
+
+@pytest.mark.parametrize("seed", range(12))
+def test_capacity_indexed_planner_matches_linear_reference(seed: int) -> None:
+    rng = random.Random(seed)
+    seq_len = rng.randint(1, 12)
+    token_counts = [
+        0,
+        seq_len,
+        seq_len + 1,
+        2 * seq_len,
+        *(rng.randint(0, 4 * seq_len) for _ in range(60)),
+    ]
+    spans = tuple(
+        TokenizedDocumentSpan(
+            split="train",
+            shard_index=index % 3,
+            document_index=index,
+            start=index * (4 * seq_len + 1),
+            stop=index * (4 * seq_len + 1) + token_count,
+        )
+        for index, token_count in enumerate(token_counts)
+    )
+    order = list(range(len(spans)))
+    rng.shuffle(order)
+
+    actual, _ = _plan_best_fit_document_rows(
+        spans,
+        order=order,
+        seq_len=seq_len,
+    )
+    expected = _reference_best_fit_rows(spans, order=order, seq_len=seq_len)
+
+    assert _row_signature(actual) == expected
+
+
+def test_capacity_index_uses_earliest_row_for_equal_best_fit() -> None:
+    spans = tuple(
+        TokenizedDocumentSpan(
+            split="train",
+            shard_index=0,
+            document_index=index,
+            start=index * 10,
+            stop=index * 10 + token_count,
+        )
+        for index, token_count in enumerate((5, 5, 3))
+    )
+
+    rows, _ = _plan_best_fit_document_rows(
+        spans,
+        order=range(3),
+        seq_len=9,
+    )
+
+    assert [[piece.start for piece in row.pieces] for row in rows] == [
+        [0, 20],
+        [10],
+    ]
+
+
+def test_planner_does_not_scan_existing_rows_for_each_placement() -> None:
+    document_count = 20_000
+    seq_len = 8
+    spans = tuple(
+        TokenizedDocumentSpan(
+            split="train",
+            shard_index=0,
+            document_index=index,
+            start=index * seq_len,
+            stop=(index + 1) * seq_len,
+        )
+        for index in range(document_count)
+    )
+
+    rows, stats = _plan_best_fit_document_rows(
+        spans,
+        order=range(document_count),
+        seq_len=seq_len,
+    )
+
+    assert len(rows) == document_count
+    assert stats.capacity_searches == document_count
+    assert stats.row_candidate_checks == 0
+
+
+def test_loader_logs_planning_start_and_completion(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    dataset_dir = tmp_path / "tokenized"
+    tokenizer = _write_dataset(dataset_dir, train_sources=(("AB", "CD"),))
+    progress_messages: list[str] = []
+
+    with (
+        caplog.at_level("INFO", logger="scratch_llm.data"),
+        TokenizedShardReader(dataset_dir, tokenizer=tokenizer) as reader,
+    ):
+        DocumentPackingTokenLoader(
+            reader,
+            split="train",
+            batch_size=1,
+            seq_len=2,
+            seed=0,
+            planning_progress=progress_messages.append,
+        )
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "packing planner started: documents=2" in message for message in messages
+    )
+    assert any(
+        "packing planner completed: documents=2" in message for message in messages
+    )
+    assert progress_messages == [
+        next(message for message in messages if "packing planner started" in message),
+        next(message for message in messages if "packing planner completed" in message),
+    ]
 
 
 def test_packing_supervises_content_and_real_bos_boundaries(tmp_path: Path) -> None:
