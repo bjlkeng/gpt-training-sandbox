@@ -9,6 +9,7 @@ from typing import Final
 from scratch_llm._validation import (
     require_finite_non_negative_real,
     require_finite_positive_real,
+    require_finite_real,
     require_non_negative_integer,
     require_positive_integer,
 )
@@ -209,6 +210,46 @@ class TrainingStepTelemetry:
         }
 
 
+def base_training_metrics(
+    telemetry: TrainingStepTelemetry,
+    *,
+    loss: float,
+    learning_rate_multiplier: float,
+    grad_norm: float,
+    epoch: float | None,
+) -> dict[str, float | None]:
+    """Map one completed base-training result to the public metric contract."""
+
+    if not isinstance(telemetry, TrainingStepTelemetry):
+        raise TypeError(
+            f"telemetry must be a TrainingStepTelemetry, got {type(telemetry).__name__}"
+        )
+    metrics: dict[str, float | None] = {
+        "train/loss": require_finite_real(loss, name="loss"),
+        "train/lrm": require_finite_non_negative_real(
+            learning_rate_multiplier,
+            name="learning_rate_multiplier",
+        ),
+        "train/dt": telemetry.duration_seconds,
+        "train/tok_per_sec": telemetry.tokens_per_second,
+        "train/mfu": telemetry.mfu,
+        "train/grad_norm": require_finite_non_negative_real(
+            grad_norm,
+            name="grad_norm",
+        ),
+        "total_training_flops": telemetry.total_training_flops,
+        "total_training_time": telemetry.total_training_time_seconds,
+    }
+    if epoch is not None:
+        metrics["train/epoch"] = require_finite_non_negative_real(
+            epoch,
+            name="epoch",
+        )
+    if telemetry.peak_memory_mib is not None:
+        metrics["train/peak_memory_mib"] = telemetry.peak_memory_mib
+    return metrics
+
+
 def estimate_gpt_training_flops(config: GPTConfig) -> GPTTrainingFlopsEstimate:
     """Estimate dense forward-and-backward matmul FLOPs per processed token.
 
@@ -260,6 +301,7 @@ __all__ = [
     "PeakFlopsBasis",
     "TRAINING_FLOPS_FORMULA_ID",
     "TrainingStepTelemetry",
+    "base_training_metrics",
     "estimate_gpt_training_flops",
     "peak_flops_basis_from_config",
 ]

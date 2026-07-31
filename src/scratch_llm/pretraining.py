@@ -101,6 +101,7 @@ class _PreparedTrainingData:
     batches: Iterator[tuple[Tensor, Tensor]]
     loader: object
     production_reader: TokenizedShardReader | None
+    training_tokens_per_epoch: int | None
 
 
 @dataclass(frozen=True)
@@ -831,6 +832,7 @@ def _prepare_training_data(
             batches=tiny_loader,
             loader=tiny_loader,
             production_reader=None,
+            training_tokens_per_epoch=None,
         )
 
     production_tokenizer = _load_production_tokenizer(config)
@@ -857,6 +859,7 @@ def _prepare_training_data(
         ),
         loader=production_loader,
         production_reader=reader,
+        training_tokens_per_epoch=reader.manifest.splits["train"].token_count,
     )
 
 
@@ -1187,6 +1190,10 @@ def _execute_training(
                 runtime.initial_total_training_time_seconds
             ),
             initial_total_training_flops=runtime.initial_total_training_flops,
+            initial_processed_model_tokens=(
+                runtime.initial_step * config.train.total_batch_size_tokens
+            ),
+            tokens_per_epoch=data.training_tokens_per_epoch,
             peak_flops_basis=peak_flops_basis_from_config(config.train),
         )
     except torch.OutOfMemoryError:
