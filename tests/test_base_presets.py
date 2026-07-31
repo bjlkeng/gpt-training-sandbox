@@ -88,6 +88,11 @@ def test_base_preset_loads_with_production_artifacts_and_exact_token_budget(
     assert config.train.dtype == "float32"
     assert config.train.compile is False
     assert config.train.activation_checkpointing is False
+    assert config.train.mfu_peak_flops_per_second == 35.58e12
+    assert (
+        config.train.mfu_peak_flops_basis
+        == "NVIDIA GeForce RTX 3090 advertised FP32 peak (35.58 TFLOP/s)"
+    )
 
     grad_accum_steps = derive_grad_accum_steps(
         device_batch_size=config.train.device_batch_size,

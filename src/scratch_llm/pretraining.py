@@ -47,6 +47,7 @@ from scratch_llm.training import (
     derive_grad_accum_steps,
     run_training_steps,
 )
+from scratch_llm.training_telemetry import peak_flops_basis_from_config
 from scratch_llm.utils import get_device, set_seed
 
 
@@ -779,6 +780,7 @@ def _run_pretraining_impl(
                     initial_total_training_time_seconds
                 ),
                 initial_total_training_flops=initial_total_training_flops,
+                peak_flops_basis=peak_flops_basis_from_config(config.train),
             )
         except torch.OutOfMemoryError:
             try:

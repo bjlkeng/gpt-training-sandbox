@@ -144,6 +144,8 @@ def test_defaults_cover_the_roadmap_sections_and_are_deterministic() -> None:
             "sample_every": 1_000,
             "save_every": 1_000,
             "log_every": 10,
+            "mfu_peak_flops_per_second": None,
+            "mfu_peak_flops_basis": None,
             "dtype": "float32",
             "compile": False,
             "activation_checkpointing": False,
@@ -313,6 +315,42 @@ def test_train_validation_rejects_overlapping_schedule_ranges() -> None:
         match=r"^train\.warmup_steps:.*warmdown",
     ):
         TrainConfig(max_steps=10, warmup_steps=7, warmdown_ratio=0.4)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"mfu_peak_flops_per_second": 35.58e12},
+        {"mfu_peak_flops_basis": "advertised FP32 peak"},
+        {
+            "mfu_peak_flops_per_second": float("inf"),
+            "mfu_peak_flops_basis": "invalid infinite peak",
+        },
+        {
+            "mfu_peak_flops_per_second": 0.0,
+            "mfu_peak_flops_basis": "invalid zero peak",
+        },
+        {
+            "mfu_peak_flops_per_second": 35.58e12,
+            "mfu_peak_flops_basis": " ",
+        },
+    ],
+)
+def test_train_mfu_basis_requires_a_complete_finite_explicit_pair(
+    kwargs: dict[str, object],
+) -> None:
+    with pytest.raises(ConfigValidationError, match=r"^train\.mfu_peak_flops"):
+        TrainConfig(**kwargs)  # type: ignore[arg-type]
+
+
+def test_train_mfu_basis_preserves_the_explicit_hardware_assumption() -> None:
+    config = TrainConfig(
+        mfu_peak_flops_per_second=35.58e12,
+        mfu_peak_flops_basis="RTX 3090 advertised FP32 peak",
+    )
+
+    assert config.mfu_peak_flops_per_second == 35.58e12
+    assert config.mfu_peak_flops_basis == "RTX 3090 advertised FP32 peak"
 
 
 @pytest.mark.parametrize("field_name", ["beta1", "beta2"])

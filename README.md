@@ -640,6 +640,33 @@ windows. `packed` preserves document boundaries and converts its boolean loss
 mask to `ignore_index=-1` targets immediately before the shared training loop;
 the loader's original target tensor is not changed.
 
+Each completed optimizer step also exposes one immutable telemetry result.
+It counts actual input positions and non-ignored targets from the consumed
+microbatches, measures only forward/backward, clipping, optimizer, and
+scheduler work, and computes processed tokens/second from that interval.
+Tracker fan-out and step callbacks—including validation, sampling, and
+checkpoint I/O—run after the interval ends. No device synchronization is added
+per microstep for logging.
+
+The `baseline_gpt_dense_training_v1` estimator counts two FLOPs per
+multiply-accumulate and models backward as twice the forward matrix
+multiplications. It includes QKV, attention output, both MLP projections, the
+LM-head projection, and dense sequence-length attention score/value products.
+Embedding lookup, normalization, activation, bias, softmax, dropout, loss,
+clipping, optimizer, and scheduler FLOPs are deliberately excluded. The
+LM-head work is counted once whether its weight is tied or untied because
+aliasing changes storage, not the executed projection.
+
+MFU is emitted only when the resolved config supplies both an explicit
+`train.mfu_peak_flops_per_second` denominator and a descriptive
+`train.mfu_peak_flops_basis`. The RTX 3090 presets record the advertised FP32
+35.58 TFLOP/s basis; the CPU smoke config leaves MFU unavailable. On a logged
+CUDA step, peak allocated memory is reset immediately before the measured
+optimizer step and sampled after it, before tracker or callback work. CPU
+results omit the CUDA-only peak rather than reporting zero. Cumulative
+training time and FLOPs are checkpointed and continue monotonically on exact
+resume.
+
 The version-2-and-newer tokenizer contract records a byte tokenizer's stable
 runtime identity. Regex-BPE checkpoints record the canonical absolute artifact
 path plus tokenizer identity, vocabulary size, and special tokens, allowing
