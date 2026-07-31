@@ -19,6 +19,14 @@ from scratch_llm.accelerator_memory import (
     AcceleratorMemorySnapshot,
     collect_accelerator_memory,
 )
+from scratch_llm.best_checkpoint import (
+    BEST_CHECKPOINT_RANKING_PROTOCOL_ID,
+    BestCheckpointError,
+    PeriodicValidationResult,
+    ValidationCheckpointState,
+    advance_validation_state,
+    base_validation_identity,
+)
 from scratch_llm.bpe import RegexBPETokenizer
 from scratch_llm.checkpoint import (
     ExactTrainingState,
@@ -28,7 +36,15 @@ from scratch_llm.checkpoint import (
 )
 from scratch_llm.config import ProjectConfig
 from scratch_llm.data import NextTokenDataset, create_token_loader
+from scratch_llm.full_document_bpb import (
+    FullDocumentProtocolConfig,
+    evaluate_full_document_bpb,
+)
 from scratch_llm.model import GPT
+from scratch_llm.nanochat_bpb import (
+    NanochatCompatibilityConfig,
+    evaluate_nanochat_compatible_bpb,
+)
 from scratch_llm.oom_diagnostics import (
     PretrainingOOMError,
     diagnose_out_of_memory,
@@ -40,7 +56,10 @@ from scratch_llm.rng_state import (
     restore_training_rng_state,
 )
 from scratch_llm.tokenizer import NANOCHAT_SPECIAL_TOKENS, ByteTokenizer, Tokenizer
-from scratch_llm.tokenized_data import TokenizedShardReader
+from scratch_llm.tokenized_data import (
+    TokenizedShardReader,
+    tokenized_manifest_identity,
+)
 from scratch_llm.tracking import Tracker
 from scratch_llm.training import (
     OptimizerStepResult,
@@ -65,6 +84,76 @@ class PretrainingResult:
     initial_step: int
     final_step: int
     steps: tuple[OptimizerStepResult, ...]
+    validation_state: ValidationCheckpointState | None
+    validation_results: tuple[PeriodicValidationResult, ...]
+
+
+_ValidationRunner = Callable[[int], PeriodicValidationResult]
+
+
+@dataclass(frozen=True)
+class _PreparedTrainingData:
+    """Open data resources shared by initialization, training, and validation."""
+
+    tokenizer: Tokenizer
+    batches: Iterator[tuple[Tensor, Tensor]]
+    loader: object
+    production_reader: TokenizedShardReader | None
+
+
+@dataclass(frozen=True)
+class _TrainingRuntime:
+    """Model state and resume cursors needed by the training loop."""
+
+    model: GPT
+    tokenizer: Tokenizer
+    optimizer: Optimizer
+    scheduler: LRScheduler
+    initial_step: int
+    initial_total_training_time_seconds: float
+    initial_total_training_flops: float
+    validation_state: ValidationCheckpointState | None
+
+
+@dataclass(frozen=True)
+class _PeriodicBaseValidator:
+    """Run both pinned base-validation protocols against one model snapshot."""
+
+    model: GPT
+    tokenizer: Tokenizer
+    reader: TokenizedShardReader
+    token_bytes: Tensor
+    parquet_dir: str
+    run_dir: Path
+    compatibility_config: NanochatCompatibilityConfig
+    full_document_config: FullDocumentProtocolConfig
+    device: torch.device
+
+    def __call__(self, step: int) -> PeriodicValidationResult:
+        checkpoint_identity = f"pretrain:{self.run_dir.resolve()}#step:{step}"
+        compatibility = evaluate_nanochat_compatible_bpb(
+            self.model,
+            self.tokenizer,
+            self.reader,
+            self.token_bytes,
+            parquet_dir=self.parquet_dir,
+            checkpoint_identity=checkpoint_identity,
+            config=self.compatibility_config,
+            device=self.device,
+        )
+        full_document = evaluate_full_document_bpb(
+            self.model,
+            self.tokenizer,
+            self.reader,
+            self.token_bytes,
+            checkpoint_identity=checkpoint_identity,
+            config=self.full_document_config,
+            device=self.device,
+        )
+        return PeriodicValidationResult(
+            compatibility=compatibility,
+            full_document=full_document,
+        )
 
 
 class TinyTextLoaderStateError(ValueError):
@@ -477,6 +566,26 @@ def _load_production_tokenizer(config: ProjectConfig) -> RegexBPETokenizer:
     return tokenizer
 
 
+def _load_periodic_validation_token_bytes(config: ProjectConfig) -> Tensor:
+    artifact_dir = config.tokenizer.artifact_dir
+    if artifact_dir is None:
+        raise PretrainingError(
+            "periodic BPB validation requires tokenizer.artifact_dir"
+        )
+    path = Path(artifact_dir) / "token_bytes.pt"
+    try:
+        value = torch.load(path, map_location="cpu", weights_only=True)
+    except Exception as error:
+        raise PretrainingError(
+            f"could not load periodic validation token bytes {path}: {error}"
+        ) from error
+    if not isinstance(value, Tensor):
+        raise PretrainingError(
+            f"periodic validation token bytes {path} must contain a Tensor"
+        )
+    return value
+
+
 def _resume_comparison(config: ProjectConfig) -> dict[str, Any]:
     values = config.to_dict()
     run = values["run"]
@@ -564,6 +673,7 @@ def run_pretraining(
     resume_from: str | Path | None = None,
     progress: Callable[[str], None] | None = None,
     allow_non_exact_resume: bool = False,
+    validation_runner: Callable[[int], PeriodicValidationResult] | None = None,
 ) -> PretrainingResult:
     """Run pretraining and transform only supported PyTorch OOM failures."""
 
@@ -575,6 +685,7 @@ def run_pretraining(
             resume_from=resume_from,
             progress=progress,
             allow_non_exact_resume=allow_non_exact_resume,
+            validation_runner=validation_runner,
         )
     except torch.OutOfMemoryError as error:
         memory = _collect_memory_after_oom(config.run.device)
@@ -596,9 +707,87 @@ def _run_pretraining_impl(
     resume_from: str | Path | None = None,
     progress: Callable[[str], None] | None = None,
     allow_non_exact_resume: bool = False,
+    validation_runner: Callable[[int], PeriodicValidationResult] | None = None,
 ) -> PretrainingResult:
     """Train or resume either supported data profile through one shared loop."""
 
+    _validate_pretraining_request(
+        config,
+        paths=paths,
+        tracker=tracker,
+        resume_from=resume_from,
+        allow_non_exact_resume=allow_non_exact_resume,
+        validation_runner=validation_runner,
+    )
+
+    set_seed(config.run.seed)
+    device = get_device(config.run.device)
+    metrics_path = paths.run_dir / config.tracking.jsonl.path
+
+    with ExitStack() as resources:
+        data = _prepare_training_data(
+            config,
+            resources=resources,
+            progress=progress,
+        )
+        runtime = _initialize_training_runtime(
+            config,
+            paths=paths,
+            metrics_path=metrics_path,
+            data=data,
+            device=device,
+            resume_from=resume_from,
+            allow_non_exact_resume=allow_non_exact_resume,
+        )
+        active_validation_runner = _resolve_periodic_validation_runner(
+            config,
+            paths=paths,
+            data=data,
+            runtime=runtime,
+            device=device,
+            validation_runner=validation_runner,
+        )
+        checkpoints = _CheckpointLifecycle(
+            config=config,
+            paths=paths,
+            runtime=runtime,
+            loader=data.loader,
+            device=device,
+            validation_runner=active_validation_runner,
+            progress=progress,
+        )
+        step_results = _execute_training(
+            config,
+            data=data,
+            runtime=runtime,
+            device=device,
+            tracker=tracker,
+            on_step=checkpoints.on_step,
+        )
+        final_step = runtime.scheduler.last_epoch
+        final_result = step_results[-1]
+        checkpoint_path = checkpoints.finalize(final_step, final_result)
+        return PretrainingResult(
+            paths=paths,
+            metrics_path=metrics_path,
+            checkpoint_path=checkpoint_path,
+            initial_step=runtime.initial_step,
+            final_step=final_step,
+            steps=tuple(step_results),
+            validation_state=checkpoints.validation_state,
+            validation_results=checkpoints.validation_results,
+        )
+
+
+def _validate_pretraining_request(
+    config: ProjectConfig,
+    *,
+    paths: RunPaths,
+    tracker: Tracker,
+    resume_from: str | Path | None,
+    allow_non_exact_resume: bool,
+    validation_runner: _ValidationRunner | None,
+) -> None:
     if not isinstance(config, ProjectConfig):
         raise TypeError(f"config must be a ProjectConfig, got {type(config).__name__}")
     if not isinstance(paths, RunPaths):
@@ -607,6 +796,8 @@ def _run_pretraining_impl(
         raise TypeError(f"tracker must be a Tracker, got {type(tracker).__name__}")
     if not isinstance(allow_non_exact_resume, bool):
         raise TypeError("allow_non_exact_resume must be a boolean")
+    if validation_runner is not None and not callable(validation_runner):
+        raise TypeError("validation_runner must be callable or None")
     if allow_non_exact_resume and resume_from is None:
         raise PretrainingError(
             "allow_non_exact_resume requires an explicit resume checkpoint"
@@ -621,198 +812,381 @@ def _run_pretraining_impl(
             f"'nanochat_climbmix', got {config.data.profile!r}"
         )
 
-    set_seed(config.run.seed)
-    device = get_device(config.run.device)
-    metrics_path = paths.run_dir / config.tracking.jsonl.path
 
-    with ExitStack() as resources:
-        prepared_tokenizer: Tokenizer
-        batches: _TinyTextBatchLoader | _PreparedBatchIterator
-        loader: object
-        if config.data.profile == "tiny_text":
-            prepared_tokenizer = ByteTokenizer()
-            tiny_loader = _build_batches(
-                _read_tiny_text(config),
-                config,
-                prepared_tokenizer,
-            )
-            loader = tiny_loader
-            batches = tiny_loader
-        else:
-            prepared_tokenizer = _load_production_tokenizer(config)
-            reader = resources.enter_context(
-                TokenizedShardReader(
-                    config.data.tokenized_dir,
-                    tokenizer=prepared_tokenizer,
-                )
-            )
-            production_loader = create_token_loader(
-                reader,
-                strategy=config.data.loader_strategy,
-                split="train",
-                batch_size=config.train.device_batch_size,
-                seq_len=config.model.seq_len,
-                seed=config.run.seed,
-                planning_progress=progress,
-            )
-            loader = production_loader
-            batches = _PreparedBatchIterator(
-                iter(production_loader),  # type: ignore[arg-type]
-                strategy=config.data.loader_strategy,
-            )
-
-        model: GPT
-        tokenizer: Tokenizer
-        optimizer: Optimizer
-        scheduler: LRScheduler
-        if resume_from is None:
-            initial_step = 0
-            initial_total_training_time_seconds = 0.0
-            initial_total_training_flops = 0.0
-            _validate_existing_outputs(
-                paths,
-                metrics_path,
-                initial_step=initial_step,
-                is_resume=False,
-            )
-            tokenizer = prepared_tokenizer
-            model = GPT(config.model).to(device)
-            optimizer = build_optimizer(model, config.train)
-            scheduler = build_lr_scheduler(optimizer, config.train)
-        else:
-            checkpoint = load_training_checkpoint(
-                resume_from,
-                device=device,
-                allow_non_exact_resume=allow_non_exact_resume,
-            )
-            _validate_resume_config(config, checkpoint.config)
-            if checkpoint.tokenizer.get_identity() != prepared_tokenizer.get_identity():
-                raise PretrainingError(
-                    "resume checkpoint tokenizer identity does not match "
-                    "the configured training artifacts"
-                )
-            model = checkpoint.model
-            tokenizer = checkpoint.tokenizer
-            optimizer = checkpoint.optimizer
-            scheduler = checkpoint.scheduler
-            initial_step = checkpoint.step
-            if initial_step >= config.train.max_steps:
-                raise PretrainingError(
-                    f"checkpoint step {initial_step} has already reached "
-                    f"train.max_steps={config.train.max_steps}"
-                )
-            _validate_existing_outputs(
-                paths,
-                metrics_path,
-                initial_step=initial_step,
-                is_resume=True,
-            )
-            if checkpoint.continuation is None:
-                initial_total_training_time_seconds = 0.0
-                initial_total_training_flops = 0.0
-            else:
-                _restore_exact_continuation(
-                    loader,
-                    checkpoint.continuation,
-                    device=device,
-                )
-                initial_total_training_time_seconds = (
-                    checkpoint.continuation.total_training_time_seconds
-                )
-                initial_total_training_flops = (
-                    checkpoint.continuation.total_training_flops
-                )
-
-        checkpoint_path = paths.checkpoints_dir / "last.pt"
-
-        def save_periodic_checkpoint(
-            step: int,
-            _result: OptimizerStepResult,
-        ) -> None:
-            if step % config.train.save_every != 0:
-                return
-            continuation = _capture_exact_continuation(
-                loader,
-                device=device,
-                step=step,
-                result=_result,
-            )
-            save_checkpoint(
-                paths.checkpoints_dir / f"step_{step:06d}.pt",
-                model=model,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                config=config,
-                step=step,
-                tokenizer=tokenizer,
-                continuation=continuation,
-            )
-            save_checkpoint(
-                checkpoint_path,
-                model=model,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                config=config,
-                step=step,
-                tokenizer=tokenizer,
-                continuation=continuation,
-            )
-
-        grad_accum_steps = derive_grad_accum_steps(
-            device_batch_size=config.train.device_batch_size,
-            seq_len=config.model.seq_len,
-            total_batch_size_tokens=config.train.total_batch_size_tokens,
+def _prepare_training_data(
+    config: ProjectConfig,
+    *,
+    resources: ExitStack,
+    progress: Callable[[str], None] | None,
+) -> _PreparedTrainingData:
+    if config.data.profile == "tiny_text":
+        prepared_tokenizer = ByteTokenizer()
+        tiny_loader = _build_batches(
+            _read_tiny_text(config),
+            config,
+            prepared_tokenizer,
         )
-        try:
-            step_results = run_training_steps(
-                model,
-                batches,
-                optimizer,
-                scheduler,
-                max_steps=config.train.max_steps,
-                grad_accum_steps=grad_accum_steps,
-                grad_clip=config.train.grad_clip,
-                device=device,
-                tracker=tracker,
-                log_every=config.train.log_every,
-                on_step=save_periodic_checkpoint,
-                initial_total_training_time_seconds=(
-                    initial_total_training_time_seconds
-                ),
-                initial_total_training_flops=initial_total_training_flops,
-                peak_flops_basis=peak_flops_basis_from_config(config.train),
-            )
-        except torch.OutOfMemoryError:
-            try:
-                optimizer.zero_grad(set_to_none=True)
-            except Exception:
-                pass
-            raise
-        final_step = scheduler.last_epoch
-        final_result = step_results[-1]
-        save_checkpoint(
-            checkpoint_path,
+        return _PreparedTrainingData(
+            tokenizer=prepared_tokenizer,
+            batches=tiny_loader,
+            loader=tiny_loader,
+            production_reader=None,
+        )
+
+    production_tokenizer = _load_production_tokenizer(config)
+    reader = resources.enter_context(
+        TokenizedShardReader(
+            config.data.tokenized_dir,
+            tokenizer=production_tokenizer,
+        )
+    )
+    production_loader = create_token_loader(
+        reader,
+        strategy=config.data.loader_strategy,
+        split="train",
+        batch_size=config.train.device_batch_size,
+        seq_len=config.model.seq_len,
+        seed=config.run.seed,
+        planning_progress=progress,
+    )
+    return _PreparedTrainingData(
+        tokenizer=production_tokenizer,
+        batches=_PreparedBatchIterator(
+            iter(production_loader),  # type: ignore[arg-type]
+            strategy=config.data.loader_strategy,
+        ),
+        loader=production_loader,
+        production_reader=reader,
+    )
+
+
+def _initialize_training_runtime(
+    config: ProjectConfig,
+    *,
+    paths: RunPaths,
+    metrics_path: Path,
+    data: _PreparedTrainingData,
+    device: torch.device,
+    resume_from: str | Path | None,
+    allow_non_exact_resume: bool,
+) -> _TrainingRuntime:
+    if resume_from is None:
+        _validate_existing_outputs(
+            paths,
+            metrics_path,
+            initial_step=0,
+            is_resume=False,
+        )
+        model = GPT(config.model).to(device)
+        optimizer = build_optimizer(model, config.train)
+        return _TrainingRuntime(
             model=model,
+            tokenizer=data.tokenizer,
             optimizer=optimizer,
-            scheduler=scheduler,
-            config=config,
-            step=final_step,
-            tokenizer=tokenizer,
-            continuation=_capture_exact_continuation(
-                loader,
-                device=device,
-                step=final_step,
-                result=final_result,
+            scheduler=build_lr_scheduler(optimizer, config.train),
+            initial_step=0,
+            initial_total_training_time_seconds=0.0,
+            initial_total_training_flops=0.0,
+            validation_state=None,
+        )
+
+    checkpoint = load_training_checkpoint(
+        resume_from,
+        device=device,
+        allow_non_exact_resume=allow_non_exact_resume,
+    )
+    _validate_resume_config(config, checkpoint.config)
+    if checkpoint.tokenizer.get_identity() != data.tokenizer.get_identity():
+        raise PretrainingError(
+            "resume checkpoint tokenizer identity does not match "
+            "the configured training artifacts"
+        )
+    validation_state = checkpoint.validation
+    if (
+        validation_state is not None
+        and validation_state.ranking_protocol_id != BEST_CHECKPOINT_RANKING_PROTOCOL_ID
+    ):
+        raise PretrainingError(
+            "resume checkpoint ranking protocol changed: "
+            f"{validation_state.ranking_protocol_id!r} != "
+            f"{BEST_CHECKPOINT_RANKING_PROTOCOL_ID!r}"
+        )
+    if checkpoint.step >= config.train.max_steps:
+        raise PretrainingError(
+            f"checkpoint step {checkpoint.step} has already reached "
+            f"train.max_steps={config.train.max_steps}"
+        )
+    _validate_existing_outputs(
+        paths,
+        metrics_path,
+        initial_step=checkpoint.step,
+        is_resume=True,
+    )
+    if checkpoint.continuation is None:
+        total_training_time_seconds = 0.0
+        total_training_flops = 0.0
+    else:
+        _restore_exact_continuation(
+            data.loader,
+            checkpoint.continuation,
+            device=device,
+        )
+        total_training_time_seconds = (
+            checkpoint.continuation.total_training_time_seconds
+        )
+        total_training_flops = checkpoint.continuation.total_training_flops
+    return _TrainingRuntime(
+        model=checkpoint.model,
+        tokenizer=checkpoint.tokenizer,
+        optimizer=checkpoint.optimizer,
+        scheduler=checkpoint.scheduler,
+        initial_step=checkpoint.step,
+        initial_total_training_time_seconds=total_training_time_seconds,
+        initial_total_training_flops=total_training_flops,
+        validation_state=validation_state,
+    )
+
+
+def _resolve_periodic_validation_runner(
+    config: ProjectConfig,
+    *,
+    paths: RunPaths,
+    data: _PreparedTrainingData,
+    runtime: _TrainingRuntime,
+    device: torch.device,
+    validation_runner: _ValidationRunner | None,
+) -> _ValidationRunner | None:
+    reader = data.production_reader
+    if reader is None:
+        return validation_runner
+
+    compatibility_config = NanochatCompatibilityConfig(
+        device_batch_size=config.train.device_batch_size,
+        context_length=config.model.seq_len,
+        eval_tokens=config.train.eval_tokens,
+    )
+    full_document_config = FullDocumentProtocolConfig(
+        device_batch_size=config.train.device_batch_size,
+        context_length=config.model.seq_len,
+    )
+    expected_validation_identity = base_validation_identity(
+        tokenizer_identity=runtime.tokenizer.get_identity(),
+        validation_manifest_identity=tokenized_manifest_identity(reader.manifest),
+        compatibility_reference_config=compatibility_config.to_dict(),
+        full_document_reference_config=full_document_config.to_dict(),
+    )
+    if (
+        runtime.validation_state is not None
+        and validation_runner is None
+        and runtime.validation_state.validation_identity != expected_validation_identity
+    ):
+        raise PretrainingError(
+            "resume checkpoint validation identity changed: "
+            f"{runtime.validation_state.validation_identity!r} != "
+            f"{expected_validation_identity!r}"
+        )
+    if validation_runner is not None:
+        return validation_runner
+    return _PeriodicBaseValidator(
+        model=runtime.model,
+        tokenizer=runtime.tokenizer,
+        reader=reader,
+        token_bytes=_load_periodic_validation_token_bytes(config),
+        parquet_dir=config.data.parquet_dir,
+        run_dir=paths.run_dir,
+        compatibility_config=compatibility_config,
+        full_document_config=full_document_config,
+        device=device,
+    )
+
+
+class _CheckpointLifecycle:
+    """Coordinate validation state with best, periodic, and final checkpoints."""
+
+    def __init__(
+        self,
+        *,
+        config: ProjectConfig,
+        paths: RunPaths,
+        runtime: _TrainingRuntime,
+        loader: object,
+        device: torch.device,
+        validation_runner: _ValidationRunner | None,
+        progress: Callable[[str], None] | None,
+    ) -> None:
+        self._config = config
+        self._paths = paths
+        self._runtime = runtime
+        self._loader = loader
+        self._device = device
+        self._validation_runner = validation_runner
+        self._progress = progress
+        self._validation_state = runtime.validation_state
+        self._validation_results: list[PeriodicValidationResult] = []
+        self._checkpoint_path = paths.checkpoints_dir / "last.pt"
+
+    @property
+    def validation_state(self) -> ValidationCheckpointState | None:
+        return self._validation_state
+
+    @property
+    def validation_results(self) -> tuple[PeriodicValidationResult, ...]:
+        return tuple(self._validation_results)
+
+    def _report_validation_failure(self, step: int, reason: object) -> None:
+        if self._progress is not None:
+            self._progress(f"Validation at step {step} was not accepted: {reason}")
+
+    def _save(
+        self,
+        path: Path,
+        *,
+        step: int,
+        continuation: ExactTrainingState,
+        validation: ValidationCheckpointState | None,
+    ) -> Path:
+        return save_checkpoint(
+            path,
+            model=self._runtime.model,
+            optimizer=self._runtime.optimizer,
+            scheduler=self._runtime.scheduler,
+            config=self._config,
+            step=step,
+            tokenizer=self._runtime.tokenizer,
+            continuation=continuation,
+            validation=validation,
+        )
+
+    def _validate_if_due(
+        self,
+        step: int,
+        result: OptimizerStepResult,
+    ) -> ExactTrainingState | None:
+        if self._validation_runner is None or step % self._config.train.eval_every != 0:
+            return None
+        try:
+            validation = self._validation_runner(step)
+        except torch.OutOfMemoryError:
+            raise
+        except Exception as error:
+            self._report_validation_failure(step, error)
+            return None
+
+        if isinstance(validation, PeriodicValidationResult):
+            self._validation_results.append(validation)
+        try:
+            decision = advance_validation_state(
+                self._validation_state,
+                validation,
+                validation_step=step,
+            )
+        except BestCheckpointError as error:
+            raise PretrainingError(str(error)) from error
+        except (TypeError, ValueError) as error:
+            self._report_validation_failure(step, error)
+            return None
+        if not decision.accepted:
+            self._report_validation_failure(step, decision.reason)
+            return None
+
+        candidate = decision.state
+        if candidate is None:  # pragma: no cover - accepted decision invariant.
+            raise RuntimeError("accepted validation produced no checkpoint state")
+        continuation = None
+        if decision.improved:
+            continuation = _capture_exact_continuation(
+                self._loader,
+                device=self._device,
+                step=step,
+                result=result,
+            )
+            self._save(
+                self._paths.checkpoints_dir / "best.pt",
+                step=step,
+                continuation=continuation,
+                validation=candidate,
+            )
+        self._validation_state = candidate
+        return continuation
+
+    def on_step(self, step: int, result: OptimizerStepResult) -> None:
+        continuation = self._validate_if_due(step, result)
+        if step % self._config.train.save_every != 0:
+            return
+        if continuation is None:
+            continuation = _capture_exact_continuation(
+                self._loader,
+                device=self._device,
+                step=step,
+                result=result,
+            )
+        self._save(
+            self._paths.checkpoints_dir / f"step_{step:06d}.pt",
+            step=step,
+            continuation=continuation,
+            validation=self._validation_state,
+        )
+        self._save(
+            self._checkpoint_path,
+            step=step,
+            continuation=continuation,
+            validation=self._validation_state,
+        )
+
+    def finalize(self, step: int, result: OptimizerStepResult) -> Path:
+        continuation = _capture_exact_continuation(
+            self._loader,
+            device=self._device,
+            step=step,
+            result=result,
+        )
+        return self._save(
+            self._checkpoint_path,
+            step=step,
+            continuation=continuation,
+            validation=self._validation_state,
+        )
+
+
+def _execute_training(
+    config: ProjectConfig,
+    *,
+    data: _PreparedTrainingData,
+    runtime: _TrainingRuntime,
+    device: torch.device,
+    tracker: Tracker,
+    on_step: Callable[[int, OptimizerStepResult], None],
+) -> list[OptimizerStepResult]:
+    grad_accum_steps = derive_grad_accum_steps(
+        device_batch_size=config.train.device_batch_size,
+        seq_len=config.model.seq_len,
+        total_batch_size_tokens=config.train.total_batch_size_tokens,
+    )
+    try:
+        return run_training_steps(
+            runtime.model,
+            data.batches,
+            runtime.optimizer,
+            runtime.scheduler,
+            max_steps=config.train.max_steps,
+            grad_accum_steps=grad_accum_steps,
+            grad_clip=config.train.grad_clip,
+            device=device,
+            tracker=tracker,
+            log_every=config.train.log_every,
+            on_step=on_step,
+            initial_total_training_time_seconds=(
+                runtime.initial_total_training_time_seconds
             ),
+            initial_total_training_flops=runtime.initial_total_training_flops,
+            peak_flops_basis=peak_flops_basis_from_config(config.train),
         )
-        return PretrainingResult(
-            paths=paths,
-            metrics_path=metrics_path,
-            checkpoint_path=checkpoint_path,
-            initial_step=initial_step,
-            final_step=final_step,
-            steps=tuple(step_results),
-        )
+    except torch.OutOfMemoryError:
+        try:
+            runtime.optimizer.zero_grad(set_to_none=True)
+        except Exception:
+            pass
+        raise
 
 
 def _capture_exact_continuation(

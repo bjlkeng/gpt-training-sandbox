@@ -413,7 +413,8 @@ def test_readme_documents_the_subprocess_tested_setup_and_smoke_commands() -> No
     )
     assert "--resume runs/smoke/checkpoints/step_000075.pt" in readme
     assert "--allow-non-exact-resume" in readme
-    assert "checkpoint format version 3" in readme
+    assert "checkpoint format version 4" in readme
+    assert "Version-3 checkpoints remain exactly resumable" in readme
     assert "completed optimizer-step boundary" in readme
     assert "metrics/metrics.jsonl" in readme
     assert "metrics/summary.json" in readme

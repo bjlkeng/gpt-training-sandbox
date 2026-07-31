@@ -584,7 +584,7 @@ uv run python -m scripts.pretrain \
   --resume runs/smoke/checkpoints/step_000075.pt
 ```
 
-Pretraining checkpoints use checkpoint format version 3. State is captured at
+Pretraining checkpoints use checkpoint format version 4. State is captured at
 the completed optimizer-step boundary after all microbatches, the optimizer
 and scheduler updates, and the tracker step. The checkpoint atomically records
 the concrete loader format and next-batch state, its corpus or manifest
@@ -595,10 +595,14 @@ tokenizer, and data pipeline before installing the loader and RNG continuation
 as one transaction. Model-only sampling and evaluation loads preserve the
 caller's global RNG streams.
 
-Format-version-1 and version-2 checkpoints remain valid for sampling. They do
-not contain exact loader/RNG continuation, so training resume rejects them by
-default. To migrate one explicitly, accept a fresh data/RNG position and reset
-telemetry counters with:
+Format version 4 adds periodic-validation metadata to the exact version-3
+continuation: the pinned ranking protocol, validation identity and step,
+current/minimum compatibility BPB, and current/minimum full-document BPB.
+Version-3 checkpoints remain exactly resumable with no prior validation
+minimum. Format-version-1 and version-2 checkpoints remain valid for sampling.
+They do not contain exact loader/RNG continuation, so training resume rejects
+them by default. To migrate one explicitly, accept a fresh data/RNG position
+and reset telemetry counters with:
 
 ```bash
 uv run python -m scripts.pretrain \
@@ -610,6 +614,18 @@ uv run python -m scripts.pretrain \
 
 That opt-in migration restores the model, optimizer, scheduler, and completed
 step, but the resulting continuation is intentionally not bit-exact.
+
+Production pretraining runs both pinned BPB protocols every
+`train.eval_every` optimizer steps. Only a complete result can advance the
+saved validation state. `nanochat_compat_v1` is the permanent ranking
+protocol: a finite compatibility BPB must be strictly lower than its saved
+minimum to atomically replace `checkpoints/best.pt`. Equal or worse values,
+evaluation failures, and partial protocol results leave `best.pt` untouched.
+`full_documents_v1` is recorded independently and can never rank a checkpoint.
+Periodic `step_*.pt` and `last.pt` writes continue with the last accepted
+validation state after a failed or partial evaluation. Resume rejects a
+different ranking protocol or evaluator/tokenizer/validation-manifest
+identity before resetting the saved minimum.
 
 ### Production regex-BPE pretraining
 
