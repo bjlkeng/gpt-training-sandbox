@@ -267,6 +267,27 @@ def test_optimizer_step_scales_micro_losses_and_orders_actions(
     assert parameter.grad is None
 
 
+def test_optimizer_step_clears_partial_gradients_after_oom() -> None:
+    parameter = nn.Parameter(torch.tensor(2.0))
+    optimizer = SGD([parameter], lr=0.1)
+
+    def partial_losses() -> Iterable[Tensor]:
+        yield parameter.square()
+        raise torch.OutOfMemoryError("synthetic second microbatch failure")
+
+    with pytest.raises(torch.OutOfMemoryError, match="synthetic second"):
+        run_optimizer_step(
+            optimizer,
+            partial_losses(),
+            grad_accum_steps=2,
+            grad_clip=0.5,
+        )
+
+    assert parameter.item() == pytest.approx(2.0)
+    assert parameter.grad is None
+    assert optimizer.state == {}
+
+
 def test_accumulated_cpu_step_matches_the_equivalent_larger_batch() -> None:
     torch.manual_seed(7)
     full_inputs = torch.tensor(

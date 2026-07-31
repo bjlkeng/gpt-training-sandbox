@@ -674,6 +674,28 @@ Use a fresh run name for each verification. A successful command completes
 both steps and writes `runs/tiny-20m-3090-smoke/checkpoints/last.pt`; GPU
 hardware is deliberately not required by the test suite.
 
+If PyTorch raises its supported accelerator out-of-memory exception,
+`scripts.pretrain` exits unsuccessfully with one `OOM_DIAGNOSTIC_JSON` record
+plus readable advice. It records the attempted model, dtype, device batch,
+sequence, token budget, and available current/peak/capacity memory counters.
+An ordinary `RuntimeError`, even one whose text mentions OOM, is not
+reclassified.
+
+Recommendations reduce device batch size, sequence length, embedding width,
+then layer count. Each suggestion is an exact dotted override. For example, a
+base-smoke batch reduction is reported as:
+
+```bash
+--override train.device_batch_size=2 \
+--override train.grad_accum_steps=32
+```
+
+When the original token budget is not divisible after a reduction, the
+diagnostic prints an explicit valid `train.total_batch_size_tokens` alternative
+instead of truncating it. The command clears incomplete gradients and eligible
+cached CUDA allocator blocks, but it does not retry or mutate the requested
+configuration, and it never marks the failed step as completed.
+
 ### Random token batches
 
 `RandomOffsetTokenLoader` consumes a validated `TokenizedShardReader` and
