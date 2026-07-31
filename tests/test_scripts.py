@@ -7,10 +7,12 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
 
+import scripts.sample as sample_script
 from scratch_llm.checkpoint import save_checkpoint
 from scratch_llm.config import (
     GPTConfig,
@@ -337,6 +339,62 @@ def test_sample_loads_a_tiny_checkpoint_and_prints_non_empty_text(
     assert result.stdout == "Hello\x00\x00\n"
     assert result.stdout.strip()
     assert "Traceback" not in result.stderr
+
+
+def test_sample_stops_on_generated_bos_without_rendering_it(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    tokenizer = ByteTokenizer()
+
+    class _BosLogitsModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.max_seq_len = 8
+            self.anchor = torch.nn.Parameter(torch.tensor(0.0))
+
+        def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
+            logits = torch.full(
+                (
+                    token_ids.shape[0],
+                    token_ids.shape[1],
+                    tokenizer.get_vocab_size(),
+                ),
+                -torch.inf,
+                device=token_ids.device,
+            )
+            logits[:, -1, tokenizer.get_bos_token_id()] = self.anchor
+            return logits
+
+    checkpoint = SimpleNamespace(
+        config=SimpleNamespace(
+            generation=GenerationConfig(
+                temperature=0,
+                top_k=1,
+                max_new_tokens=4,
+                seed=31,
+            )
+        ),
+        model=_BosLogitsModel(),
+        tokenizer=tokenizer,
+    )
+    monkeypatch.setattr(
+        sample_script,
+        "load_model_checkpoint",
+        lambda *_args, **_kwargs: checkpoint,
+    )
+
+    exit_code = sample_script.main(
+        [
+            "--checkpoint",
+            "unused.pt",
+            "--prompt",
+            "Hello",
+        ]
+    )
+
+    assert exit_code == 0
+    assert capsys.readouterr().out == "Hello\n"
 
 
 def test_readme_documents_the_subprocess_tested_setup_and_smoke_commands() -> None:

@@ -800,6 +800,24 @@ batch rows are excluded. Its reserved metric names are
 reference commit or random seed because the protocol is local and
 deterministic.
 
+Fixed base sampling evaluates these seven public prompts in order:
+
+- `The capital of France is`
+- `The chemical symbol of gold is`
+- `If yesterday was Friday, then tomorrow will be`
+- `The opposite of hot is`
+- `The planets of the solar system are:`
+- `My favorite color is`
+- `If 5*x + 3 = 13, then x is`
+
+Each prompt uses the configured seed plus the prompt index. Sampling uses a
+BOS-only stop set. A sampled BOS ends only that sequence immediately and is
+not decoded; other sequences continue independently to BOS or
+`max_new_tokens`. The immutable result records prompt, checkpoint, tokenizer,
+and generation identities plus per-prompt completion, token-count,
+elapsed-time, and throughput fields. After all seven samples succeed, their
+safely fenced Markdown is atomically published as `metrics/base_samples.md`.
+
 The shared BPB kernel consumes unreduced cross-entropy nats, target IDs, the
 canonical `token_bytes` table, and an optional boolean supervision mask. Only
 non-negative, explicitly supervised targets with a positive raw byte length

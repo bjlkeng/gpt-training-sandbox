@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import random
+
+import numpy as np
 import torch
 
 from scratch_llm.config import GPTConfig
-from scratch_llm.generation import generate
+from scratch_llm.generation import GenerationBatchResult, generate
 from scratch_llm.model import GPT
 from scratch_llm.tokenizer import VOCAB_SIZE, ByteTokenizer
 
@@ -33,6 +36,54 @@ class _FixedLogitsModel(torch.nn.Module):
 
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
         return self.fixed_logits.reshape(1, 1, -1).expand(
+            token_ids.shape[0],
+            token_ids.shape[1],
+            -1,
+        )
+
+
+class _TransitionLogitsModel(torch.nn.Module):
+    def __init__(self, transitions: dict[int, int], *, vocab_size: int = 32) -> None:
+        super().__init__()
+        self.max_seq_len = 8
+        self.transitions = transitions
+        self.vocab_size = vocab_size
+
+    def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
+        next_ids = [
+            self.transitions[int(token_id)]
+            for token_id in token_ids[:, -1].detach().cpu().tolist()
+        ]
+        logits = torch.full(
+            (token_ids.shape[0], token_ids.shape[1], self.vocab_size),
+            -torch.inf,
+            device=token_ids.device,
+        )
+        for row_index, next_id in enumerate(next_ids):
+            logits[row_index, -1, next_id] = 0
+        return logits
+
+
+class _RngConsumingLogitsModel(_FixedLogitsModel):
+    def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
+        random.random()
+        np.random.random()
+        return super().forward(token_ids)
+
+
+class _VariableLogitsModel(torch.nn.Module):
+    def __init__(self, logits_by_last_token: dict[int, torch.Tensor]) -> None:
+        super().__init__()
+        self.max_seq_len = 8
+        self.logits_by_last_token = logits_by_last_token
+
+    def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
+        rows = [
+            self.logits_by_last_token[int(token_id)]
+            for token_id in token_ids[:, -1].detach().cpu().tolist()
+        ]
+        next_logits = torch.stack(rows).to(token_ids.device)
+        return next_logits[:, None, :].expand(
             token_ids.shape[0],
             token_ids.shape[1],
             -1,
@@ -160,3 +211,145 @@ def test_generated_ids_stay_in_vocab_and_byte_decode_without_error() -> None:
 
     assert all(0 <= token_id < tokenizer.get_vocab_size() for token_id in generated_ids)
     assert isinstance(tokenizer.decode(generated_ids), str)
+
+
+def test_explicit_stop_set_handles_immediate_mid_and_fallback_rows() -> None:
+    model = _TransitionLogitsModel(
+        {
+            10: 31,
+            11: 12,
+            12: 31,
+            20: 21,
+            21: 22,
+            22: 23,
+        }
+    )
+
+    generated = generate(
+        model,
+        torch.tensor([[10], [11], [20]]),
+        max_new_tokens=3,
+        temperature=0,
+        stop_token_ids={31},
+    )
+
+    assert isinstance(generated, GenerationBatchResult)
+    assert tuple(sequence.token_ids for sequence in generated.sequences) == (
+        (10,),
+        (11, 12),
+        (20, 21, 22, 23),
+    )
+    assert tuple(sequence.generated_token_ids for sequence in generated.sequences) == (
+        (),
+        (12,),
+        (21, 22, 23),
+    )
+    assert tuple(sequence.completion_reason for sequence in generated.sequences) == (
+        "stop_token",
+        "stop_token",
+        "max_new_tokens",
+    )
+    assert tuple(sequence.stop_token_id for sequence in generated.sequences) == (
+        31,
+        31,
+        None,
+    )
+    assert tuple(sequence.sampled_token_count for sequence in generated.sequences) == (
+        1,
+        2,
+        3,
+    )
+
+    fallback_alone = generate(
+        model,
+        torch.tensor([[20]]),
+        max_new_tokens=3,
+        temperature=0,
+        stop_token_ids={31},
+    )
+    assert isinstance(fallback_alone, GenerationBatchResult)
+    assert (
+        fallback_alone.sequences[0].generated_token_ids
+        == generated.sequences[2].generated_token_ids
+    )
+
+
+def test_finished_rows_do_not_change_an_unfinished_rows_sampling_stream() -> None:
+    stop_logits = torch.full((32,), -torch.inf)
+    stop_logits[31] = 0
+    sampling_logits = torch.full((32,), -torch.inf)
+    sampling_logits[20:22] = 0
+    model = _VariableLogitsModel(
+        {
+            10: stop_logits,
+            20: sampling_logits,
+            21: sampling_logits,
+        }
+    )
+
+    batched = generate(
+        model,
+        torch.tensor([[10], [20]]),
+        max_new_tokens=6,
+        temperature=1,
+        seed=43,
+        stop_token_ids={31},
+    )
+    alone = generate(
+        model,
+        torch.tensor([[20]]),
+        max_new_tokens=6,
+        temperature=1,
+        seed=43,
+        stop_token_ids={31},
+    )
+
+    assert isinstance(batched, GenerationBatchResult)
+    assert isinstance(alone, GenerationBatchResult)
+    assert (
+        batched.sequences[1].generated_token_ids
+        == alone.sequences[0].generated_token_ids
+    )
+
+
+def test_stop_sets_are_generic_for_future_chat_termination() -> None:
+    model = _TransitionLogitsModel({7: 30})
+
+    generated = generate(
+        model,
+        torch.tensor([[7]]),
+        max_new_tokens=4,
+        temperature=0,
+        stop_token_ids={30, 31},
+    )
+
+    assert isinstance(generated, GenerationBatchResult)
+    assert generated.sequences[0].generated_token_ids == ()
+    assert generated.sequences[0].stop_token_id == 30
+
+
+def test_stopped_generation_restores_modes_and_caller_rng_state() -> None:
+    random.seed(101)
+    np.random.seed(103)
+    torch.manual_seed(107)
+    model = _RngConsumingLogitsModel(torch.zeros(32)).train()
+    python_state = random.getstate()
+    numpy_state = np.random.get_state()
+    torch_state = torch.random.get_rng_state().clone()
+
+    generated = generate(
+        model,
+        torch.tensor([[10]]),
+        max_new_tokens=3,
+        temperature=1,
+        stop_token_ids=set(),
+    )
+
+    assert isinstance(generated, GenerationBatchResult)
+    assert model.training
+    assert random.getstate() == python_state
+    restored_numpy_state = np.random.get_state()
+    assert restored_numpy_state[0] == numpy_state[0]
+    np.testing.assert_array_equal(restored_numpy_state[1], numpy_state[1])
+    assert restored_numpy_state[2:] == numpy_state[2:]
+    assert torch.equal(torch.random.get_rng_state(), torch_state)
