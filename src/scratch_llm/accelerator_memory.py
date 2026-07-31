@@ -12,6 +12,12 @@ from typing import Protocol
 
 import torch
 
+from scratch_llm._validation import (
+    require_integer,
+    require_non_negative_integer,
+    require_positive_integer,
+)
+
 
 _BYTES_PER_MIB = 1024**2
 
@@ -318,18 +324,22 @@ def _resolve_cuda_device(
 ) -> torch.device:
     try:
         count = backend.device_count()
-        if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+        try:
+            count = require_positive_integer(count, name="CUDA device count")
+        except (TypeError, ValueError) as error:
             raise AcceleratorMemoryError(
                 f"CUDA device count must be a positive integer, got {count!r}"
-            )
+            ) from error
         index = requested.index
         if index is None:
             index = backend.current_device()
-            if not isinstance(index, int) or isinstance(index, bool):
+            try:
+                index = require_integer(index, name="current CUDA device index")
+            except TypeError as error:
                 raise AcceleratorMemoryError(
                     "current CUDA device index must be an integer, "
                     f"got {type(index).__name__}"
-                )
+                ) from error
     except AcceleratorMemoryError:
         raise
     except Exception as error:
@@ -363,13 +373,9 @@ def _require_byte_count(
     label: str,
     positive: bool = False,
 ) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise TypeError(f"{label} must be an integer, got {type(value).__name__}")
-    minimum = 1 if positive else 0
-    if value < minimum:
-        requirement = "positive" if positive else "non-negative"
-        raise ValueError(f"{label} must be {requirement}, got {value}")
-    return value
+    if positive:
+        return require_positive_integer(value, name=label)
+    return require_non_negative_integer(value, name=label)
 
 
 def _validate_counter_relationships(

@@ -12,6 +12,10 @@ import numpy as np
 import torch
 from torch import Tensor, nn
 
+from scratch_llm._validation import (
+    require_non_negative_integer,
+    require_positive_integer,
+)
 from scratch_llm.bpb import BaseValidationResult, evaluate_bpb_batches
 from scratch_llm.tokenized_data import (
     TokenizedDataError,
@@ -51,8 +55,8 @@ class FullDocumentProtocolConfig:
     context_length: int
 
     def __post_init__(self) -> None:
-        _positive_integer(self.device_batch_size, name="device_batch_size")
-        _positive_integer(self.context_length, name="context_length")
+        require_positive_integer(self.device_batch_size, name="device_batch_size")
+        require_positive_integer(self.context_length, name="context_length")
 
     @property
     def row_capacity(self) -> int:
@@ -203,7 +207,7 @@ class FullDocumentValidationBatches(
                 "config must be a FullDocumentProtocolConfig, "
                 f"got {type(config).__name__}"
             )
-        normalized_bos = _non_negative_integer(
+        normalized_bos = require_non_negative_integer(
             bos_token_id,
             name="bos_token_id",
         )
@@ -515,21 +519,6 @@ def _normalized_token_bytes(token_bytes: Tensor) -> Tensor:
     if bool(normalized.lt(0).any().item()):
         raise ValueError("token_bytes values must be non-negative")
     return normalized
-
-
-def _positive_integer(value: object, *, name: str) -> int:
-    normalized = _non_negative_integer(value, name=name)
-    if normalized == 0:
-        raise ValueError(f"{name} must be positive")
-    return normalized
-
-
-def _non_negative_integer(value: object, *, name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise TypeError(f"{name} must be an integer")
-    if value < 0:
-        raise ValueError(f"{name} must be non-negative")
-    return value
 
 
 __all__ = [

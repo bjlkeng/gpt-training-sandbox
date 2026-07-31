@@ -9,6 +9,11 @@ from typing import Any, Final, Mapping
 
 from torch import nn
 
+from scratch_llm._validation import (
+    require_integer,
+    require_non_negative_integer,
+    require_positive_integer,
+)
 from scratch_llm.accelerator_memory import AcceleratorMemorySnapshot
 from scratch_llm.config import GPTConfig, ProjectConfig
 from scratch_llm.training import derive_grad_accum_steps
@@ -44,7 +49,7 @@ class ModuleParameterSummary:
             "trainable_parameters",
             "non_trainable_parameters",
         ):
-            _non_negative_integer(getattr(self, name), name=name)
+            require_non_negative_integer(getattr(self, name), name=name)
         if (
             self.trainable_parameters + self.non_trainable_parameters
             != self.unique_parameters
@@ -88,9 +93,9 @@ class GPTModelSizeEstimate:
             "trainable_parameters",
             "non_trainable_parameters",
         ):
-            _non_negative_integer(getattr(self, name), name=name)
-        _positive_integer(self.unique_parameters, name="unique_parameters")
-        _positive_integer(self.trainable_parameters, name="trainable_parameters")
+            require_non_negative_integer(getattr(self, name), name=name)
+        require_positive_integer(self.unique_parameters, name="unique_parameters")
+        require_positive_integer(self.trainable_parameters, name="trainable_parameters")
         if sum(self.component_parameters.values()) != self.unique_parameters:
             raise ValueError("model parameter components must sum to unique total")
         if (
@@ -177,7 +182,7 @@ class TokenBudgetEstimate:
             "maximum_supervised_targets_per_microbatch",
             "maximum_supervised_targets_per_optimizer_step",
         ):
-            _positive_integer(getattr(self, name), name=name)
+            require_positive_integer(getattr(self, name), name=name)
         if (
             self.processed_model_tokens_per_microbatch
             != self.device_batch_size * self.sequence_length
@@ -288,7 +293,7 @@ class TrainingMemoryEstimate:
             "logits_loss_workspace_bytes",
             "allocator_headroom_bytes",
         ):
-            _positive_integer(getattr(self, name), name=name)
+            require_positive_integer(getattr(self, name), name=name)
         _bounded_signed_64(self.subtotal_bytes, name="memory subtotal bytes")
         _bounded_signed_64(self.total_bytes, name="memory total bytes")
 
@@ -426,7 +431,7 @@ class MemoryEstimateComparison:
     estimate_minus_observed_peak_reserved_bytes: int | None
 
     def __post_init__(self) -> None:
-        _positive_integer(
+        require_positive_integer(
             self.estimated_total_bytes,
             name="estimated_total_bytes",
         )
@@ -455,7 +460,7 @@ class MemoryEstimateComparison:
                 observed_values,
                 strict=True,
             ):
-                _non_negative_integer(value, name=name)
+                require_non_negative_integer(value, name=name)
             for name, value in zip(
                 (
                     "estimate_minus_observed_peak_allocated_bytes",
@@ -464,7 +469,7 @@ class MemoryEstimateComparison:
                 differences,
                 strict=True,
             ):
-                _integer(value, name=name)
+                require_integer(value, name=name)
         else:
             if (
                 not isinstance(self.observed_unavailable_reason, str)
@@ -650,7 +655,7 @@ def estimate_token_budget(
         total_batch_size_tokens=total_batch_size_tokens,
     )
     if grad_accum_steps != "auto":
-        explicit_steps = _positive_integer(
+        explicit_steps = require_positive_integer(
             grad_accum_steps,
             name="grad_accum_steps",
         )
@@ -984,7 +989,7 @@ def _optional_mib(num_bytes: int | None) -> float | None:
 def _checked_product(*values: int, name: str) -> int:
     result = 1
     for value in values:
-        normalized = _non_negative_integer(value, name=name)
+        normalized = require_non_negative_integer(value, name=name)
         result *= normalized
         _bounded_signed_64(result, name=name)
     return result
@@ -993,39 +998,19 @@ def _checked_product(*values: int, name: str) -> int:
 def _checked_sum(*values: int, name: str) -> int:
     result = 0
     for value in values:
-        result += _non_negative_integer(value, name=name)
+        result += require_non_negative_integer(value, name=name)
         _bounded_signed_64(result, name=name)
     return result
 
 
 def _bounded_signed_64(value: object, *, name: str) -> int:
-    normalized = _non_negative_integer(value, name=name)
+    normalized = require_non_negative_integer(value, name=name)
     if normalized > _MAX_SIGNED_64:
         raise OverflowError(
             f"{name} exceeds the signed 64-bit planning limit "
             f"{_MAX_SIGNED_64}: {normalized}"
         )
     return normalized
-
-
-def _positive_integer(value: object, *, name: str) -> int:
-    normalized = _non_negative_integer(value, name=name)
-    if normalized == 0:
-        raise ValueError(f"{name} must be positive")
-    return normalized
-
-
-def _non_negative_integer(value: object, *, name: str) -> int:
-    normalized = _integer(value, name=name)
-    if normalized < 0:
-        raise ValueError(f"{name} must be non-negative")
-    return normalized
-
-
-def _integer(value: object, *, name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise TypeError(f"{name} must be an integer")
-    return value
 
 
 __all__ = [

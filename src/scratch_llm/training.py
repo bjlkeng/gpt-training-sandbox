@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Sized
 from dataclasses import dataclass, replace
-import math
 from time import perf_counter
 
 import torch
@@ -14,7 +13,12 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from torch.utils.data import DataLoader
 
-from scratch_llm._validation import require_positive_integer, require_positive_real
+from scratch_llm._validation import (
+    require_finite_non_negative_real,
+    require_finite_real,
+    require_positive_integer,
+    require_positive_real,
+)
 from scratch_llm.accelerator_memory import (
     AcceleratorMemorySnapshot,
     collect_accelerator_memory,
@@ -318,11 +322,11 @@ def run_training_steps(
     ):
         if not callable(function):
             raise TypeError(f"{name} must be callable")
-    total_training_time_seconds = _non_negative_finite_counter(
+    total_training_time_seconds = require_finite_non_negative_real(
         initial_total_training_time_seconds,
         name="initial_total_training_time_seconds",
     )
-    total_training_flops = _non_negative_finite_counter(
+    total_training_flops = require_finite_non_negative_real(
         initial_total_training_flops,
         name="initial_total_training_flops",
     )
@@ -353,7 +357,7 @@ def run_training_steps(
         memory_window_started = (
             bool(active_reset_memory_peak(resolved_device)) if should_log else False
         )
-        step_started_at = _clock_value(active_clock(), name="clock start")
+        step_started_at = require_finite_real(active_clock(), name="clock start")
         processed_model_tokens = 0
         supervised_target_tokens = 0
 
@@ -389,7 +393,7 @@ def run_training_steps(
             grad_clip=grad_clip,
         )
         scheduler.step()
-        step_finished_at = _clock_value(active_clock(), name="clock finish")
+        step_finished_at = require_finite_real(active_clock(), name="clock finish")
         step_duration = step_finished_at - step_started_at
         if step_duration <= 0:
             raise ValueError("measured optimizer-step duration must be positive")
@@ -447,24 +451,6 @@ def run_training_steps(
             on_step(step, result)
 
     return results
-
-
-def _non_negative_finite_counter(value: object, *, name: str) -> float:
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        raise TypeError(f"{name} must be a number")
-    numeric = float(value)
-    if not math.isfinite(numeric) or numeric < 0:
-        raise ValueError(f"{name} must be finite and non-negative")
-    return numeric
-
-
-def _clock_value(value: object, *, name: str) -> float:
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        raise TypeError(f"{name} must be a number")
-    numeric = float(value)
-    if not math.isfinite(numeric):
-        raise ValueError(f"{name} must be finite")
-    return numeric
 
 
 def train_tiny_text(

@@ -19,7 +19,11 @@ import torch
 from torch import Tensor
 from torch.utils.data import Dataset
 
-from scratch_llm._validation import require_positive_integer
+from scratch_llm._validation import (
+    require_integer,
+    require_non_negative_integer,
+    require_positive_integer,
+)
 from scratch_llm.climbmix import (
     CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX,
     DEFAULT_CLIMBMIX_DATA_DIR,
@@ -108,11 +112,11 @@ def select_parquet_files(
 
     _validate_parquet_split(split)
     if num_train_shards is not None:
-        num_train_shards = _require_non_negative_integer(
+        num_train_shards = require_non_negative_integer(
             num_train_shards,
             name="num_train_shards",
         )
-    validation_shard_index = _require_non_negative_integer(
+    validation_shard_index = require_non_negative_integer(
         validation_shard_index,
         name="validation_shard_index",
     )
@@ -156,7 +160,7 @@ def parquets_iter_batched(
     """Stream bounded text batches from a deterministic stride of split shards."""
 
     _validate_parquet_split(split)
-    start = _require_non_negative_integer(start, name="start")
+    start = require_non_negative_integer(start, name="start")
     step = require_positive_integer(step, name="step")
     if start >= step:
         raise ValueError(
@@ -331,14 +335,6 @@ def _validate_text_column(text_column: object) -> None:
         raise ValueError("text_column must be a non-empty string")
 
 
-def _require_non_negative_integer(value: object, *, name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise TypeError(f"{name} must be an integer, got {type(value).__name__}")
-    if value < 0:
-        raise ValueError(f"{name} must be non-negative, got {value}")
-    return value
-
-
 class NextTokenDataset(Dataset[tuple[Tensor, Tensor]]):
     """Expose every contiguous fixed-length next-token window in a token stream."""
 
@@ -421,8 +417,7 @@ class RandomOffsetTokenLoader(
             raise ValueError(f"split must be 'train' or 'val', got {split!r}")
         self.batch_size = require_positive_integer(batch_size, name="batch_size")
         self.seq_len = require_positive_integer(seq_len, name="seq_len")
-        if not isinstance(seed, int) or isinstance(seed, bool):
-            raise TypeError(f"seed must be an integer, got {type(seed).__name__}")
+        seed = require_integer(seed, name="seed")
         if not 0 <= seed <= _MAX_TORCH_SEED:
             raise ValueError(
                 f"seed must be in range [0, {_MAX_TORCH_SEED}], got {seed}"
@@ -766,8 +761,7 @@ class DocumentPackingTokenLoader(
             raise ValueError(f"split must be 'train' or 'val', got {split!r}")
         self.batch_size = require_positive_integer(batch_size, name="batch_size")
         self.seq_len = require_positive_integer(seq_len, name="seq_len")
-        if not isinstance(seed, int) or isinstance(seed, bool):
-            raise TypeError(f"seed must be an integer, got {type(seed).__name__}")
+        seed = require_integer(seed, name="seed")
         if not 0 <= seed <= _MAX_TORCH_SEED:
             raise ValueError(
                 f"seed must be in range [0, {_MAX_TORCH_SEED}], got {seed}"
@@ -1176,11 +1170,12 @@ def _place_best_fit_piece(
 
 
 def _packing_state_integer(value: object, *, name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
+    try:
+        return require_integer(value, name=name)
+    except TypeError as error:
         raise DocumentPackingTokenLoaderStateError(
             f"loader state {name} must be an integer"
-        )
-    return value
+        ) from error
 
 
 def _require_packing_loader_setting(
@@ -1218,11 +1213,12 @@ def _packing_rng_state(value: object) -> Tensor:
 
 
 def _loader_state_integer(value: object, *, name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
+    try:
+        return require_integer(value, name=name)
+    except TypeError as error:
         raise RandomOffsetTokenLoaderStateError(
             f"loader state {name} must be an integer"
-        )
-    return value
+        ) from error
 
 
 def _require_loader_setting(
@@ -1243,17 +1239,13 @@ def _require_loader_setting(
 
 
 def _validate_token_id(token_id: object, *, position: int, vocab_size: int) -> int:
-    if not isinstance(token_id, int) or isinstance(token_id, bool):
-        raise TypeError(
-            f"token ID at position {position} must be an integer, "
-            f"got {type(token_id).__name__}"
-        )
-    if not 0 <= token_id < vocab_size:
+    label = f"token ID at position {position}"
+    normalized = require_integer(token_id, name=label)
+    if not 0 <= normalized < vocab_size:
         raise ValueError(
-            f"token ID at position {position} must be in range "
-            f"[0, {vocab_size}); got {token_id}"
+            f"{label} must be in range [0, {vocab_size}); got {normalized}"
         )
-    return token_id
+    return normalized
 
 
 __all__ = [

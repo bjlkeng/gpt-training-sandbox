@@ -15,6 +15,11 @@ import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import torch
 from torch import Tensor, nn
 
+from scratch_llm._validation import (
+    require_integer,
+    require_non_negative_integer,
+    require_positive_integer,
+)
 from scratch_llm.bpb import (
     BaseValidationResult,
     evaluate_bpb_batches,
@@ -83,9 +88,9 @@ class NanochatCompatibilityConfig:
     world_size: int = field(default=1, init=False)
 
     def __post_init__(self) -> None:
-        _positive_integer(self.device_batch_size, name="device_batch_size")
-        _positive_integer(self.context_length, name="context_length")
-        _positive_integer(self.eval_tokens, name="eval_tokens")
+        require_positive_integer(self.device_batch_size, name="device_batch_size")
+        require_positive_integer(self.context_length, name="context_length")
+        require_positive_integer(self.eval_tokens, name="eval_tokens")
         if self.eval_steps == 0:
             raise ValueError(
                 "eval_tokens must cover at least one complete evaluation step "
@@ -154,14 +159,14 @@ class NanochatDocument:
     token_ids: tuple[int, ...]
 
     def __post_init__(self) -> None:
-        _non_negative_integer(
+        require_non_negative_integer(
             self.source_document_index,
             name="source_document_index",
         )
         if not isinstance(self.token_ids, tuple):
             raise TypeError("token_ids must be a tuple of integers")
         for position, token_id in enumerate(self.token_ids):
-            _non_negative_integer(token_id, name=f"token_ids[{position}]")
+            require_non_negative_integer(token_id, name=f"token_ids[{position}]")
 
 
 class NanochatCompatiblePacker(Iterator[tuple[Tensor, Tensor]]):
@@ -181,13 +186,13 @@ class NanochatCompatiblePacker(Iterator[tuple[Tensor, Tensor]]):
             self._document_batches = iter(document_batches)
         except TypeError as error:
             raise TypeError("document_batches must be iterable") from error
-        self.batch_size = _positive_integer(batch_size, name="batch_size")
-        self.context_length = _positive_integer(
+        self.batch_size = require_positive_integer(batch_size, name="batch_size")
+        self.context_length = require_positive_integer(
             context_length,
             name="context_length",
         )
         self.row_capacity = self.context_length + 1
-        self.buffer_size = _positive_integer(buffer_size, name="buffer_size")
+        self.buffer_size = require_positive_integer(buffer_size, name="buffer_size")
         self._token_bytes = _normalized_token_bytes(token_bytes)
         self.bos_token_id = _token_id(
             bos_token_id,
@@ -658,24 +663,9 @@ def _normalized_token_bytes(token_bytes: Tensor) -> Tensor:
     return normalized
 
 
-def _positive_integer(value: object, *, name: str) -> int:
-    normalized = _non_negative_integer(value, name=name)
-    if normalized == 0:
-        raise ValueError(f"{name} must be positive")
-    return normalized
-
-
-def _non_negative_integer(value: object, *, name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise TypeError(f"{name} must be an integer")
-    if value < 0:
-        raise ValueError(f"{name} must be non-negative")
-    return value
-
-
 def _token_id(value: object, *, vocab_size: int, name: str) -> int:
-    normalized = _non_negative_integer(value, name=name)
-    if normalized >= vocab_size:
+    normalized = require_integer(value, name=name)
+    if not 0 <= normalized < vocab_size:
         raise ValueError(
             f"{name} must be less than token_bytes size {vocab_size}; got {normalized}"
         )

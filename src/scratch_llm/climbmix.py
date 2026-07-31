@@ -13,6 +13,13 @@ from typing import Literal, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from scratch_llm._validation import (
+    require_non_negative_integer,
+    require_non_negative_real,
+    require_positive_integer,
+    require_positive_real,
+)
+
 
 CLIMBMIX_BASE_URL = (
     "https://huggingface.co/datasets/karpathy/climbmix-400b-shuffle/resolve/main"
@@ -106,11 +113,11 @@ def plan_climbmix_downloads(
 ) -> tuple[ClimbMixDownloadTarget, ...]:
     """Plan a train prefix and optional fixed validation shard without overlap."""
 
-    num_train_shards = _require_non_negative_integer(
+    num_train_shards = require_non_negative_integer(
         num_train_shards,
         name="num_train_shards",
     )
-    validation_shard_index = _require_non_negative_integer(
+    validation_shard_index = require_non_negative_integer(
         validation_shard_index,
         name="validation_shard_index",
     )
@@ -168,10 +175,10 @@ def download_climbmix_target(
         opener = open_http_response
     if sleep is None:
         sleep = time.sleep
-    max_attempts = _require_positive_integer(max_attempts, name="max_attempts")
-    chunk_size = _require_positive_integer(chunk_size, name="chunk_size")
-    timeout = _require_positive_number(timeout, name="timeout")
-    backoff_base = _require_non_negative_number(
+    max_attempts = require_positive_integer(max_attempts, name="max_attempts")
+    chunk_size = require_positive_integer(chunk_size, name="chunk_size")
+    timeout = require_positive_real(timeout, name="timeout")
+    backoff_base = require_non_negative_real(
         backoff_base,
         name="backoff_base",
     )
@@ -442,34 +449,3 @@ def _partial_state(target: ClimbMixDownloadTarget) -> str:
 def _notify(progress: Callable[[str], None] | None, message: str) -> None:
     if progress is not None:
         progress(message)
-
-
-def _require_positive_integer(value: object, *, name: str) -> int:
-    value = _require_non_negative_integer(value, name=name)
-    if value == 0:
-        raise ValueError(f"{name} must be positive, got {value}")
-    return value
-
-
-def _require_positive_number(value: object, *, name: str) -> float:
-    number = _require_non_negative_number(value, name=name)
-    if number == 0:
-        raise ValueError(f"{name} must be positive, got {value}")
-    return number
-
-
-def _require_non_negative_number(value: object, *, name: str) -> float:
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        raise TypeError(f"{name} must be a number, got {type(value).__name__}")
-    number = float(value)
-    if number < 0:
-        raise ValueError(f"{name} must be non-negative, got {value}")
-    return number
-
-
-def _require_non_negative_integer(value: object, *, name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise TypeError(f"{name} must be an integer, got {type(value).__name__}")
-    if value < 0:
-        raise ValueError(f"{name} must be non-negative, got {value}")
-    return value

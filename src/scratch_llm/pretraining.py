@@ -15,6 +15,7 @@ from torch import Tensor
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
+from scratch_llm._validation import require_integer, require_positive_integer
 from scratch_llm.accelerator_memory import (
     AcceleratorMemorySnapshot,
     collect_accelerator_memory,
@@ -193,12 +194,8 @@ class _TinyTextBatchLoader(Iterator[tuple[Tensor, Tensor]]):
     ) -> None:
         if not isinstance(dataset, NextTokenDataset):
             raise TypeError("dataset must be a NextTokenDataset")
-        if not isinstance(batch_size, int) or isinstance(batch_size, bool):
-            raise TypeError("batch_size must be an integer")
-        if batch_size <= 0:
-            raise ValueError("batch_size must be positive")
-        if not isinstance(seed, int) or isinstance(seed, bool):
-            raise TypeError("seed must be an integer")
+        batch_size = require_positive_integer(batch_size, name="batch_size")
+        seed = require_integer(seed, name="seed")
         if not 0 <= seed <= _MAX_TORCH_SEED:
             raise ValueError("seed is outside the supported torch range")
         if not isinstance(source_identity, str) or not source_identity:
@@ -355,11 +352,12 @@ class _TinyTextBatchLoader(Iterator[tuple[Tensor, Tensor]]):
 
 
 def _tiny_state_integer(value: object, *, name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
+    try:
+        return require_integer(value, name=name)
+    except TypeError as error:
         raise TinyTextLoaderStateError(
             f"tiny-text loader state {name} must be an integer"
-        )
-    return value
+        ) from error
 
 
 def _tiny_rng_state(value: object) -> Tensor:

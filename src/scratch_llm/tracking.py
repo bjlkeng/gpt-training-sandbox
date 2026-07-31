@@ -12,6 +12,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, Literal, TextIO
 
+from scratch_llm._validation import require_non_negative_integer
 from scratch_llm.config import ProjectConfig
 from scratch_llm.run import RunPaths
 from scratch_llm.utils import load_json, save_json
@@ -115,9 +116,15 @@ class RunSummary:
     def _validate_step(step: object) -> int | None:
         if step is None:
             return None
-        if not isinstance(step, int) or isinstance(step, bool) or step < 0:
-            raise ValueError("run summary latest_step must be a non-negative integer")
-        return step
+        try:
+            return require_non_negative_integer(
+                step,
+                name="run summary latest_step",
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "run summary latest_step must be a non-negative integer"
+            ) from error
 
     @staticmethod
     def _validate_scalar_metrics(metrics: object) -> dict[str, Any]:

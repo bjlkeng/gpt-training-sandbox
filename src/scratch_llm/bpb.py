@@ -14,6 +14,13 @@ import numpy as np
 import torch
 from torch import Tensor, nn
 
+from scratch_llm._validation import (
+    require_finite_non_negative_real,
+    require_finite_unit_interval,
+    require_non_empty_string,
+    require_non_negative_integer,
+    require_positive_integer,
+)
 from scratch_llm.utils import get_device
 
 
@@ -43,7 +50,7 @@ class BPBAccumulation:
             "counted_target_tokens",
             "counted_target_bytes",
         ):
-            _require_non_negative_integer(getattr(self, name), name=name)
+            require_non_negative_integer(getattr(self, name), name=name)
         if self.counted_target_tokens == 0:
             raise ValueError("counted_target_tokens must be positive")
         if self.counted_target_bytes == 0:
@@ -53,7 +60,7 @@ class BPBAccumulation:
                 "processed_model_tokens must be greater than or equal to "
                 "counted_target_tokens"
             )
-        total_nats = _require_finite_non_negative_real(
+        total_nats = require_finite_non_negative_real(
             self.total_nats,
             name="total_nats",
         )
@@ -140,7 +147,7 @@ class BPBAccumulator:
         if processed_model_tokens is None:
             processed_count = targets.numel()
         else:
-            processed_count = _require_non_negative_integer(
+            processed_count = require_non_negative_integer(
                 processed_model_tokens,
                 name="processed_model_tokens",
             )
@@ -340,10 +347,10 @@ class BaseValidationResult:
             "tokenizer_identity",
             "validation_manifest_identity",
         ):
-            _require_non_empty_string(getattr(self, name), name=name)
-        _require_positive_integer(self.protocol_version, name="protocol_version")
+            require_non_empty_string(getattr(self, name), name=name)
+        require_positive_integer(self.protocol_version, name="protocol_version")
         if self.reference_commit is not None:
-            _require_non_empty_string(
+            require_non_empty_string(
                 self.reference_commit,
                 name="reference_commit",
             )
@@ -367,7 +374,7 @@ class BaseValidationResult:
             "unique_source_tokens",
             "unique_source_bytes",
         ):
-            _require_non_negative_integer(getattr(self, name), name=name)
+            require_non_negative_integer(getattr(self, name), name=name)
         if self.counted_target_tokens == 0:
             raise ValueError("counted_target_tokens must be positive")
         if self.counted_target_bytes == 0:
@@ -396,11 +403,11 @@ class BaseValidationResult:
                 "counted_target_tokens"
             )
 
-        source_token_retention = _require_finite_unit_interval(
+        source_token_retention = require_finite_unit_interval(
             self.source_token_retention,
             name="source_token_retention",
         )
-        source_byte_retention = _require_finite_unit_interval(
+        source_byte_retention = require_finite_unit_interval(
             self.source_byte_retention,
             name="source_byte_retention",
         )
@@ -424,11 +431,11 @@ class BaseValidationResult:
             raise ValueError(
                 "source_byte_retention does not match unique/source byte counts"
             )
-        total_nats = _require_finite_non_negative_real(
+        total_nats = require_finite_non_negative_real(
             self.total_nats,
             name="total_nats",
         )
-        bpb = _require_finite_non_negative_real(self.bpb, name="bpb")
+        bpb = require_finite_non_negative_real(self.bpb, name="bpb")
         expected_bpb = total_nats / math.log(2) / self.counted_target_bytes
         if not math.isclose(
             bpb,
@@ -481,11 +488,11 @@ class BaseValidationResult:
                 "accumulation must be a BPBAccumulation, "
                 f"got {type(accumulation).__name__}"
             )
-        source_tokens = _require_positive_integer(
+        source_tokens = require_positive_integer(
             source_tokens,
             name="source_tokens",
         )
-        source_bytes = _require_positive_integer(
+        source_bytes = require_positive_integer(
             source_bytes,
             name="source_bytes",
         )
@@ -642,45 +649,6 @@ def _validated_supervision_mask(
             f"supervision mask must have dtype torch.bool, got {supervision_mask.dtype}"
         )
     return supervision_mask
-
-
-def _require_non_negative_integer(value: object, *, name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise TypeError(f"{name} must be an integer, got {type(value).__name__}")
-    if value < 0:
-        raise ValueError(f"{name} must be non-negative, got {value}")
-    return value
-
-
-def _require_positive_integer(value: object, *, name: str) -> int:
-    value = _require_non_negative_integer(value, name=name)
-    if value == 0:
-        raise ValueError(f"{name} must be positive")
-    return value
-
-
-def _require_non_empty_string(value: object, *, name: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{name} must be a non-empty string")
-    return value
-
-
-def _require_finite_non_negative_real(value: object, *, name: str) -> float:
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        raise TypeError(f"{name} must be a number, got {type(value).__name__}")
-    numeric = float(value)
-    if not math.isfinite(numeric):
-        raise ValueError(f"{name} must be finite")
-    if numeric < 0:
-        raise ValueError(f"{name} must be non-negative")
-    return numeric
-
-
-def _require_finite_unit_interval(value: object, *, name: str) -> float:
-    numeric = _require_finite_non_negative_real(value, name=name)
-    if numeric > 1:
-        raise ValueError(f"{name} must be in [0, 1]")
-    return numeric
 
 
 def _freeze_json_mapping(

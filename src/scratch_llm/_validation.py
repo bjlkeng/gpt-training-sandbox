@@ -65,9 +65,10 @@ class JsonValueValidator:
     def require_string(self, value: object, *, label: str) -> str:
         """Return a non-empty JSON string."""
 
-        if not isinstance(value, str) or not value.strip():
+        try:
+            return require_non_empty_string(value, name=label)
+        except (TypeError, ValueError):
             self._fail(f"{label} must be a non-empty string")
-        return value
 
     def require_integer(
         self,
@@ -81,14 +82,16 @@ class JsonValueValidator:
 
         if maximum is not None and maximum < minimum:
             raise ValueError("maximum must be greater than or equal to minimum")
-        if not isinstance(value, int) or isinstance(value, bool):
+        try:
+            normalized = require_integer(value, name=label)
+        except TypeError:
             self._fail(f"{label} must be an integer")
-        if value < minimum or (maximum is not None and value > maximum):
+        if normalized < minimum or (maximum is not None and normalized > maximum):
             interval = (
                 f"[{minimum}, {maximum}]" if maximum is not None else f">= {minimum}"
             )
-            self._fail(f"{label} must be {interval}, got {value}")
-        return value
+            self._fail(f"{label} must be {interval}, got {normalized}")
+        return normalized
 
     def duplicate_object_hook(
         self,
@@ -117,13 +120,55 @@ def _fail(path: str, message: str) -> NoReturn:
     raise ConfigValidationError(path, message)
 
 
-def require_positive_integer(value: object, *, name: str) -> int:
-    """Return a positive integer or raise an actionable input error."""
+def require_integer(value: object, *, name: str) -> int:
+    """Return a non-boolean integer."""
 
     if not isinstance(value, int) or isinstance(value, bool):
         raise TypeError(f"{name} must be an integer, got {type(value).__name__}")
-    if value <= 0:
+    return value
+
+
+def require_non_negative_integer(value: object, *, name: str) -> int:
+    """Return a non-negative integer."""
+
+    normalized = require_integer(value, name=name)
+    if normalized < 0:
+        raise ValueError(f"{name} must be non-negative, got {value}")
+    return normalized
+
+
+def require_optional_non_negative_integer(
+    value: object,
+    *,
+    name: str,
+) -> int | None:
+    """Return ``None`` or a non-negative integer."""
+
+    return None if value is None else require_non_negative_integer(value, name=name)
+
+
+def require_positive_integer(value: object, *, name: str) -> int:
+    """Return a positive integer or raise an actionable input error."""
+
+    normalized = require_integer(value, name=name)
+    if normalized <= 0:
         raise ValueError(f"{name} must be positive, got {value}")
+    return normalized
+
+
+def require_optional_positive_integer(value: object, *, name: str) -> int | None:
+    """Return ``None`` or a positive integer."""
+
+    return None if value is None else require_positive_integer(value, name=name)
+
+
+def require_non_empty_string(value: object, *, name: str) -> str:
+    """Return a non-empty string."""
+
+    if not isinstance(value, str):
+        raise TypeError(f"{name} must be a string, got {type(value).__name__}")
+    if not value.strip():
+        raise ValueError(f"{name} must be a non-empty string")
     return value
 
 
@@ -141,11 +186,35 @@ def require_optional_real(value: object, *, name: str) -> float | None:
     return None if value is None else require_real(value, name=name)
 
 
+def require_finite_real(value: object, *, name: str) -> float:
+    """Return a finite real number as a ``float``."""
+
+    try:
+        numeric = require_real(value, name=name)
+    except OverflowError as error:
+        raise ValueError(f"{name} must be finite") from error
+    if not math.isfinite(numeric):
+        raise ValueError(f"{name} must be finite")
+    return numeric
+
+
+def require_non_negative_real(value: object, *, name: str) -> float:
+    """Return a non-negative real number as a ``float``."""
+
+    numeric = require_real(value, name=name)
+    if numeric < 0:
+        raise ValueError(f"{name} must be non-negative, got {value}")
+    return numeric
+
+
 def require_finite_non_negative_real(value: object, *, name: str) -> float:
     """Return a finite, non-negative real number as a ``float``."""
 
-    numeric = require_real(value, name=name)
-    if not math.isfinite(numeric) or numeric < 0:
+    try:
+        numeric = require_finite_real(value, name=name)
+    except ValueError as error:
+        raise ValueError(f"{name} must be finite and non-negative") from error
+    if numeric < 0:
         raise ValueError(f"{name} must be finite and non-negative")
     return numeric
 
@@ -153,21 +222,44 @@ def require_finite_non_negative_real(value: object, *, name: str) -> float:
 def require_positive_real(value: object, *, name: str) -> float:
     """Return a positive real number or raise an actionable input error."""
 
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        raise TypeError(f"{name} must be a number, got {type(value).__name__}")
-    numeric = float(value)
+    numeric = require_real(value, name=name)
     if numeric <= 0:
         raise ValueError(f"{name} must be positive, got {value}")
     return numeric
 
 
+def require_finite_positive_real(value: object, *, name: str) -> float:
+    """Return a finite real number greater than zero as a ``float``."""
+
+    try:
+        numeric = require_finite_real(value, name=name)
+    except ValueError as error:
+        raise ValueError(f"{name} must be finite and greater than zero") from error
+    if numeric <= 0:
+        raise ValueError(f"{name} must be finite and greater than zero")
+    return numeric
+
+
+def require_finite_unit_interval(value: object, *, name: str) -> float:
+    """Return a finite real number in the closed unit interval."""
+
+    numeric = require_finite_non_negative_real(value, name=name)
+    if numeric > 1:
+        raise ValueError(f"{name} must be in [0, 1]")
+    return numeric
+
+
 def _require_non_empty(value: object, path: str) -> None:
-    if not isinstance(value, str) or not value.strip():
+    try:
+        require_non_empty_string(value, name=path)
+    except (TypeError, ValueError):
         _fail(path, "must be a non-empty string")
 
 
 def _require_int(value: object, path: str) -> None:
-    if not isinstance(value, int) or isinstance(value, bool):
+    try:
+        require_integer(value, name=path)
+    except TypeError:
         _fail(path, "must be an integer")
 
 
@@ -179,7 +271,9 @@ def _require_positive_int(value: object, path: str) -> None:
 
 
 def _require_non_negative_int(value: object, path: str) -> None:
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+    try:
+        require_non_negative_integer(value, name=path)
+    except (TypeError, ValueError):
         _fail(path, "must be a non-negative integer")
 
 
@@ -200,7 +294,11 @@ def _require_positive_real(value: object, path: str) -> None:
 
 
 def _require_non_negative_real(value: object, path: str) -> None:
-    if _require_real(value, path) < 0:
+    try:
+        require_non_negative_real(value, name=path)
+    except TypeError:
+        _fail(path, "must be a number")
+    except ValueError:
         _fail(path, "must be non-negative")
 
 
@@ -230,6 +328,15 @@ __all__ = [
     "ConfigValidationError",
     "JsonValueValidator",
     "require_finite_non_negative_real",
+    "require_finite_positive_real",
+    "require_finite_real",
+    "require_finite_unit_interval",
+    "require_integer",
+    "require_non_empty_string",
+    "require_non_negative_integer",
+    "require_non_negative_real",
+    "require_optional_non_negative_integer",
+    "require_optional_positive_integer",
     "require_optional_real",
     "require_positive_integer",
     "require_positive_real",

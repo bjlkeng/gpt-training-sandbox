@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import random
 import tempfile
@@ -18,6 +17,12 @@ import numpy as np
 import torch
 from torch import nn
 
+from scratch_llm._validation import (
+    require_finite_real,
+    require_integer,
+    require_non_negative_integer,
+)
+
 
 _MAX_SHARED_SEED = 2**32 - 1
 _SUPPORTED_DEVICE_TYPES = frozenset({"cpu", "cuda", "mps"})
@@ -28,8 +33,7 @@ _BYTE_SUFFIXES = ("B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB")
 def set_seed(seed: int) -> None:
     """Seed Python, NumPy, Torch, and every available CUDA generator."""
 
-    if not isinstance(seed, int) or isinstance(seed, bool):
-        raise TypeError(f"seed must be an integer, got {type(seed).__name__}")
+    seed = require_integer(seed, name="seed")
     if not 0 <= seed <= _MAX_SHARED_SEED:
         raise ValueError(f"seed must be in range [0, {_MAX_SHARED_SEED}], got {seed}")
 
@@ -123,14 +127,7 @@ def count_parameters(module: nn.Module, *, trainable_only: bool = False) -> int:
 def format_num(value: int | float) -> str:
     """Format a finite number with decimal ML-oriented magnitude suffixes."""
 
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        raise TypeError(f"value must be a number, got {type(value).__name__}")
-    try:
-        scaled = float(value)
-    except OverflowError as error:
-        raise ValueError(f"value must be finite, got {value}") from error
-    if not math.isfinite(scaled):
-        raise ValueError(f"value must be finite, got {value}")
+    scaled = require_finite_real(value, name="value")
 
     suffix_index = 0
     while (
@@ -150,10 +147,7 @@ def format_num(value: int | float) -> str:
 def format_bytes(num_bytes: int) -> str:
     """Format a non-negative byte count with IEC binary units."""
 
-    if not isinstance(num_bytes, int) or isinstance(num_bytes, bool):
-        raise TypeError(f"num_bytes must be an integer, got {type(num_bytes).__name__}")
-    if num_bytes < 0:
-        raise ValueError(f"num_bytes must be non-negative, got {num_bytes}")
+    num_bytes = require_non_negative_integer(num_bytes, name="num_bytes")
 
     scaled = float(num_bytes)
     suffix_index = 0

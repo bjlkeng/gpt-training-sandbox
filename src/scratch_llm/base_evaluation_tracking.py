@@ -10,6 +10,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Final
 
+from scratch_llm._validation import require_non_negative_integer
 from scratch_llm.base_sampling import (
     BaseSamplesResult,
     write_base_samples_markdown,
@@ -83,7 +84,7 @@ def track_periodic_base_validation(
             f"state must be a ValidationCheckpointState, got {type(state).__name__}"
         )
     _require_tracker(tracker)
-    step = _non_negative_integer(step, name="step")
+    step = require_non_negative_integer(step, name="step")
     if state.ranking_protocol_id != BEST_CHECKPOINT_RANKING_PROTOCOL_ID:
         raise ValueError(
             "validation state ranking protocol does not match "
@@ -293,12 +294,6 @@ def _payload_identity(payload: object) -> str:
         sort_keys=True,
     ).encode("utf-8")
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
-
-
-def _non_negative_integer(value: object, *, name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise ValueError(f"{name} must be a non-negative integer")
-    return value
 
 
 __all__ = [

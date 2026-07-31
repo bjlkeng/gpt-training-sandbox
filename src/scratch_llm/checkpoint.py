@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import tempfile
 from dataclasses import dataclass
@@ -15,6 +14,11 @@ from omegaconf import OmegaConf
 from torch.optim import AdamW, Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
+from scratch_llm._validation import (
+    require_finite_non_negative_real,
+    require_non_negative_integer,
+    require_real,
+)
 from scratch_llm.best_checkpoint import (
     BestCheckpointError,
     ValidationCheckpointState,
@@ -128,19 +132,14 @@ class ExactTrainingState:
                 "rng_state must be a TrainingRNGState, got "
                 f"{type(self.rng_state).__name__}"
             )
-        if (
-            not isinstance(self.tracker_step, int)
-            or isinstance(self.tracker_step, bool)
-            or self.tracker_step < 0
-        ):
-            raise ValueError("tracker_step must be a non-negative integer")
-        _require_non_negative_finite(
+        require_non_negative_integer(self.tracker_step, name="tracker_step")
+        require_finite_non_negative_real(
             self.total_training_time_seconds,
-            label="total_training_time_seconds",
+            name="total_training_time_seconds",
         )
-        _require_non_negative_finite(
+        require_finite_non_negative_real(
             self.total_training_flops,
-            label="total_training_flops",
+            name="total_training_flops",
         )
         object.__setattr__(self, "loader_state", canonical_loader_state)
         object.__setattr__(
@@ -190,9 +189,10 @@ class ExactTrainingState:
             loader_format = value["loader_format"]
             if not isinstance(loader_format, str):
                 raise TypeError("loader_format must be a string")
-            tracker_step = value["tracker_step"]
-            if not isinstance(tracker_step, int) or isinstance(tracker_step, bool):
-                raise TypeError("tracker_step must be an integer")
+            tracker_step = require_non_negative_integer(
+                value["tracker_step"],
+                name="tracker_step",
+            )
             return cls(
                 loader_format=loader_format,
                 loader_state=_canonical_json_object(
@@ -201,13 +201,13 @@ class ExactTrainingState:
                 ),
                 rng_state=TrainingRNGState.from_dict(value["rng_state"]),
                 tracker_step=tracker_step,
-                total_training_time_seconds=_require_real(
+                total_training_time_seconds=require_real(
                     value["total_training_time_seconds"],
-                    label="total_training_time_seconds",
+                    name="total_training_time_seconds",
                 ),
-                total_training_flops=_require_real(
+                total_training_flops=require_real(
                     value["total_training_flops"],
-                    label="total_training_flops",
+                    name="total_training_flops",
                 ),
             )
         except CheckpointError:
@@ -249,10 +249,7 @@ def _validate_save_state(
         )
     if not isinstance(config, ProjectConfig):
         raise TypeError(f"config must be a ProjectConfig, got {type(config).__name__}")
-    if not isinstance(step, int) or isinstance(step, bool):
-        raise TypeError(f"step must be an integer, got {type(step).__name__}")
-    if step < 0:
-        raise ValueError(f"step must be non-negative, got {step}")
+    step = require_non_negative_integer(step, name="step")
     if not isinstance(tokenizer, Tokenizer):
         raise TypeError(
             f"tokenizer must implement Tokenizer, got {type(tokenizer).__name__}"
@@ -793,18 +790,6 @@ def _canonical_json_object(value: object, *, label: str) -> dict[str, object]:
     if not isinstance(decoded, dict):
         raise TypeError(f"{label} must encode a JSON object")
     return decoded
-
-
-def _require_real(value: object, *, label: str) -> float:
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        raise TypeError(f"{label} must be a number")
-    return float(value)
-
-
-def _require_non_negative_finite(value: object, *, label: str) -> None:
-    numeric = _require_real(value, label=label)
-    if not math.isfinite(numeric) or numeric < 0:
-        raise ValueError(f"{label} must be finite and non-negative")
 
 
 __all__ = [

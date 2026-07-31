@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Final
 
 import torch
 
-from scratch_llm._validation import JsonValueValidator
+from scratch_llm._validation import JsonValueValidator, require_non_negative_integer
 from scratch_llm.tokenizer import (
     BYTE_VOCAB_SIZE,
     NANOCHAT_SPECIAL_TOKENS,
@@ -70,11 +70,10 @@ def build_token_byte_lengths(tokenizer: Tokenizer) -> torch.Tensor:
         raise TypeError(
             f"tokenizer must implement Tokenizer, got {type(tokenizer).__name__}"
         )
-    vocab_size = tokenizer.get_vocab_size()
-    if not isinstance(vocab_size, int) or isinstance(vocab_size, bool):
-        raise TypeError("tokenizer vocabulary size must be an integer")
-    if vocab_size < 0:
-        raise ValueError("tokenizer vocabulary size must be non-negative")
+    vocab_size = require_non_negative_integer(
+        tokenizer.get_vocab_size(),
+        name="tokenizer vocabulary size",
+    )
 
     special_ids = {
         tokenizer.encode_special(token) for token in tokenizer.get_special_tokens()
