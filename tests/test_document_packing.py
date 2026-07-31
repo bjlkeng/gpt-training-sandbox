@@ -21,6 +21,7 @@ from scratch_llm.data import (
     TokenizedDocumentSpan,
     TokenizedShardReader,
     TokenizedShardSource,
+    _AvailableCapacities,
     _plan_best_fit_document_rows,
     create_token_loader,
     write_tokenized_shards,
@@ -137,6 +138,24 @@ def _row_signature(
         ]
         for row in rows
     ]
+
+
+def test_available_capacities_returns_smallest_capacity_at_least_required() -> None:
+    capacities = _AvailableCapacities()
+    for capacity in (2, 5, 7):
+        capacities.add(capacity)
+
+    assert capacities.smallest_at_least(0) == 2
+    assert capacities.smallest_at_least(4) == 5
+    assert capacities.smallest_at_least(5) == 5
+    assert capacities.smallest_at_least(6) == 7
+    assert capacities.smallest_at_least(8) is None
+
+    capacities.discard(5)
+    assert capacities.smallest_at_least(4) == 7
+    capacities.discard(2)
+    capacities.discard(7)
+    assert capacities.smallest_at_least(0) is None
 
 
 @pytest.mark.parametrize("seed", range(12))

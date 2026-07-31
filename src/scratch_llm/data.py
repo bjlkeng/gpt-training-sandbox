@@ -624,6 +624,39 @@ class DocumentPackingPlanStats:
     max_capacity_bucket_size: int
 
 
+class _AvailableCapacities:
+    """Ordered set of non-empty capacity buckets backed by an integer bitset."""
+
+    def __init__(self) -> None:
+        self._bits = 0
+
+    def add(self, capacity: int) -> None:
+        """Mark one exact residual-capacity bucket as non-empty."""
+
+        self._bits |= 1 << capacity
+
+    def discard(self, capacity: int) -> None:
+        """Mark one exact residual-capacity bucket as empty."""
+
+        self._bits &= ~(1 << capacity)
+
+    def smallest_at_least(self, required_capacity: int) -> int | None:
+        """Return the smallest available capacity that meets the requirement.
+
+        Bit position ``capacity`` records whether that exact bucket is non-empty.
+        Shifting by the requirement discards undersized buckets and moves an exact
+        fit to bit zero. The lowest remaining set bit is therefore the smallest
+        available capacity offset above the requirement.
+        """
+
+        eligible_capacity_bits = self._bits >> required_capacity
+        if eligible_capacity_bits == 0:
+            return None
+        smallest_offset_bit = eligible_capacity_bits & -eligible_capacity_bits
+        smallest_capacity_offset = smallest_offset_bit.bit_length() - 1
+        return required_capacity + smallest_capacity_offset
+
+
 class _CapacityIndexedRows:
     """Mutable best-fit rows indexed by their exact residual capacity."""
 
@@ -635,7 +668,7 @@ class _CapacityIndexedRows:
         self.row_candidate_checks = 0
         self.max_capacity_bucket_size = 0
         self._capacity_heaps: list[list[int]] = [[] for _ in range(row_token_count + 1)]
-        self._nonempty_capacities = 0
+        self._available_capacities = _AvailableCapacities()
 
     def add_row(self, piece: _DocumentPiece) -> None:
         """Append a row and make any residual capacity available for reuse."""
@@ -664,18 +697,16 @@ class _CapacityIndexedRows:
                 f"{packed_token_count} > {self.row_token_count}"
             )
         self.capacity_searches += 1
-        eligible_capacities = self._nonempty_capacities >> packed_token_count
-        if eligible_capacities == 0:
+        capacity = self._available_capacities.smallest_at_least(packed_token_count)
+        if capacity is None:
             self.add_row(piece)
             return
 
-        capacity_offset = (eligible_capacities & -eligible_capacities).bit_length() - 1
-        capacity = packed_token_count + capacity_offset
         capacity_heap = self._capacity_heaps[capacity]
         row_index = heapq.heappop(capacity_heap)
         self.row_candidate_checks += 1
         if not capacity_heap:
-            self._nonempty_capacities &= ~(1 << capacity)
+            self._available_capacities.discard(capacity)
 
         self.rows[row_index].append(piece)
         self.used_token_counts[row_index] += packed_token_count
@@ -698,7 +729,7 @@ class _CapacityIndexedRows:
             return
         capacity_heap = self._capacity_heaps[capacity]
         heapq.heappush(capacity_heap, row_index)
-        self._nonempty_capacities |= 1 << capacity
+        self._available_capacities.add(capacity)
         self.max_capacity_bucket_size = max(
             self.max_capacity_bucket_size,
             len(capacity_heap),
