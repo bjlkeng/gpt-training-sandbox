@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
+import math
 from pathlib import Path
 from typing import Any, Literal, NoReturn, get_args
 
@@ -396,6 +397,8 @@ class TrainConfig(_SerializableConfig):
     sample_every: int = 1_000
     save_every: int = 1_000
     log_every: int = 10
+    mfu_peak_flops_per_second: float | None = None
+    mfu_peak_flops_basis: str | None = None
     dtype: TrainDType = "float32"
     compile: bool = False
     activation_checkpointing: bool = False
@@ -440,6 +443,27 @@ class TrainConfig(_SerializableConfig):
             "log_every",
         ):
             _require_positive_int(getattr(self, field_name), f"train.{field_name}")
+        has_peak_flops = self.mfu_peak_flops_per_second is not None
+        has_peak_basis = self.mfu_peak_flops_basis is not None
+        if has_peak_flops != has_peak_basis:
+            _fail(
+                "train.mfu_peak_flops",
+                "per-second value and basis must either both be set or both be null",
+            )
+        if has_peak_flops:
+            peak_flops = _require_real(
+                self.mfu_peak_flops_per_second,
+                "train.mfu_peak_flops_per_second",
+            )
+            if not math.isfinite(peak_flops) or peak_flops <= 0:
+                _fail(
+                    "train.mfu_peak_flops_per_second",
+                    "must be finite and greater than zero",
+                )
+            _require_non_empty(
+                self.mfu_peak_flops_basis,
+                "train.mfu_peak_flops_basis",
+            )
         _require_choice(self.dtype, "train.dtype", _TRAIN_DTYPES)
 
 

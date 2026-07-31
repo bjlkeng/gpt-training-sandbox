@@ -15,12 +15,23 @@ from torch.optim.lr_scheduler import LRScheduler
 from torch.utils.data import DataLoader
 
 from scratch_llm._validation import require_positive_integer, require_positive_real
+from scratch_llm.accelerator_memory import (
+    AcceleratorMemorySnapshot,
+    collect_accelerator_memory,
+    reset_accelerator_memory_peak,
+)
 from scratch_llm.config import ProjectConfig
 from scratch_llm.data import NextTokenDataset
 from scratch_llm.model import GPT
 from scratch_llm.optim import build_lr_scheduler, build_optimizer
 from scratch_llm.tokenizer import NANOCHAT_SPECIAL_TOKENS, ByteTokenizer, Tokenizer
 from scratch_llm.tracking import NullTracker, Tracker
+from scratch_llm.training_telemetry import (
+    PeakFlopsBasis,
+    TrainingStepTelemetry,
+    estimate_gpt_training_flops,
+    peak_flops_basis_from_config,
+)
 from scratch_llm.utils import get_device, set_seed
 
 
@@ -62,9 +73,23 @@ class OptimizerStepResult:
 
     loss: float
     grad_norm: float
-    step_duration_seconds: float = 0.0
-    total_training_time_seconds: float = 0.0
-    total_training_flops: float = 0.0
+    telemetry: TrainingStepTelemetry | None = None
+
+    @property
+    def step_duration_seconds(self) -> float:
+        return 0.0 if self.telemetry is None else self.telemetry.duration_seconds
+
+    @property
+    def total_training_time_seconds(self) -> float:
+        if self.telemetry is None:
+            return 0.0
+        return self.telemetry.total_training_time_seconds
+
+    @property
+    def total_training_flops(self) -> float:
+        if self.telemetry is None:
+            return 0.0
+        return self.telemetry.total_training_flops
 
 
 @dataclass(frozen=True)
@@ -235,6 +260,12 @@ def run_training_steps(
     on_step: Callable[[int, OptimizerStepResult], None] | None = None,
     initial_total_training_time_seconds: float = 0.0,
     initial_total_training_flops: float = 0.0,
+    peak_flops_basis: PeakFlopsBasis | None = None,
+    clock: Callable[[], float] | None = None,
+    reset_memory_peak: Callable[[str | torch.device], bool] | None = None,
+    collect_memory: (
+        Callable[[str | torch.device], AcceleratorMemorySnapshot] | None
+    ) = None,
 ) -> list[OptimizerStepResult]:
     """Train to ``max_steps`` and call ``on_step`` after each completed step."""
 
@@ -263,6 +294,30 @@ def run_training_steps(
         raise TypeError(
             f"on_step must be callable or None, got {type(on_step).__name__}"
         )
+    if peak_flops_basis is not None and not isinstance(
+        peak_flops_basis,
+        PeakFlopsBasis,
+    ):
+        raise TypeError(
+            "peak_flops_basis must be a PeakFlopsBasis or None, got "
+            f"{type(peak_flops_basis).__name__}"
+        )
+    active_clock = perf_counter if clock is None else clock
+    active_reset_memory_peak = (
+        reset_accelerator_memory_peak
+        if reset_memory_peak is None
+        else reset_memory_peak
+    )
+    active_collect_memory = (
+        collect_accelerator_memory if collect_memory is None else collect_memory
+    )
+    for name, function in (
+        ("clock", active_clock),
+        ("reset_memory_peak", active_reset_memory_peak),
+        ("collect_memory", active_collect_memory),
+    ):
+        if not callable(function):
+            raise TypeError(f"{name} must be callable")
     total_training_time_seconds = _non_negative_finite_counter(
         initial_total_training_time_seconds,
         name="initial_total_training_time_seconds",
@@ -278,6 +333,9 @@ def run_training_steps(
 
     model.to(resolved_device)
     model.train()
+    flops_estimate = (
+        estimate_gpt_training_flops(model.config) if isinstance(model, GPT) else None
+    )
     batch_iterator = iter(_repeat_batches(batches))
     results: list[OptimizerStepResult] = []
     initial_step = scheduler.last_epoch
@@ -291,15 +349,38 @@ def run_training_steps(
         learning_rate_multiplier = (
             float(scheduler.get_last_lr()[0]) / base_learning_rate
         )
-        step_started_at = perf_counter()
+        should_log = step % log_every == 0
+        memory_window_started = (
+            bool(active_reset_memory_peak(resolved_device)) if should_log else False
+        )
+        step_started_at = _clock_value(active_clock(), name="clock start")
+        processed_model_tokens = 0
+        supervised_target_tokens = 0
 
         def micro_losses() -> Iterator[Tensor]:
+            nonlocal processed_model_tokens, supervised_target_tokens
             for _ in range(grad_accum_steps):
                 inputs, targets = next(batch_iterator)
-                yield model(
+                if inputs.ndim != 2 or targets.shape != inputs.shape:
+                    raise ValueError(
+                        "training inputs and targets must have matching "
+                        "two-dimensional shapes"
+                    )
+                if (
+                    flops_estimate is not None
+                    and inputs.shape[1] != flops_estimate.sequence_length
+                ):
+                    raise ValueError(
+                        "training input sequence length must match the FLOPs "
+                        f"estimate ({flops_estimate.sequence_length})"
+                    )
+                loss = model(
                     inputs.to(resolved_device),
                     targets.to(resolved_device),
                 )
+                processed_model_tokens += inputs.numel()
+                supervised_target_tokens += int(targets.ne(-1).sum().item())
+                yield loss
 
         result = run_optimizer_step(
             optimizer,
@@ -308,16 +389,49 @@ def run_training_steps(
             grad_clip=grad_clip,
         )
         scheduler.step()
-        step_duration = perf_counter() - step_started_at
+        step_finished_at = _clock_value(active_clock(), name="clock finish")
+        step_duration = step_finished_at - step_started_at
+        if step_duration <= 0:
+            raise ValueError("measured optimizer-step duration must be positive")
         total_training_time_seconds += step_duration
-        result = replace(
-            result,
-            step_duration_seconds=step_duration,
-            total_training_time_seconds=total_training_time_seconds,
-            total_training_flops=total_training_flops,
-        )
+        if flops_estimate is not None:
+            step_flops = flops_estimate.flops_for_tokens(processed_model_tokens)
+            total_training_flops += step_flops
+            peak_memory_mib: float | None = None
+            if memory_window_started:
+                memory = active_collect_memory(resolved_device)
+                if not isinstance(memory, AcceleratorMemorySnapshot):
+                    raise TypeError(
+                        "collect_memory must return an AcceleratorMemorySnapshot"
+                    )
+                if not memory.available or memory.peak_allocated_mib is None:
+                    raise RuntimeError(
+                        "peak memory reset succeeded but collection was unavailable"
+                    )
+                peak_memory_mib = memory.peak_allocated_mib
+            mfu = (
+                None
+                if peak_flops_basis is None
+                else step_flops / step_duration / peak_flops_basis.flops_per_second
+            )
+            result = replace(
+                result,
+                telemetry=TrainingStepTelemetry(
+                    processed_model_tokens=processed_model_tokens,
+                    supervised_target_tokens=supervised_target_tokens,
+                    duration_seconds=step_duration,
+                    tokens_per_second=processed_model_tokens / step_duration,
+                    step_flops=step_flops,
+                    total_training_flops=total_training_flops,
+                    total_training_time_seconds=total_training_time_seconds,
+                    mfu=mfu,
+                    peak_flops_basis=peak_flops_basis,
+                    peak_memory_mib=peak_memory_mib,
+                    flops_estimate=flops_estimate,
+                ),
+            )
         results.append(result)
-        if step % log_every == 0:
+        if should_log:
             metrics = {
                 "train/loss": result.loss,
                 "train/lrm": learning_rate_multiplier,
@@ -341,6 +455,15 @@ def _non_negative_finite_counter(value: object, *, name: str) -> float:
     numeric = float(value)
     if not math.isfinite(numeric) or numeric < 0:
         raise ValueError(f"{name} must be finite and non-negative")
+    return numeric
+
+
+def _clock_value(value: object, *, name: str) -> float:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise TypeError(f"{name} must be a number")
+    numeric = float(value)
+    if not math.isfinite(numeric):
+        raise ValueError(f"{name} must be finite")
     return numeric
 
 
@@ -414,6 +537,7 @@ def train_tiny_text(
         device=device,
         tracker=tracker,
         log_every=config.train.log_every,
+        peak_flops_basis=peak_flops_basis_from_config(config.train),
     )
     return TinyTextTrainingResult(
         model=model,

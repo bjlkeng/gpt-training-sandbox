@@ -30,6 +30,7 @@ from scratch_llm.pretraining import prepare_pretraining_batch, run_pretraining
 from scratch_llm.run import prepare_run
 from scratch_llm.tokenized_data import TokenizedDataError
 from scratch_llm.tracking import NullTracker
+from scratch_llm.training_telemetry import estimate_gpt_training_flops
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -239,6 +240,23 @@ def test_production_profile_supports_each_explicit_loader(
     assert result.final_step == 1
     assert isinstance(checkpoint.tokenizer, RegexBPETokenizer)
     assert checkpoint.tokenizer.get_identity() == tokenizer.get_identity()
+    telemetry = result.steps[0].telemetry
+    assert telemetry is not None
+    assert (
+        telemetry.processed_model_tokens == config.train.total_batch_size_tokens == 16
+    )
+    assert 0 < telemetry.supervised_target_tokens <= 16
+    assert telemetry.duration_seconds > 0
+    assert telemetry.tokens_per_second == pytest.approx(
+        telemetry.processed_model_tokens / telemetry.duration_seconds
+    )
+    expected_step_flops = estimate_gpt_training_flops(config.model).flops_for_tokens(16)
+    assert telemetry.step_flops == expected_step_flops
+    assert telemetry.total_training_flops == expected_step_flops
+    assert telemetry.total_training_time_seconds == telemetry.duration_seconds
+    assert telemetry.mfu is None
+    assert telemetry.peak_flops_basis is None
+    assert telemetry.peak_memory_mib is None
 
 
 def test_scripts_pretrain_runs_offline_regex_bpe_to_sample(
@@ -281,6 +299,13 @@ def test_scripts_pretrain_runs_offline_regex_bpe_to_sample(
         "scratch_llm_document_packing_loader_state"
     )
     assert payload["continuation"]["tracker_step"] == 2
+    assert payload["continuation"]["total_training_flops"] == (
+        estimate_gpt_training_flops(config.model).flops_for_tokens(
+            config.train.total_batch_size_tokens
+        )
+        * config.train.max_steps
+    )
+    assert payload["continuation"]["total_training_time_seconds"] > 0
     assert payload["tokenizer"] == {
         "artifact_path": str(artifact_dir.resolve()),
         "identity": tokenizer.get_identity(),
@@ -405,10 +430,16 @@ def test_exact_resume_matches_uninterrupted_batches_losses_and_state(
         == uninterrupted_payload["continuation"]["rng_state"]
     )
     assert resumed_payload["continuation"]["tracker_step"] == 4
+    expected_total_flops = (
+        estimate_gpt_training_flops(uninterrupted_config.model).flops_for_tokens(
+            uninterrupted_config.train.total_batch_size_tokens
+        )
+        * uninterrupted_config.train.max_steps
+    )
     assert (
         resumed_payload["continuation"]["total_training_flops"]
         == uninterrupted_payload["continuation"]["total_training_flops"]
-        == 0.0
+        == expected_total_flops
     )
     assert resumed_payload["continuation"]["total_training_time_seconds"] >= 0.0
 

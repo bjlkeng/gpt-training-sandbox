@@ -36,6 +36,7 @@ from scratch_llm.training import (
     run_training_steps,
     train_tiny_text,
 )
+from scratch_llm.training_telemetry import estimate_gpt_training_flops
 from scratch_llm.utils import set_seed
 
 
@@ -370,6 +371,7 @@ def test_cpu_training_loop_runs_forward_backward_clip_optimizer_and_scheduler(
     )
     optimizer = build_optimizer(model, train_config)
     scheduler = build_lr_scheduler(optimizer, train_config)
+    step_flops = estimate_gpt_training_flops(model.config).flops_for_tokens(8)
     events: list[str] = []
     original_forward = model.forward
     original_clip = training.clip_grad_norm_
@@ -404,7 +406,7 @@ def test_cpu_training_loop_runs_forward_backward_clip_optimizer_and_scheduler(
         assert torch.isfinite(torch.tensor(result.loss))
         assert result.step_duration_seconds == 2.5
         assert result.total_training_time_seconds == 10.0
-        assert result.total_training_flops == 123.0
+        assert result.total_training_flops == 123.0 + step_flops
         events.append("callback")
 
     monkeypatch.setattr(model, "forward", record_forward)
@@ -443,7 +445,7 @@ def test_cpu_training_loop_runs_forward_backward_clip_optimizer_and_scheduler(
     assert torch.isfinite(torch.tensor(results[0].grad_norm))
     assert results[0].step_duration_seconds == 2.5
     assert results[0].total_training_time_seconds == 10.0
-    assert results[0].total_training_flops == 123.0
+    assert results[0].total_training_flops == 123.0 + step_flops
     assert scheduler.last_epoch == 1
     assert all(parameter.device.type == "cpu" for parameter in model.parameters())
 
