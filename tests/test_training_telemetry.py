@@ -18,6 +18,7 @@ from scratch_llm.training import run_training_steps
 from scratch_llm.training_telemetry import (
     TRAINING_FLOPS_FORMULA_ID,
     PeakFlopsBasis,
+    base_training_metrics,
     estimate_gpt_training_flops,
 )
 
@@ -222,6 +223,27 @@ def test_training_steps_measure_actual_work_and_exclude_tracker_and_callbacks(
         assert serialized["supervised_target_tokens"] == 2
         assert serialized["peak_flops_basis"] == peak_basis.to_dict()
         assert serialized["flops_estimate"] == flops.to_dict()
+        metrics, tracked_step = tracker.records[index - 1]
+        assert tracked_step == index
+        assert metrics == base_training_metrics(
+            telemetry,
+            loss=result.loss,
+            learning_rate_multiplier=1.0,
+            grad_norm=result.grad_norm,
+            epoch=float(index * 2),
+        )
+        assert metrics == {
+            "train/loss": result.loss,
+            "train/lrm": 1.0,
+            "train/dt": 2.0,
+            "train/tok_per_sec": 2.0,
+            "train/mfu": pytest.approx(step_flops / 2.0 / 1_000_000.0),
+            "train/epoch": float(index * 2),
+            "train/grad_norm": result.grad_norm,
+            "train/peak_memory_mib": 6.0,
+            "total_training_flops": 100.0 + index * step_flops,
+            "total_training_time": 7.0 + index * 2.0,
+        }
 
 
 def test_cpu_training_omits_cuda_only_peak_memory() -> None:

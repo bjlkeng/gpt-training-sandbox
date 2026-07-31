@@ -16,6 +16,7 @@ from torch.utils.data import DataLoader
 from scratch_llm._validation import (
     require_finite_non_negative_real,
     require_finite_real,
+    require_non_negative_integer,
     require_positive_integer,
     require_positive_real,
 )
@@ -33,6 +34,7 @@ from scratch_llm.tracking import NullTracker, Tracker
 from scratch_llm.training_telemetry import (
     PeakFlopsBasis,
     TrainingStepTelemetry,
+    base_training_metrics,
     estimate_gpt_training_flops,
     peak_flops_basis_from_config,
 )
@@ -264,6 +266,8 @@ def run_training_steps(
     on_step: Callable[[int, OptimizerStepResult], None] | None = None,
     initial_total_training_time_seconds: float = 0.0,
     initial_total_training_flops: float = 0.0,
+    initial_processed_model_tokens: int = 0,
+    tokens_per_epoch: int | None = None,
     peak_flops_basis: PeakFlopsBasis | None = None,
     clock: Callable[[], float] | None = None,
     reset_memory_peak: Callable[[str | torch.device], bool] | None = None,
@@ -330,6 +334,15 @@ def run_training_steps(
         initial_total_training_flops,
         name="initial_total_training_flops",
     )
+    total_processed_model_tokens = require_non_negative_integer(
+        initial_processed_model_tokens,
+        name="initial_processed_model_tokens",
+    )
+    if tokens_per_epoch is not None:
+        tokens_per_epoch = require_positive_integer(
+            tokens_per_epoch,
+            name="tokens_per_epoch",
+        )
     resolved_device = get_device(device)
     batches_per_epoch = len(batches) if isinstance(batches, Sized) else None
     if batches_per_epoch is not None and batches_per_epoch <= 0:
@@ -398,6 +411,7 @@ def run_training_steps(
         if step_duration <= 0:
             raise ValueError("measured optimizer-step duration must be positive")
         total_training_time_seconds += step_duration
+        total_processed_model_tokens += processed_model_tokens
         if flops_estimate is not None:
             step_flops = flops_estimate.flops_for_tokens(processed_model_tokens)
             total_training_flops += step_flops
@@ -436,16 +450,33 @@ def run_training_steps(
             )
         results.append(result)
         if should_log:
-            metrics = {
-                "train/loss": result.loss,
-                "train/lrm": learning_rate_multiplier,
-                "train/dt": step_duration,
-                "train/grad_norm": result.grad_norm,
-                "train/total_training_flops": result.total_training_flops,
-                "train/total_training_time": result.total_training_time_seconds,
-            }
-            if batches_per_epoch is not None:
-                metrics["train/epoch"] = step * grad_accum_steps / batches_per_epoch
+            if tokens_per_epoch is not None:
+                epoch: float | None = total_processed_model_tokens / tokens_per_epoch
+            elif batches_per_epoch is not None:
+                epoch = step * grad_accum_steps / batches_per_epoch
+            else:
+                epoch = None
+            if result.telemetry is None:
+                metrics: dict[str, float | None] = {
+                    "train/loss": result.loss,
+                    "train/lrm": learning_rate_multiplier,
+                    "train/dt": step_duration,
+                    "train/tok_per_sec": (processed_model_tokens / step_duration),
+                    "train/mfu": None,
+                    "train/grad_norm": result.grad_norm,
+                    "total_training_flops": total_training_flops,
+                    "total_training_time": total_training_time_seconds,
+                }
+                if epoch is not None:
+                    metrics["train/epoch"] = epoch
+            else:
+                metrics = base_training_metrics(
+                    result.telemetry,
+                    loss=result.loss,
+                    learning_rate_multiplier=learning_rate_multiplier,
+                    grad_norm=result.grad_norm,
+                    epoch=epoch,
+                )
             tracker.log(metrics, step=step)
         if on_step is not None:
             on_step(step, result)

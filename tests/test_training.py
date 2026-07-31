@@ -181,15 +181,29 @@ def test_tiny_text_smoke_writes_core_metrics_under_the_run_directory(
             "train/loss",
             "train/lrm",
             "train/dt",
+            "train/tok_per_sec",
+            "train/mfu",
             "train/grad_norm",
             "train/epoch",
-        } <= metrics.keys()
+            "total_training_flops",
+            "total_training_time",
+        } == metrics.keys()
         assert metrics["train/loss"] == pytest.approx(step_result.loss)
         assert metrics["train/lrm"] == pytest.approx(1.0)
         assert metrics["train/dt"] >= 0.0
+        assert metrics["train/tok_per_sec"] == pytest.approx(
+            config.train.total_batch_size_tokens / metrics["train/dt"]
+        )
+        assert metrics["train/mfu"] is None
         assert metrics["train/grad_norm"] == pytest.approx(step_result.grad_norm)
         assert metrics["train/epoch"] == pytest.approx(
             record["step"] / batches_per_epoch
+        )
+        assert metrics["total_training_flops"] == pytest.approx(
+            step_result.total_training_flops
+        )
+        assert metrics["total_training_time"] == pytest.approx(
+            step_result.total_training_time_seconds
         )
 
 

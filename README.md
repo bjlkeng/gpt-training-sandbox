@@ -664,6 +664,14 @@ Tracker fan-out and step callbacks—including validation, sampling, and
 checkpoint I/O—run after the interval ends. No device synchronization is added
 per microstep for logging.
 
+At `train.log_every`, one optimizer-step record carries `train/loss`,
+`train/lrm`, `train/dt`, `train/tok_per_sec`, `train/mfu`, `train/epoch`,
+`train/grad_norm`, `total_training_flops`, and `total_training_time`.
+Production epoch progress is cumulative processed model positions divided by
+the manifest's training-token count; exact resume reconstructs the prior
+position from the completed optimizer step and fixed token budget. The local
+JSONL record and optional W&B record receive the same scalar values.
+
 The `baseline_gpt_dense_training_v1` estimator counts two FLOPs per
 multiply-accumulate and models backward as twice the forward matrix
 multiplications. It includes QKV, attention output, both MLP projections, the
@@ -673,15 +681,15 @@ clipping, optimizer, and scheduler FLOPs are deliberately excluded. The
 LM-head work is counted once whether its weight is tied or untied because
 aliasing changes storage, not the executed projection.
 
-MFU is emitted only when the resolved config supplies both an explicit
+MFU is populated only when the resolved config supplies both an explicit
 `train.mfu_peak_flops_per_second` denominator and a descriptive
 `train.mfu_peak_flops_basis`. The RTX 3090 presets record the advertised FP32
-35.58 TFLOP/s basis; the CPU smoke config leaves MFU unavailable. On a logged
-CUDA step, peak allocated memory is reset immediately before the measured
-optimizer step and sampled after it, before tracker or callback work. CPU
-results omit the CUDA-only peak rather than reporting zero. Cumulative
-training time and FLOPs are checkpointed and continue monotonically on exact
-resume.
+35.58 TFLOP/s basis; a record without a basis keeps `train/mfu` explicitly
+null. On a logged CUDA step, peak allocated memory is reset immediately before
+the measured optimizer step and sampled after it, before tracker or callback
+work. CPU records omit the CUDA-only `train/peak_memory_mib` field rather than
+reporting zero. Cumulative training time and FLOPs are checkpointed and
+continue monotonically on exact resume.
 
 The version-2-and-newer tokenizer contract records a byte tokenizer's stable
 runtime identity. Regex-BPE checkpoints record the canonical absolute artifact

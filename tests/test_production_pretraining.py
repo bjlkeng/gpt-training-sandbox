@@ -52,7 +52,7 @@ from scratch_llm.nanochat_bpb import (
 )
 from scratch_llm.pretraining import prepare_pretraining_batch, run_pretraining
 from scratch_llm.run import prepare_run
-from scratch_llm.tokenized_data import TokenizedDataError
+from scratch_llm.tokenized_data import TokenizedDataError, TokenizedShardReader
 from scratch_llm.tracking import NullTracker
 from scratch_llm.training_telemetry import estimate_gpt_training_flops
 
@@ -710,6 +710,38 @@ def test_scripts_pretrain_runs_offline_regex_bpe_to_sample(
         if json.loads(line)["record_type"] == "metrics"
     ]
     assert [record["step"] for record in metric_records] == [1, 2]
+    with TokenizedShardReader(tokenized_dir, tokenizer=tokenizer) as reader:
+        training_tokens = reader.manifest.splits["train"].token_count
+    step_flops = estimate_gpt_training_flops(config.model).flops_for_tokens(
+        config.train.total_batch_size_tokens
+    )
+    prior_time = 0.0
+    for record in metric_records:
+        step = record["step"]
+        metrics = record["metrics"]
+        assert set(metrics) == {
+            "train/loss",
+            "train/lrm",
+            "train/dt",
+            "train/tok_per_sec",
+            "train/mfu",
+            "train/epoch",
+            "train/grad_norm",
+            "total_training_flops",
+            "total_training_time",
+        }
+        assert metrics["train/dt"] > 0
+        assert metrics["train/tok_per_sec"] == pytest.approx(
+            config.train.total_batch_size_tokens / metrics["train/dt"]
+        )
+        assert metrics["train/mfu"] is None
+        assert metrics["train/epoch"] == pytest.approx(
+            step * config.train.total_batch_size_tokens / training_tokens
+        )
+        assert metrics["total_training_flops"] == step * step_flops
+        assert metrics["total_training_time"] > prior_time
+        prior_time = metrics["total_training_time"]
+        assert "train/peak_memory_mib" not in metrics
 
     payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     assert payload["format_version"] == 4
@@ -759,7 +791,7 @@ def test_exact_resume_matches_uninterrupted_batches_losses_and_state(
     strategy: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _, artifact_dir, tokenized_dir = _write_production_inputs(tmp_path)
+    tokenizer, artifact_dir, tokenized_dir = _write_production_inputs(tmp_path)
     consumed_batches: list[tuple[torch.Tensor, torch.Tensor]] = []
     original_prepare = pretraining.prepare_pretraining_batch
 
@@ -795,10 +827,11 @@ def test_exact_resume_matches_uninterrupted_batches_losses_and_state(
 
     resumed_config = deepcopy(uninterrupted_config)
     resumed_config.run.name = f"resumed-{strategy}"
+    resume_tracker = _MetricsTracker()
     resumed = run_pretraining(
         resumed_config,
         paths=prepare_run(resumed_config),
-        tracker=NullTracker(),
+        tracker=resume_tracker,
         resume_from=interruption,
     )
 
@@ -821,6 +854,35 @@ def test_exact_resume_matches_uninterrupted_batches_losses_and_state(
         [result.grad_norm for result in uninterrupted.steps[2:]],
         rel=0,
         abs=0,
+    )
+    with TokenizedShardReader(
+        tokenized_dir,
+        tokenizer=tokenizer,
+    ) as reader:
+        training_token_count = reader.manifest.splits["train"].token_count
+    tracked_steps = [
+        (metrics, step)
+        for metrics, step in resume_tracker.records
+        if "train/loss" in metrics
+    ]
+    assert [step for _, step in tracked_steps] == [3, 4]
+    assert [metrics["total_training_flops"] for metrics, _ in tracked_steps] == [
+        estimate_gpt_training_flops(uninterrupted_config.model).flops_for_tokens(
+            uninterrupted_config.train.total_batch_size_tokens
+        )
+        * step
+        for step in (3, 4)
+    ]
+    assert [metrics["total_training_time"] for metrics, _ in tracked_steps] == sorted(
+        metrics["total_training_time"] for metrics, _ in tracked_steps
+    )
+    assert [metrics["train/epoch"] for metrics, _ in tracked_steps] == pytest.approx(
+        [
+            step
+            * uninterrupted_config.train.total_batch_size_tokens
+            / training_token_count
+            for step in (3, 4)
+        ]
     )
 
     uninterrupted_payload = torch.load(
