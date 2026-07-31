@@ -6,7 +6,12 @@ import json
 
 import pytest
 
-from scratch_llm._validation import JsonValueValidator
+from scratch_llm._validation import (
+    JsonValueValidator,
+    require_finite_non_negative_real,
+    require_optional_real,
+    require_real,
+)
 
 
 class DomainValidationError(ValueError):
@@ -82,3 +87,29 @@ def test_duplicate_key_hook_preserves_the_domain_and_document_label() -> None:
             '{"format": "first", "format": "second"}',
             object_pairs_hook=hook,
         )
+
+
+def test_real_validation_accepts_json_numbers_but_rejects_bools() -> None:
+    assert require_real(2, name="score") == 2.0
+    assert require_real(2.5, name="score") == 2.5
+
+    for value in (True, "2.5"):
+        with pytest.raises(TypeError, match="score must be a number"):
+            require_real(value, name="score")
+
+
+def test_optional_real_validation_preserves_none() -> None:
+    assert require_optional_real(None, name="score") is None
+    assert require_optional_real(2, name="score") == 2.0
+
+    with pytest.raises(TypeError, match="score must be a number"):
+        require_optional_real(False, name="score")
+
+
+def test_finite_non_negative_real_validation_rejects_invalid_values() -> None:
+    assert require_finite_non_negative_real(0, name="score") == 0.0
+    assert require_finite_non_negative_real(2.5, name="score") == 2.5
+
+    for value in (-1, float("inf"), float("-inf"), float("nan")):
+        with pytest.raises(ValueError, match="score must be finite and non-negative"):
+            require_finite_non_negative_real(value, name="score")

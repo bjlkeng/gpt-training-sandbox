@@ -214,3 +214,39 @@ def test_resume_rejects_changed_ranking_or_validation_identity() -> None:
             _periodic(1.0, 2.0),
             validation_step=2,
         )
+
+
+def test_checkpoint_validation_state_rejects_malformed_json_values() -> None:
+    state = ValidationCheckpointState(
+        ranking_protocol_id=BEST_CHECKPOINT_RANKING_PROTOCOL_ID,
+        validation_identity="sha256:fixture",
+        validation_step=1,
+        current_compatibility_bpb=2.0,
+        minimum_compatibility_bpb=1.5,
+        current_full_document_bpb=None,
+        minimum_full_document_bpb=None,
+    )
+    payload = state.to_dict()
+
+    with pytest.raises(BestCheckpointError, match="must be an object"):
+        ValidationCheckpointState.from_dict([])
+
+    missing_field = dict(payload)
+    del missing_field["validation_identity"]
+    with pytest.raises(BestCheckpointError, match="fields do not match"):
+        ValidationCheckpointState.from_dict(missing_field)
+
+    empty_protocol = dict(payload)
+    empty_protocol["ranking_protocol_id"] = " "
+    with pytest.raises(BestCheckpointError, match="non-empty string"):
+        ValidationCheckpointState.from_dict(empty_protocol)
+
+    boolean_step = dict(payload)
+    boolean_step["validation_step"] = True
+    with pytest.raises(BestCheckpointError, match="must be an integer"):
+        ValidationCheckpointState.from_dict(boolean_step)
+
+    boolean_bpb = dict(payload)
+    boolean_bpb["current_compatibility_bpb"] = True
+    with pytest.raises(BestCheckpointError, match="must be a number"):
+        ValidationCheckpointState.from_dict(boolean_bpb)

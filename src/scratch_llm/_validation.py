@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import math
 from typing import AbstractSet, NoReturn
 
 
@@ -126,6 +127,29 @@ def require_positive_integer(value: object, *, name: str) -> int:
     return value
 
 
+def require_real(value: object, *, name: str) -> float:
+    """Return an integer or floating-point value as a ``float``."""
+
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise TypeError(f"{name} must be a number")
+    return float(value)
+
+
+def require_optional_real(value: object, *, name: str) -> float | None:
+    """Return ``None`` or a validated real number as a ``float``."""
+
+    return None if value is None else require_real(value, name=name)
+
+
+def require_finite_non_negative_real(value: object, *, name: str) -> float:
+    """Return a finite, non-negative real number as a ``float``."""
+
+    numeric = require_real(value, name=name)
+    if not math.isfinite(numeric) or numeric < 0:
+        raise ValueError(f"{name} must be finite and non-negative")
+    return numeric
+
+
 def require_positive_real(value: object, *, name: str) -> float:
     """Return a positive real number or raise an actionable input error."""
 
@@ -160,9 +184,10 @@ def _require_non_negative_int(value: object, path: str) -> None:
 
 
 def _require_real(value: object, path: str) -> float:
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
+    try:
+        return require_real(value, name=path)
+    except TypeError:
         _fail(path, "must be a number")
-    return float(value)
 
 
 def _require_positive_real(value: object, path: str) -> None:
@@ -204,6 +229,9 @@ def _require_choice(value: object, path: str, choices: frozenset[str]) -> None:
 __all__ = [
     "ConfigValidationError",
     "JsonValueValidator",
+    "require_finite_non_negative_real",
+    "require_optional_real",
     "require_positive_integer",
     "require_positive_real",
+    "require_real",
 ]

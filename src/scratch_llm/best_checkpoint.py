@@ -6,9 +6,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 import hashlib
 import json
-import math
 from typing import Final
 
+from scratch_llm._validation import (
+    JsonValueValidator,
+    require_finite_non_negative_real,
+    require_optional_real,
+    require_real,
+)
 from scratch_llm.bpb import BaseValidationResult
 from scratch_llm.full_document_bpb import (
     FULL_DOCUMENT_PROTOCOL_ID,
@@ -40,6 +45,9 @@ class BestCheckpointError(RuntimeError):
     """Validation state cannot safely continue the saved ranking history."""
 
 
+_VALIDATION_VALUES = JsonValueValidator(BestCheckpointError)
+
+
 @dataclass(frozen=True)
 class PeriodicValidationResult:
     """One compatibility result plus its complete-corpus companion."""
@@ -57,7 +65,7 @@ class PeriodicValidationResult:
             raise ValueError(
                 f"compatibility protocol must be {NANOCHAT_COMPAT_PROTOCOL_ID!r}"
             )
-        _finite_non_negative(
+        require_finite_non_negative_real(
             self.compatibility.bpb,
             name="compatibility bpb",
         )
@@ -72,7 +80,7 @@ class PeriodicValidationResult:
             raise ValueError(
                 f"full-document protocol must be {FULL_DOCUMENT_PROTOCOL_ID!r}"
             )
-        _finite_non_negative(
+        require_finite_non_negative_real(
             self.full_document.bpb,
             name="full-document bpb",
         )
@@ -135,11 +143,11 @@ class ValidationCheckpointState:
             or self.validation_step < 0
         ):
             raise ValueError("validation_step must be a non-negative integer")
-        current_compatibility_bpb = _finite_non_negative(
+        current_compatibility_bpb = require_finite_non_negative_real(
             self.current_compatibility_bpb,
             name="current_compatibility_bpb",
         )
-        minimum_compatibility_bpb = _finite_non_negative(
+        minimum_compatibility_bpb = require_finite_non_negative_real(
             self.minimum_compatibility_bpb,
             name="minimum_compatibility_bpb",
         )
@@ -154,11 +162,11 @@ class ValidationCheckpointState:
                 "current and minimum full-document BPB must both be set or null"
             )
         if has_current_full:
-            current_full_document_bpb = _finite_non_negative(
+            current_full_document_bpb = require_finite_non_negative_real(
                 self.current_full_document_bpb,
                 name="current_full_document_bpb",
             )
-            minimum_full_document_bpb = _finite_non_negative(
+            minimum_full_document_bpb = require_finite_non_negative_real(
                 self.minimum_full_document_bpb,
                 name="minimum_full_document_bpb",
             )
@@ -200,50 +208,41 @@ class ValidationCheckpointState:
 
     @classmethod
     def from_dict(cls, value: object) -> ValidationCheckpointState:
-        if not isinstance(value, dict) or not all(
-            isinstance(key, str) for key in value
-        ):
-            raise BestCheckpointError(
-                "checkpoint validation state must be an object with string keys"
-            )
-        if set(value) != _VALIDATION_STATE_KEYS:
-            missing = sorted(_VALIDATION_STATE_KEYS - set(value))
-            unexpected = sorted(set(value) - _VALIDATION_STATE_KEYS)
-            raise BestCheckpointError(
-                "checkpoint validation fields do not match the current format; "
-                f"missing={missing}, unexpected={unexpected}"
-            )
+        data = _VALIDATION_VALUES.require_object(
+            value,
+            label="checkpoint validation state",
+            expected_keys=_VALIDATION_STATE_KEYS,
+            schema_label="the current format",
+        )
         try:
-            ranking_protocol_id = value["ranking_protocol_id"]
-            validation_identity = value["validation_identity"]
-            validation_step = value["validation_step"]
-            if not isinstance(ranking_protocol_id, str):
-                raise TypeError("ranking_protocol_id must be a string")
-            if not isinstance(validation_identity, str):
-                raise TypeError("validation_identity must be a string")
-            if not isinstance(validation_step, int) or isinstance(
-                validation_step,
-                bool,
-            ):
-                raise TypeError("validation_step must be an integer")
             return cls(
-                ranking_protocol_id=ranking_protocol_id,
-                validation_identity=validation_identity,
-                validation_step=validation_step,
-                current_compatibility_bpb=_real(
-                    value["current_compatibility_bpb"],
+                ranking_protocol_id=_VALIDATION_VALUES.require_string(
+                    data["ranking_protocol_id"],
+                    label="ranking_protocol_id",
+                ),
+                validation_identity=_VALIDATION_VALUES.require_string(
+                    data["validation_identity"],
+                    label="validation_identity",
+                ),
+                validation_step=_VALIDATION_VALUES.require_integer(
+                    data["validation_step"],
+                    label="validation_step",
+                    minimum=0,
+                ),
+                current_compatibility_bpb=require_real(
+                    data["current_compatibility_bpb"],
                     name="current_compatibility_bpb",
                 ),
-                minimum_compatibility_bpb=_real(
-                    value["minimum_compatibility_bpb"],
+                minimum_compatibility_bpb=require_real(
+                    data["minimum_compatibility_bpb"],
                     name="minimum_compatibility_bpb",
                 ),
-                current_full_document_bpb=_optional_real(
-                    value["current_full_document_bpb"],
+                current_full_document_bpb=require_optional_real(
+                    data["current_full_document_bpb"],
                     name="current_full_document_bpb",
                 ),
-                minimum_full_document_bpb=_optional_real(
-                    value["minimum_full_document_bpb"],
+                minimum_full_document_bpb=require_optional_real(
+                    data["minimum_full_document_bpb"],
                     name="minimum_full_document_bpb",
                 ),
             )
@@ -403,23 +402,6 @@ def base_validation_identity(
             f"validation identity inputs must contain finite JSON values: {error}"
         ) from error
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
-
-
-def _real(value: object, *, name: str) -> float:
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        raise TypeError(f"{name} must be a number")
-    return float(value)
-
-
-def _optional_real(value: object, *, name: str) -> float | None:
-    return None if value is None else _real(value, name=name)
-
-
-def _finite_non_negative(value: object, *, name: str) -> float:
-    numeric = _real(value, name=name)
-    if not math.isfinite(numeric) or numeric < 0:
-        raise ValueError(f"{name} must be finite and non-negative")
-    return numeric
 
 
 __all__ = [
