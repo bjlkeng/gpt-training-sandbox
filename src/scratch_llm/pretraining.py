@@ -62,7 +62,8 @@ from scratch_llm.tokenized_data import (
     TokenizedShardReader,
     tokenized_manifest_identity,
 )
-from scratch_llm.tracking import Tracker
+from scratch_llm.tracking import RunTracker, Tracker
+from scratch_llm.tracking_state import TrackingState
 from scratch_llm.training import (
     OptimizerStepResult,
     derive_grad_accum_steps,
@@ -116,6 +117,7 @@ class _TrainingRuntime:
     initial_total_training_time_seconds: float
     initial_total_training_flops: float
     validation_state: ValidationCheckpointState | None
+    checkpoint_tracking_state: TrackingState | None
 
 
 @dataclass(frozen=True)
@@ -673,6 +675,7 @@ def run_pretraining(
     resume_from: str | Path | None = None,
     progress: Callable[[str], None] | None = None,
     allow_non_exact_resume: bool = False,
+    allow_tracking_fork: bool = False,
     validation_runner: Callable[[int], PeriodicValidationResult] | None = None,
 ) -> PretrainingResult:
     """Run pretraining and transform only supported PyTorch OOM failures."""
@@ -685,6 +688,7 @@ def run_pretraining(
             resume_from=resume_from,
             progress=progress,
             allow_non_exact_resume=allow_non_exact_resume,
+            allow_tracking_fork=allow_tracking_fork,
             validation_runner=validation_runner,
         )
     except torch.OutOfMemoryError as error:
@@ -707,6 +711,7 @@ def _run_pretraining_impl(
     resume_from: str | Path | None = None,
     progress: Callable[[str], None] | None = None,
     allow_non_exact_resume: bool = False,
+    allow_tracking_fork: bool = False,
     validation_runner: Callable[[int], PeriodicValidationResult] | None = None,
 ) -> PretrainingResult:
     """Train or resume either supported data profile through one shared loop."""
@@ -717,9 +722,11 @@ def _run_pretraining_impl(
         tracker=tracker,
         resume_from=resume_from,
         allow_non_exact_resume=allow_non_exact_resume,
+        allow_tracking_fork=allow_tracking_fork,
         validation_runner=validation_runner,
     )
 
+    tracking_state = tracker.checkpoint_state()
     set_seed(config.run.seed)
     device = get_device(config.run.device)
     metrics_path = paths.run_dir / config.tracking.jsonl.path
@@ -738,6 +745,8 @@ def _run_pretraining_impl(
             device=device,
             resume_from=resume_from,
             allow_non_exact_resume=allow_non_exact_resume,
+            tracking_state=tracking_state,
+            allow_tracking_fork=allow_tracking_fork,
         )
         active_validation_runner = _resolve_periodic_validation_runner(
             config,
@@ -787,6 +796,7 @@ def _validate_pretraining_request(
     tracker: Tracker,
     resume_from: str | Path | None,
     allow_non_exact_resume: bool,
+    allow_tracking_fork: bool,
     validation_runner: _ValidationRunner | None,
 ) -> None:
     if not isinstance(config, ProjectConfig):
@@ -797,6 +807,8 @@ def _validate_pretraining_request(
         raise TypeError(f"tracker must be a Tracker, got {type(tracker).__name__}")
     if not isinstance(allow_non_exact_resume, bool):
         raise TypeError("allow_non_exact_resume must be a boolean")
+    if not isinstance(allow_tracking_fork, bool):
+        raise TypeError("allow_tracking_fork must be a boolean")
     if validation_runner is not None and not callable(validation_runner):
         raise TypeError("validation_runner must be callable or None")
     if allow_non_exact_resume and resume_from is None:
@@ -872,6 +884,8 @@ def _initialize_training_runtime(
     device: torch.device,
     resume_from: str | Path | None,
     allow_non_exact_resume: bool,
+    tracking_state: TrackingState | None,
+    allow_tracking_fork: bool,
 ) -> _TrainingRuntime:
     if resume_from is None:
         _validate_existing_outputs(
@@ -891,6 +905,7 @@ def _initialize_training_runtime(
             initial_total_training_time_seconds=0.0,
             initial_total_training_flops=0.0,
             validation_state=None,
+            checkpoint_tracking_state=tracking_state,
         )
 
     checkpoint = load_training_checkpoint(
@@ -898,6 +913,16 @@ def _initialize_training_runtime(
         device=device,
         allow_non_exact_resume=allow_non_exact_resume,
     )
+    checkpoint_tracking_state = tracking_state or checkpoint.tracking
+    if (
+        tracking_state is not None
+        and tracking_state != checkpoint.tracking
+        and not allow_tracking_fork
+    ):
+        raise PretrainingError(
+            "enabled remote tracker identity does not match the resume "
+            "checkpoint; explicitly select a tracking fork"
+        )
     _validate_resume_config(config, checkpoint.config)
     if checkpoint.tokenizer.get_identity() != data.tokenizer.get_identity():
         raise PretrainingError(
@@ -947,6 +972,7 @@ def _initialize_training_runtime(
         initial_total_training_time_seconds=total_training_time_seconds,
         initial_total_training_flops=total_training_flops,
         validation_state=validation_state,
+        checkpoint_tracking_state=checkpoint_tracking_state,
     )
 
 
@@ -1028,6 +1054,7 @@ class _CheckpointLifecycle:
         self._progress = progress
         self._validation_state = runtime.validation_state
         self._validation_results: list[PeriodicValidationResult] = []
+        self._registered_checkpoint_events: set[str] = set()
         self._checkpoint_path = paths.checkpoints_dir / "last.pt"
 
     @property
@@ -1049,8 +1076,9 @@ class _CheckpointLifecycle:
         step: int,
         continuation: ExactTrainingState,
         validation: ValidationCheckpointState | None,
+        role: Literal["best", "latest", "periodic"],
     ) -> Path:
-        return save_checkpoint(
+        checkpoint_path = save_checkpoint(
             path,
             model=self._runtime.model,
             optimizer=self._runtime.optimizer,
@@ -1060,7 +1088,41 @@ class _CheckpointLifecycle:
             tokenizer=self._runtime.tokenizer,
             continuation=continuation,
             validation=validation,
+            tracking=self._runtime.checkpoint_tracking_state,
         )
+        self._register_checkpoint(checkpoint_path, role=role, step=step)
+        return checkpoint_path
+
+    def _register_checkpoint(
+        self,
+        path: Path,
+        *,
+        role: Literal["best", "latest", "periodic"],
+        step: int,
+    ) -> None:
+        event_id = f"checkpoint:{role}:step:{step}"
+        if event_id in self._registered_checkpoint_events:
+            return
+        if path.is_symlink() or not path.is_file():
+            raise FileNotFoundError(
+                f"completed checkpoint is not a regular file: {path}"
+            )
+        relative_path = path.relative_to(self._paths.run_dir).as_posix()
+        name = (
+            f"checkpoint_step_{step:06d}"
+            if role == "periodic"
+            else f"checkpoint_{role}"
+        )
+        if isinstance(self._tracker, RunTracker):
+            self._tracker.log_artifact_once(
+                relative_path,
+                name,
+                "model",
+                event_id=event_id,
+            )
+        else:
+            self._tracker.log_artifact(relative_path, name, "model")
+        self._registered_checkpoint_events.add(event_id)
 
     def _validate_if_due(
         self,
@@ -1110,6 +1172,7 @@ class _CheckpointLifecycle:
                 step=step,
                 continuation=continuation,
                 validation=candidate,
+                role="best",
             )
         self._validation_state = candidate
         track_periodic_base_validation(
@@ -1136,12 +1199,14 @@ class _CheckpointLifecycle:
             step=step,
             continuation=continuation,
             validation=self._validation_state,
+            role="periodic",
         )
         self._save(
             self._checkpoint_path,
             step=step,
             continuation=continuation,
             validation=self._validation_state,
+            role="latest",
         )
 
     def finalize(self, step: int, result: OptimizerStepResult) -> Path:
@@ -1156,6 +1221,7 @@ class _CheckpointLifecycle:
             step=step,
             continuation=continuation,
             validation=self._validation_state,
+            role="latest",
         )
 
 

@@ -144,6 +144,7 @@ class _FakeWandbArtifact:
 
 class _FakeWandbRun:
     def __init__(self) -> None:
+        self.id = "base-eval-run"
         self.config = _FakeWandbConfig()
         self.logs: list[tuple[dict[str, Any], dict[str, Any]]] = []
         self.artifacts: list[_FakeWandbArtifact] = []

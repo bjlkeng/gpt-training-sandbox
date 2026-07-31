@@ -20,6 +20,7 @@ from scratch_llm.checkpoint import (
     CheckpointError,
     ExactTrainingState,
     load_model_checkpoint,
+    load_checkpoint_metadata,
     load_training_checkpoint,
     save_checkpoint,
 )
@@ -43,6 +44,7 @@ from scratch_llm.tokenizer import (
 )
 from scratch_llm.tracking import NullTracker
 from scratch_llm.training import run_training_steps
+from scratch_llm.tracking_state import TrackingState
 
 
 def _assert_nested_state_equal(actual: Any, expected: Any) -> None:
@@ -331,7 +333,7 @@ def test_malformed_exact_state_fails_before_model_or_rng_mutation(
     torch.testing.assert_close(torch.get_rng_state(), torch_state, rtol=0, atol=0)
 
 
-def test_format_four_round_trips_validation_ranking_with_exact_state(
+def test_format_five_round_trips_validation_and_tracking_with_exact_state(
     tmp_path: Path,
 ) -> None:
     config, tokenizer, model, optimizer, scheduler, _ = _checkpoint_state()
@@ -352,9 +354,10 @@ def test_format_four_round_trips_validation_ranking_with_exact_state(
         current_full_document_bpb=1.75,
         minimum_full_document_bpb=1.5,
     )
+    tracking = TrackingState(backend="wandb", run_id="run-id")
 
     checkpoint_path = save_checkpoint(
-        tmp_path / "format-four.pt",
+        tmp_path / "format-five.pt",
         model=model,
         optimizer=optimizer,
         scheduler=scheduler,
@@ -363,16 +366,57 @@ def test_format_four_round_trips_validation_ranking_with_exact_state(
         tokenizer=tokenizer,
         continuation=continuation,
         validation=validation,
+        tracking=tracking,
     )
 
     payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-    assert payload["format_version"] == 4
+    assert payload["format_version"] == 5
     assert payload["validation"] == validation.to_dict()
+    assert payload["tracking"] == tracking.to_dict()
     model_only = load_model_checkpoint(checkpoint_path)
+    metadata = load_checkpoint_metadata(checkpoint_path)
     resumed = load_training_checkpoint(checkpoint_path)
+    assert metadata.tracking == tracking
+    assert metadata.validation == validation
     assert model_only.validation == validation
+    assert model_only.tracking == tracking
     assert resumed.validation == validation
+    assert resumed.tracking == tracking
     assert resumed.continuation == continuation
+
+
+def test_format_four_checkpoint_remains_exact_without_tracking_state(
+    tmp_path: Path,
+) -> None:
+    config, tokenizer, model, optimizer, scheduler, _ = _checkpoint_state()
+    continuation = ExactTrainingState(
+        loader_format="test_loader",
+        loader_state={"format": "test_loader", "position": 0},
+        rng_state=capture_training_rng_state("cpu"),
+        tracker_step=0,
+        total_training_time_seconds=0.0,
+        total_training_flops=0.0,
+    )
+    current = save_checkpoint(
+        tmp_path / "format-five.pt",
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        config=config,
+        step=0,
+        tokenizer=tokenizer,
+        continuation=continuation,
+    )
+    payload = torch.load(current, map_location="cpu", weights_only=True)
+    payload["format_version"] = 4
+    del payload["tracking"]
+    previous = tmp_path / "format-four.pt"
+    torch.save(payload, previous)
+
+    resumed = load_training_checkpoint(previous)
+
+    assert resumed.continuation == continuation
+    assert resumed.tracking is None
 
 
 def test_format_three_exact_checkpoint_remains_resumable_without_validation(
@@ -388,7 +432,7 @@ def test_format_three_exact_checkpoint_remains_resumable_without_validation(
         total_training_flops=0.0,
     )
     current = save_checkpoint(
-        tmp_path / "format-four.pt",
+        tmp_path / "format-five.pt",
         model=model,
         optimizer=optimizer,
         scheduler=scheduler,
@@ -400,6 +444,7 @@ def test_format_three_exact_checkpoint_remains_resumable_without_validation(
     payload = torch.load(current, map_location="cpu", weights_only=True)
     payload["format_version"] = 3
     del payload["validation"]
+    del payload["tracking"]
     previous = tmp_path / "format-three.pt"
     torch.save(payload, previous)
 

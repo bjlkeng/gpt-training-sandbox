@@ -42,10 +42,15 @@ from scratch_llm.tokenizer import (
     ByteTokenizer,
     Tokenizer,
 )
+from scratch_llm.tracking_state import (
+    TrackingState,
+    TrackingStateError,
+)
 from scratch_llm.utils import get_device
 
 
-CHECKPOINT_FORMAT_VERSION = 4
+CHECKPOINT_FORMAT_VERSION = 5
+_VALIDATION_CHECKPOINT_FORMAT_VERSION = 4
 _EXACT_CHECKPOINT_FORMAT_VERSION = 3
 _LEGACY_CHECKPOINT_FORMAT_VERSION = 2
 _SUPPORTED_CHECKPOINT_FORMAT_VERSIONS = frozenset(
@@ -53,6 +58,7 @@ _SUPPORTED_CHECKPOINT_FORMAT_VERSIONS = frozenset(
         1,
         _LEGACY_CHECKPOINT_FORMAT_VERSION,
         _EXACT_CHECKPOINT_FORMAT_VERSION,
+        _VALIDATION_CHECKPOINT_FORMAT_VERSION,
         CHECKPOINT_FORMAT_VERSION,
     }
 )
@@ -68,7 +74,8 @@ _BASE_CHECKPOINT_KEYS = frozenset(
     }
 )
 _EXACT_CHECKPOINT_KEYS = _BASE_CHECKPOINT_KEYS | {"continuation"}
-_CURRENT_CHECKPOINT_KEYS = _EXACT_CHECKPOINT_KEYS | {"validation"}
+_VALIDATION_CHECKPOINT_KEYS = _EXACT_CHECKPOINT_KEYS | {"validation"}
+_CURRENT_CHECKPOINT_KEYS = _VALIDATION_CHECKPOINT_KEYS | {"tracking"}
 _CONTINUATION_KEYS = frozenset(
     {
         "loader_format",
@@ -94,6 +101,7 @@ class ModelCheckpoint:
     config: ProjectConfig
     step: int
     validation: ValidationCheckpointState | None
+    tracking: TrackingState | None
 
 
 @dataclass(frozen=True)
@@ -103,6 +111,16 @@ class TrainingCheckpoint(ModelCheckpoint):
     optimizer: Optimizer
     scheduler: LRScheduler
     continuation: ExactTrainingState | None
+
+
+@dataclass(frozen=True)
+class CheckpointMetadata:
+    """Configuration and small state read without constructing the model."""
+
+    config: ProjectConfig
+    step: int
+    validation: ValidationCheckpointState | None
+    tracking: TrackingState | None
 
 
 @dataclass(frozen=True)
@@ -227,6 +245,7 @@ class _DecodedCheckpoint:
     device: torch.device
     continuation: ExactTrainingState | None
     validation: ValidationCheckpointState | None
+    tracking: TrackingState | None
 
 
 def _validate_save_state(
@@ -398,6 +417,7 @@ def save_checkpoint(
     tokenizer: Tokenizer,
     continuation: ExactTrainingState | None = None,
     validation: ValidationCheckpointState | None = None,
+    tracking: TrackingState | None = None,
 ) -> Path:
     """Atomically save legacy state or an exact current continuation."""
 
@@ -434,6 +454,12 @@ def save_checkpoint(
             f"validation step {validation.validation_step} exceeds "
             f"checkpoint step {step}"
         )
+    if tracking is not None and not isinstance(tracking, TrackingState):
+        raise TypeError(
+            f"tracking must be a TrackingState or None, got {type(tracking).__name__}"
+        )
+    if tracking is not None and continuation is None:
+        raise ValueError("tracking metadata requires an exact continuation")
     format_version = (
         CHECKPOINT_FORMAT_VERSION
         if continuation is not None
@@ -451,6 +477,7 @@ def save_checkpoint(
     if continuation is not None:
         payload["continuation"] = continuation.to_dict()
         payload["validation"] = None if validation is None else validation.to_dict()
+        payload["tracking"] = None if tracking is None else tracking.to_dict()
     return _atomic_torch_save(payload, Path(path))
 
 
@@ -636,6 +663,8 @@ def _load_checkpoint(
         )
     if format_version == CHECKPOINT_FORMAT_VERSION:
         expected_keys = _CURRENT_CHECKPOINT_KEYS
+    elif format_version == _VALIDATION_CHECKPOINT_FORMAT_VERSION:
+        expected_keys = _VALIDATION_CHECKPOINT_KEYS
     elif format_version == _EXACT_CHECKPOINT_FORMAT_VERSION:
         expected_keys = _EXACT_CHECKPOINT_KEYS
     else:
@@ -667,7 +696,11 @@ def _load_checkpoint(
     continuation = (
         ExactTrainingState.from_dict(payload["continuation"])
         if format_version
-        in {_EXACT_CHECKPOINT_FORMAT_VERSION, CHECKPOINT_FORMAT_VERSION}
+        in {
+            _EXACT_CHECKPOINT_FORMAT_VERSION,
+            _VALIDATION_CHECKPOINT_FORMAT_VERSION,
+            CHECKPOINT_FORMAT_VERSION,
+        }
         else None
     )
     if continuation is not None and continuation.tracker_step != step:
@@ -677,7 +710,11 @@ def _load_checkpoint(
     try:
         validation = (
             None
-            if format_version != CHECKPOINT_FORMAT_VERSION
+            if format_version
+            not in {
+                _VALIDATION_CHECKPOINT_FORMAT_VERSION,
+                CHECKPOINT_FORMAT_VERSION,
+            }
             or payload["validation"] is None
             else ValidationCheckpointState.from_dict(payload["validation"])
         )
@@ -685,6 +722,15 @@ def _load_checkpoint(
         raise CheckpointError(str(error)) from error
     if validation is not None and validation.validation_step > step:
         raise CheckpointError("checkpoint validation_step exceeds checkpoint step")
+    try:
+        tracking = (
+            None
+            if format_version != CHECKPOINT_FORMAT_VERSION
+            or payload["tracking"] is None
+            else TrackingState.from_dict(payload["tracking"])
+        )
+    except TrackingStateError as error:
+        raise CheckpointError(str(error)) from error
     return _DecodedCheckpoint(
         payload=payload,
         config=config,
@@ -693,6 +739,7 @@ def _load_checkpoint(
         device=resolved_device,
         continuation=continuation,
         validation=validation,
+        tracking=tracking,
     )
 
 
@@ -722,6 +769,7 @@ def load_model_checkpoint(
             config=checkpoint.config,
             step=checkpoint.step,
             validation=checkpoint.validation,
+            tracking=checkpoint.tracking,
         )
 
 
@@ -765,10 +813,25 @@ def load_training_checkpoint(
             config=checkpoint.config,
             step=checkpoint.step,
             validation=checkpoint.validation,
+            tracking=checkpoint.tracking,
             optimizer=optimizer,
             scheduler=scheduler,
             continuation=checkpoint.continuation,
         )
+
+
+def load_checkpoint_metadata(
+    path: str | os.PathLike[str],
+) -> CheckpointMetadata:
+    """Read config and small resume state without constructing model objects."""
+
+    checkpoint = _load_checkpoint(path, device="cpu")
+    return CheckpointMetadata(
+        config=checkpoint.config,
+        step=checkpoint.step,
+        validation=checkpoint.validation,
+        tracking=checkpoint.tracking,
+    )
 
 
 def _canonical_json_object(value: object, *, label: str) -> dict[str, object]:
@@ -794,10 +857,12 @@ def _canonical_json_object(value: object, *, label: str) -> dict[str, object]:
 
 __all__ = [
     "CHECKPOINT_FORMAT_VERSION",
+    "CheckpointMetadata",
     "CheckpointError",
     "ExactTrainingState",
     "ModelCheckpoint",
     "TrainingCheckpoint",
+    "load_checkpoint_metadata",
     "load_model_checkpoint",
     "load_training_checkpoint",
     "save_checkpoint",

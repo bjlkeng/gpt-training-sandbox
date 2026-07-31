@@ -20,6 +20,7 @@ from scratch_llm.tracking import (
     WandbTracker,
     build_tracker,
 )
+from scratch_llm.tracking_state import TrackingState
 from scratch_llm.config import (
     ProjectConfig,
     RunConfig,
@@ -424,7 +425,8 @@ class _FakeWandbArtifact:
 
 
 class _FakeWandbRun:
-    def __init__(self) -> None:
+    def __init__(self, run_id: str = "fresh-run-id") -> None:
+        self.id = run_id
         self.config = _FakeWandbConfig()
         self.logs: list[tuple[dict[str, Any], dict[str, Any]]] = []
         self.artifacts: list[_FakeWandbArtifact] = []
@@ -715,6 +717,7 @@ def test_wandb_tracker_maps_the_complete_lifecycle_to_one_run(
         tags=["pretrain", "tiny"],
         mode="offline",
         dir=tmp_path,
+        log_model_artifacts=True,
     )
 
     tracker.log({"train/loss": 0.5}, step=4)
@@ -745,6 +748,197 @@ def test_wandb_tracker_maps_the_complete_lifecycle_to_one_run(
         (created.name, created.type, created.paths) for created in created_artifacts
     ] == [("last", "model", ["runs/smoke/last.pt"])]
     assert run.finish_calls == 1
+
+
+def test_wandb_tracker_translates_resume_state_and_gates_model_uploads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    init_calls: list[dict[str, Any]] = []
+    run = _FakeWandbRun("saved-run-id")
+    fake_wandb = ModuleType("wandb")
+
+    def init(**kwargs: Any) -> _FakeWandbRun:
+        init_calls.append(kwargs)
+        return run
+
+    setattr(fake_wandb, "init", init)
+    setattr(fake_wandb, "Artifact", _FakeWandbArtifact)
+    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+    tracker = WandbTracker(
+        project="scratch-llm",
+        mode="offline",
+        dir=tmp_path,
+        artifact_root=tmp_path,
+        log_model_artifacts=False,
+        resume_state=TrackingState(backend="wandb", run_id="saved-run-id"),
+    )
+    model_path = tmp_path / "checkpoints" / "last.pt"
+    evaluation_path = tmp_path / "metrics" / "base_eval.json"
+    model_path.parent.mkdir()
+    evaluation_path.parent.mkdir()
+    model_path.write_bytes(b"checkpoint")
+    evaluation_path.write_text("{}\n")
+
+    tracker.log_artifact(
+        "checkpoints/last.pt",
+        name="checkpoint_latest",
+        type="model",
+    )
+    tracker.log_artifact(
+        "metrics/base_eval.json",
+        name="base_eval",
+        type="evaluation",
+    )
+
+    assert init_calls == [
+        {
+            "project": "scratch-llm",
+            "tags": [],
+            "mode": "offline",
+            "dir": str(tmp_path),
+            "id": "saved-run-id",
+            "resume": "must",
+        }
+    ]
+    assert tracker.checkpoint_state() == TrackingState(
+        backend="wandb",
+        run_id="saved-run-id",
+    )
+    assert [
+        (artifact.name, artifact.type, artifact.paths) for artifact in run.artifacts
+    ] == [
+        (
+            "base_eval",
+            "evaluation",
+            [str(evaluation_path)],
+        )
+    ]
+
+
+def test_offline_wandb_resume_persists_same_id_in_each_local_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    init_calls: list[dict[str, Any]] = []
+    fake_wandb = ModuleType("wandb")
+
+    def init(**kwargs: Any) -> _FakeWandbRun:
+        init_calls.append(kwargs)
+        return _FakeWandbRun(kwargs.get("id", "offline-source-id"))
+
+    setattr(fake_wandb, "init", init)
+    setattr(fake_wandb, "Artifact", _FakeWandbArtifact)
+    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+
+    def config(name: str) -> ProjectConfig:
+        return ProjectConfig(
+            run=RunConfig(
+                name=name,
+                device="cpu",
+                output_dir=str(tmp_path / "runs"),
+            ),
+            tracking=TrackingConfig(
+                wandb=WandbConfig(
+                    enabled=True,
+                    mode="offline",
+                    dir=str(tmp_path / "wandb"),
+                )
+            ),
+        )
+
+    source_config = config("offline-source")
+    source_paths = prepare_run(source_config)
+    source = build_tracker(source_config, source_paths, stage="pretrain")
+    state = source.checkpoint_state()
+    source.finish()
+    assert state == TrackingState(backend="wandb", run_id="offline-source-id")
+    assert (
+        json.loads((source_paths.metrics_dir / "tracking_state.json").read_text())
+        == state.to_dict()
+    )
+
+    resumed_config = config("offline-resumed")
+    resumed_paths = prepare_run(resumed_config)
+    resumed = build_tracker(
+        resumed_config,
+        resumed_paths,
+        stage="pretrain",
+        wandb_resume_state=state,
+    )
+    resumed.finish()
+
+    assert (
+        json.loads((resumed_paths.metrics_dir / "tracking_state.json").read_text())
+        == state.to_dict()
+    )
+    assert init_calls[1]["id"] == "offline-source-id"
+    assert init_calls[1]["resume"] == "must"
+
+
+@pytest.mark.parametrize("log_model_artifacts", [False, True])
+def test_tracker_factory_keeps_model_metadata_local_and_uploads_only_opt_in(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    log_model_artifacts: bool,
+) -> None:
+    run = _FakeWandbRun("model-gate-run")
+    fake_wandb = ModuleType("wandb")
+    setattr(fake_wandb, "init", lambda **kwargs: run)
+    setattr(fake_wandb, "Artifact", _FakeWandbArtifact)
+    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+    config = ProjectConfig(
+        run=RunConfig(
+            name=f"model-gate-{log_model_artifacts}",
+            device="cpu",
+            output_dir=str(tmp_path / "runs"),
+        ),
+        tracking=TrackingConfig(
+            wandb=WandbConfig(
+                enabled=True,
+                mode="offline",
+                dir=str(tmp_path / "wandb"),
+                log_model_artifacts=log_model_artifacts,
+            )
+        ),
+    )
+    paths = prepare_run(config)
+    checkpoint_path = paths.checkpoints_dir / "last.pt"
+    checkpoint_path.write_bytes(b"checkpoint")
+    tracker = build_tracker(config, paths, stage="pretrain")
+
+    tracker.log_artifact(
+        "checkpoints/last.pt",
+        name="checkpoint_latest",
+        type="model",
+    )
+    tracker.finish()
+
+    local_artifacts = [
+        record
+        for record in _read_jsonl(paths.metrics_dir / "metrics.jsonl")
+        if record["record_type"] == "artifact"
+    ]
+    assert local_artifacts == [
+        {
+            "name": "checkpoint_latest",
+            "path": "checkpoints/last.pt",
+            "record_type": "artifact",
+            "type": "model",
+        }
+    ]
+    if log_model_artifacts:
+        assert [
+            (artifact.name, artifact.type, artifact.paths) for artifact in run.artifacts
+        ] == [
+            (
+                "checkpoint_latest",
+                "model",
+                [str(checkpoint_path)],
+            )
+        ]
+    else:
+        assert run.artifacts == []
 
 
 def test_wandb_tracker_enabled_requires_the_tracking_extra(

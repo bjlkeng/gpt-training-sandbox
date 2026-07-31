@@ -10,6 +10,7 @@ from pathlib import Path
 from scratch_llm.config import ConfigValidationError, ProjectConfig, load_config
 from scratch_llm.run import RunConflictError, RunPaths, prepare_run
 from scratch_llm.tracking import RunTracker, build_tracker
+from scratch_llm.tracking_state import TrackingState
 
 
 def config_parser(command: str, description: str) -> argparse.ArgumentParser:
@@ -130,13 +131,25 @@ def prepare_tracked_run(
     config: ProjectConfig,
     *,
     command: str,
+    wandb_resume_state: TrackingState | None = None,
 ) -> tuple[RunPaths, RunTracker]:
     """Prepare run paths and assemble the command's shared tracker."""
 
     try:
         paths = prepare_run(config)
-        tracker = build_tracker(config, paths, stage=command)
-    except (ModuleNotFoundError, OSError, RunConflictError, ValueError) as error:
+        tracker = build_tracker(
+            config,
+            paths,
+            stage=command,
+            wandb_resume_state=wandb_resume_state,
+        )
+    except (
+        ModuleNotFoundError,
+        OSError,
+        RunConflictError,
+        RuntimeError,
+        ValueError,
+    ) as error:
         parser.error(str(error))
     return paths, tracker
 
