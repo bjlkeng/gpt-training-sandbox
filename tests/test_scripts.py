@@ -33,7 +33,10 @@ from scratch_llm.tracking_state import TrackingState
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SMOKE_CONFIG = PROJECT_ROOT / "configs" / "smoke.yaml"
+BASE_SMOKE_CONFIG = PROJECT_ROOT / "configs" / "base_smoke.yaml"
 CONFIG_COMMANDS = (
+    "scripts.benchmark_pretrain",
+    "scripts.prepare_data",
     "scripts.train_tokenizer",
     "scripts.eval_tokenizer",
     "scripts.pretrain",
@@ -46,8 +49,10 @@ UNIMPLEMENTED_CONFIG_COMMANDS = tuple(
     for module in CONFIG_COMMANDS
     if module
     not in {
+        "scripts.benchmark_pretrain",
         "scripts.eval_base",
         "scripts.pretrain",
+        "scripts.prepare_data",
         "scripts.eval_tokenizer",
         "scripts.train_tokenizer",
     }
@@ -115,6 +120,64 @@ def test_pretrain_help_and_validation_expose_legacy_resume_migration() -> None:
     assert invalid_result.returncode != 0
     assert "--allow-non-exact-resume requires --resume" in invalid_result.stderr
     assert "Traceback" not in invalid_result.stderr
+
+
+def test_pretraining_benchmark_dry_run_is_gpu_and_artifact_free(
+    tmp_path: Path,
+) -> None:
+    result = _run_module(
+        "scripts.benchmark_pretrain",
+        "--config",
+        str(PROJECT_ROOT / "configs" / "base_smoke.yaml"),
+        "--override",
+        f"run.output_dir={tmp_path / 'runs'}",
+        "--override",
+        "run.name=benchmark-dry-run",
+        "--warmup-steps",
+        "1",
+        "--timed-steps",
+        "2",
+        "--dry-run",
+        "--no-wandb",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Benchmark protocol: production_pretraining_optimizer_steps_v1" in (
+        result.stdout
+    )
+    assert "Warmup steps: 1" in result.stdout
+    assert "Timed steps: 2" in result.stdout
+    assert not (
+        tmp_path
+        / "runs"
+        / "benchmark-dry-run"
+        / "metrics"
+        / "throughput_benchmark.json"
+    ).exists()
+
+
+def test_data_preparation_dry_run_does_not_require_tokenizer_artifacts(
+    tmp_path: Path,
+) -> None:
+    result = _run_module(
+        "scripts.prepare_data",
+        "--config",
+        str(PROJECT_ROOT / "configs" / "base_smoke.yaml"),
+        "--override",
+        f"run.output_dir={tmp_path / 'runs'}",
+        "--override",
+        "run.name=data-prep-dry-run",
+        "--batch-size",
+        "64",
+        "--dry-run",
+        "--no-wandb",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Tokenized output: data/tokenized" in result.stdout
+    assert "Train shards: 16" in result.stdout
+    assert "Encoding batch size: 64" in result.stdout
+    assert not (tmp_path / "runs" / "data-prep-dry-run" / "artifacts").exists()
 
 
 def test_eval_base_normalizes_modes_and_rejects_unknown_or_unavailable_modes(
@@ -262,11 +325,16 @@ def test_config_command_dry_run_resolves_repeated_overrides_without_training(
     command_name = module.removeprefix("scripts.")
     run_name = command_name.replace("_", "-")
     output_dir = tmp_path / "runs"
+    config_path = (
+        BASE_SMOKE_CONFIG
+        if module in {"scripts.benchmark_pretrain", "scripts.prepare_data"}
+        else SMOKE_CONFIG
+    )
 
     result = _run_module(
         module,
         "--config",
-        str(SMOKE_CONFIG),
+        str(config_path),
         "--override",
         f"run.output_dir={output_dir}",
         "--override",

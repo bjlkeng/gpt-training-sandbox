@@ -819,6 +819,199 @@ instead of truncating it. The command clears incomplete gradients and eligible
 cached CUDA allocator blocks, but it does not retry or mutate the requested
 configuration, and it never marks the failed step as completed.
 
+### RTX 3090 Milestone 4 workflow
+
+The Milestone 4 baselines are reproducible single-process float32 runs. Prepare
+the canonical 16-shard ClimbMix prefix, fixed validation shard, 32K tokenizer,
+and tokenized data with these commands:
+
+```bash
+uv run python -m scripts.download_climbmix \
+  --num-train-shards 16 \
+  --include-val
+
+uv run python -m scripts.train_tokenizer \
+  --config configs/tiny_20m_3090.yaml \
+  --override run.name=tokenizer-32k \
+  --override tokenizer.max_chars=10000000 \
+  --override tokenizer.doc_cap=100000 \
+  --override data.num_tokenizer_train_shards=8 \
+  --algorithm optimized \
+  --no-wandb
+
+uv run python -m scripts.prepare_data \
+  --config configs/tiny_20m_3090.yaml \
+  --override run.name=data-prep-32k \
+  --batch-size 1024 \
+  --no-wandb
+```
+
+`prepare_data` keeps the large `.bin` shards under `data/tokenized/` and
+registers only the small statistics and manifest descriptions under
+`runs/data-prep-32k/artifacts/`. Use `--dry-run` on each config-driven command
+before committing GPU time. In particular:
+
+```bash
+uv run python -m scripts.pretrain \
+  --config configs/tiny_20m_3090.yaml \
+  --dry-run \
+  --no-wandb
+
+uv run python -m scripts.benchmark_pretrain \
+  --config configs/tiny_20m_3090.yaml \
+  --override run.name=tiny-20m-throughput \
+  --warmup-steps 2 \
+  --timed-steps 10 \
+  --dry-run \
+  --no-wandb
+```
+
+Run the production smoke preset first, then start the full tiny baseline with a
+fresh run name:
+
+```bash
+uv run python -m scripts.pretrain \
+  --config configs/base_smoke.yaml \
+  --override run.name=base-smoke-3090 \
+  --no-wandb
+
+uv run python -m scripts.pretrain \
+  --config configs/tiny_20m_3090.yaml \
+  --override run.name=tiny-20m-3090 \
+  --no-wandb
+```
+
+Only after the tiny baseline has sane BPB curves and improving samples, scale
+to the 45M preset. Its batch size starts at one because width and context both
+increase; gradient accumulation preserves the configured token budget.
+
+```bash
+uv run python -m scripts.pretrain \
+  --config configs/small_45m_3090.yaml \
+  --override run.name=small-45m-3090 \
+  --no-wandb
+```
+
+An interrupted local-only run resumes from an exact periodic checkpoint with
+the same resolved run identity. Increase `train.max_steps` only when the saved
+checkpoint has already reached the old target:
+
+```bash
+uv run python -m scripts.pretrain \
+  --config configs/tiny_20m_3090.yaml \
+  --override run.name=tiny-20m-3090 \
+  --resume runs/tiny-20m-3090/checkpoints/step_001000.pt \
+  --no-wandb
+```
+
+After training, append both BPB protocols and the fixed samples to that same
+run. `best.pt` is ranked only by the pinned compatibility protocol; use
+`last.pt` when no periodic validation has produced a best checkpoint yet.
+
+```bash
+uv run python -m scripts.eval_base \
+  --config configs/tiny_20m_3090.yaml \
+  --override run.name=tiny-20m-3090 \
+  --checkpoint runs/tiny-20m-3090/checkpoints/best.pt \
+  --eval bpb,sample \
+  --no-wandb
+```
+
+The bounded throughput protocol executes production batches through the same
+optimizer-step telemetry boundary as training. Warmup steps run first but are
+excluded from the aggregate. The timed intervals include batch retrieval,
+device transfer, forward/backward, clipping, optimizer, and scheduler work;
+they exclude startup, validation, sampling, checkpoint I/O, memory-counter
+collection, Tracker fan-out, and report writing. Run both manual 3090 baselines
+with fresh benchmark identities:
+
+```bash
+uv run python -m scripts.benchmark_pretrain \
+  --config configs/base_smoke.yaml \
+  --override run.name=base-smoke-throughput \
+  --warmup-steps 2 \
+  --timed-steps 10 \
+  --no-wandb
+
+uv run python -m scripts.benchmark_pretrain \
+  --config configs/tiny_20m_3090.yaml \
+  --override run.name=tiny-20m-throughput \
+  --warmup-steps 2 \
+  --timed-steps 10 \
+  --no-wandb
+```
+
+After the smoke and tiny measurements establish the local envelope, the same
+bounded protocol can characterize the 45M preset without starting its full
+50,000-step run:
+
+```bash
+uv run python -m scripts.benchmark_pretrain \
+  --config configs/small_45m_3090.yaml \
+  --override run.name=small-45m-throughput \
+  --warmup-steps 2 \
+  --timed-steps 10 \
+  --no-wandb
+```
+
+Each successful benchmark atomically installs
+`metrics/throughput_benchmark.json` with hardware, CUDA, PyTorch, Git, config,
+tokenizer, and manifest identities; actual model and supervised token counts;
+elapsed time, throughput, FLOPs, MFU, and peak VRAM; and a labeled comparison
+against the conservative resource estimate. The test suite uses CPU and fake
+clocks and does not claim that either GPU command was executed in CI.
+
+Compare two completed, evaluated training runs offline. Compatibility BPB is
+ranked only when its pinned protocol identities match, and full-document BPB
+always remains a separate table:
+
+```bash
+uv run python -m scripts.compare_runs \
+  runs/tiny-20m-seed-1 \
+  runs/tiny-20m-seed-2 \
+  --output-dir comparisons/tiny-20m-seeds
+```
+
+The expected durable paths are:
+
+```text
+runs/<training-run>/config.yaml
+runs/<training-run>/metrics/metrics.jsonl
+runs/<training-run>/metrics/summary.json
+runs/<training-run>/metrics/base_eval.json
+runs/<training-run>/metrics/base_samples.md
+runs/<training-run>/checkpoints/last.pt
+runs/<training-run>/checkpoints/best.pt
+runs/<benchmark-run>/metrics/throughput_benchmark.json
+comparisons/<comparison-name>/comparison.json
+comparisons/<comparison-name>/comparison.md
+```
+
+A run is incomplete when `metrics/summary.json` says `running` or `failed`, a
+requested evaluation artifact is absent, or a checkpoint expected at the
+documented step was never published. The comparison report prints those
+conditions as ranking blockers and never ranks an incomplete run as complete.
+A missing throughput report likewise means the bounded protocol did not finish;
+partial timing results are never installed as a completed report.
+
+For an actual out-of-memory failure, reduce settings in this order:
+
+1. `train.device_batch_size`
+2. `model.seq_len`
+3. `model.n_embd`
+4. `model.n_layer`
+
+Reducing device batch or sequence length changes tokens per microbatch. Adjust
+`train.grad_accum_steps` to preserve the configured optimizer-step token budget
+when divisibility permits; otherwise choose the diagnostic's explicit valid
+`train.total_batch_size_tokens` alternative. Width and depth reductions change
+model capacity but not that token arithmetic. The resource estimate is a
+planning aid, never a promise that a configuration will fit.
+
+All three Milestone 4 presets remain float32 baselines. AMP, `GradScaler`,
+activation checkpointing, `torch.compile`, and FlashAttention are Phase 12
+variants and must not be represented as results from this baseline protocol.
+
 ### Random token batches
 
 `RandomOffsetTokenLoader` consumes a validated `TokenizedShardReader` and
