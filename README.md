@@ -677,6 +677,21 @@ requiring a GPU:
 uv run python -m scripts.pretrain --config configs/tiny_20m_3090.yaml --dry-run
 ```
 
+Every pretrain dry-run prints one stable `Resource estimate JSON:` record and
+a readable conservative planning estimate without constructing the GPT,
+optimizer, or training graph. It reports deduplicated tied parameters and the
+exact processed token budget. Actual supervised targets are explicitly
+data- and mask-dependent and may be lower than processed model positions.
+
+The memory estimate itemizes parameter storage, gradients, two float32 AdamW
+moments, saved dense and manual-attention activations, logits/loss workspace,
+and a 20% allocator/headroom allowance with a 512 MiB minimum. Its assumptions
+state that automatic mixed precision, compilation, activation checkpointing,
+and distributed training are disabled. This is not observed CUDA usage or an
+allocation guarantee. When an accelerator snapshot is available, comparison
+output keeps estimated totals and observed peak allocated/reserved counters
+under distinct names.
+
 After `runs/tokenizer-32k/artifacts/tokenizer/` and
 `data/tokenized/manifest.json` exist, verify the complete tiny path on an RTX
 3090 with two optimizer steps:

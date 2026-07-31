@@ -9,6 +9,10 @@ import sys
 
 from scratch_llm.checkpoint import CheckpointError
 from scratch_llm.pretraining import PretrainingError, run_pretraining
+from scratch_llm.resource_estimation import (
+    estimate_training_resources,
+    render_training_resource_estimate,
+)
 from scratch_llm.run import RunConflictError
 from scripts._common import (
     config_parser,
@@ -51,6 +55,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     config = resolve_config_arguments(parser, arguments)
     if arguments.allow_non_exact_resume and arguments.resume is None:
         parser.error("--allow-non-exact-resume requires --resume")
+    try:
+        resource_estimate = estimate_training_resources(config)
+    except (OverflowError, TypeError, ValueError) as error:
+        parser.error(str(error))
 
     if arguments.dry_run:
         if arguments.resume is not None:
@@ -61,10 +69,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Resolved config: {paths.config_path}")
             print("Resolved values:")
             print(config.to_yaml(), end="")
+            print(f"Resource estimate JSON: {resource_estimate.to_json()}")
+            print(render_training_resource_estimate(resource_estimate))
         return 0
 
     paths, tracker = prepare_tracked_run(parser, config, command=COMMAND)
     with tracker:
+        print(
+            f"Resource estimate JSON: {resource_estimate.to_json()}",
+            file=sys.stderr,
+            flush=True,
+        )
+        print(
+            render_training_resource_estimate(resource_estimate),
+            file=sys.stderr,
+            flush=True,
+        )
         try:
             result = run_pretraining(
                 config,
