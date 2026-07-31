@@ -15,6 +15,10 @@ from omegaconf import OmegaConf
 from torch.optim import AdamW, Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
+from scratch_llm.best_checkpoint import (
+    BestCheckpointError,
+    ValidationCheckpointState,
+)
 from scratch_llm.config import ProjectConfig
 from scratch_llm.bpe import RegexBPETokenizer
 from scratch_llm.model import GPT
@@ -37,10 +41,16 @@ from scratch_llm.tokenizer import (
 from scratch_llm.utils import get_device
 
 
-CHECKPOINT_FORMAT_VERSION = 3
+CHECKPOINT_FORMAT_VERSION = 4
+_EXACT_CHECKPOINT_FORMAT_VERSION = 3
 _LEGACY_CHECKPOINT_FORMAT_VERSION = 2
 _SUPPORTED_CHECKPOINT_FORMAT_VERSIONS = frozenset(
-    {1, _LEGACY_CHECKPOINT_FORMAT_VERSION, CHECKPOINT_FORMAT_VERSION}
+    {
+        1,
+        _LEGACY_CHECKPOINT_FORMAT_VERSION,
+        _EXACT_CHECKPOINT_FORMAT_VERSION,
+        CHECKPOINT_FORMAT_VERSION,
+    }
 )
 _BASE_CHECKPOINT_KEYS = frozenset(
     {
@@ -54,6 +64,7 @@ _BASE_CHECKPOINT_KEYS = frozenset(
     }
 )
 _EXACT_CHECKPOINT_KEYS = _BASE_CHECKPOINT_KEYS | {"continuation"}
+_CURRENT_CHECKPOINT_KEYS = _EXACT_CHECKPOINT_KEYS | {"validation"}
 _CONTINUATION_KEYS = frozenset(
     {
         "loader_format",
@@ -78,6 +89,7 @@ class ModelCheckpoint:
     tokenizer: Tokenizer
     config: ProjectConfig
     step: int
+    validation: ValidationCheckpointState | None
 
 
 @dataclass(frozen=True)
@@ -214,6 +226,7 @@ class _DecodedCheckpoint:
     step: int
     device: torch.device
     continuation: ExactTrainingState | None
+    validation: ValidationCheckpointState | None
 
 
 def _validate_save_state(
@@ -387,8 +400,9 @@ def save_checkpoint(
     step: int,
     tokenizer: Tokenizer,
     continuation: ExactTrainingState | None = None,
+    validation: ValidationCheckpointState | None = None,
 ) -> Path:
-    """Atomically save legacy state or an exact format-v3 continuation."""
+    """Atomically save legacy state or an exact current continuation."""
 
     _validate_save_state(
         model=model,
@@ -408,6 +422,21 @@ def save_checkpoint(
             f"continuation tracker_step {continuation.tracker_step} "
             f"does not match checkpoint step {step}"
         )
+    if validation is not None and not isinstance(
+        validation,
+        ValidationCheckpointState,
+    ):
+        raise TypeError(
+            "validation must be a ValidationCheckpointState or None, got "
+            f"{type(validation).__name__}"
+        )
+    if validation is not None and continuation is None:
+        raise ValueError("validation metadata requires an exact continuation")
+    if validation is not None and validation.validation_step > step:
+        raise ValueError(
+            f"validation step {validation.validation_step} exceeds "
+            f"checkpoint step {step}"
+        )
     format_version = (
         CHECKPOINT_FORMAT_VERSION
         if continuation is not None
@@ -424,6 +453,7 @@ def save_checkpoint(
     }
     if continuation is not None:
         payload["continuation"] = continuation.to_dict()
+        payload["validation"] = None if validation is None else validation.to_dict()
     return _atomic_torch_save(payload, Path(path))
 
 
@@ -607,11 +637,12 @@ def _load_checkpoint(
             f"{format_version!r}; expected one of "
             f"{sorted(_SUPPORTED_CHECKPOINT_FORMAT_VERSIONS)}"
         )
-    expected_keys = (
-        _EXACT_CHECKPOINT_KEYS
-        if format_version == CHECKPOINT_FORMAT_VERSION
-        else _BASE_CHECKPOINT_KEYS
-    )
+    if format_version == CHECKPOINT_FORMAT_VERSION:
+        expected_keys = _CURRENT_CHECKPOINT_KEYS
+    elif format_version == _EXACT_CHECKPOINT_FORMAT_VERSION:
+        expected_keys = _EXACT_CHECKPOINT_KEYS
+    else:
+        expected_keys = _BASE_CHECKPOINT_KEYS
     if set(payload) != expected_keys:
         missing = sorted(expected_keys - set(payload))
         unexpected = sorted(set(payload) - expected_keys)
@@ -638,13 +669,25 @@ def _load_checkpoint(
     )
     continuation = (
         ExactTrainingState.from_dict(payload["continuation"])
-        if format_version == CHECKPOINT_FORMAT_VERSION
+        if format_version
+        in {_EXACT_CHECKPOINT_FORMAT_VERSION, CHECKPOINT_FORMAT_VERSION}
         else None
     )
     if continuation is not None and continuation.tracker_step != step:
         raise CheckpointError(
             "checkpoint continuation tracker_step does not match checkpoint step"
         )
+    try:
+        validation = (
+            None
+            if format_version != CHECKPOINT_FORMAT_VERSION
+            or payload["validation"] is None
+            else ValidationCheckpointState.from_dict(payload["validation"])
+        )
+    except BestCheckpointError as error:
+        raise CheckpointError(str(error)) from error
+    if validation is not None and validation.validation_step > step:
+        raise CheckpointError("checkpoint validation_step exceeds checkpoint step")
     return _DecodedCheckpoint(
         payload=payload,
         config=config,
@@ -652,6 +695,7 @@ def _load_checkpoint(
         step=step,
         device=resolved_device,
         continuation=continuation,
+        validation=validation,
     )
 
 
@@ -680,6 +724,7 @@ def load_model_checkpoint(
             tokenizer=checkpoint.tokenizer,
             config=checkpoint.config,
             step=checkpoint.step,
+            validation=checkpoint.validation,
         )
 
 
@@ -696,7 +741,7 @@ def load_training_checkpoint(
     checkpoint = _load_checkpoint(path, device=device)
     if checkpoint.continuation is None and not allow_non_exact_resume:
         raise CheckpointError(
-            "exact training resume requires checkpoint format version 3; "
+            "exact training resume requires checkpoint format version 3 or newer; "
             "legacy format versions remain valid for model-only loading, or "
             "choose the documented --allow-non-exact-resume migration"
         )
@@ -722,6 +767,7 @@ def load_training_checkpoint(
             tokenizer=checkpoint.tokenizer,
             config=checkpoint.config,
             step=checkpoint.step,
+            validation=checkpoint.validation,
             optimizer=optimizer,
             scheduler=scheduler,
             continuation=checkpoint.continuation,

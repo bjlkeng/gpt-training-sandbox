@@ -19,6 +19,14 @@ from scratch_llm.accelerator_memory import (
     AcceleratorMemorySnapshot,
     collect_accelerator_memory,
 )
+from scratch_llm.best_checkpoint import (
+    BEST_CHECKPOINT_RANKING_PROTOCOL_ID,
+    BestCheckpointError,
+    PeriodicValidationResult,
+    ValidationCheckpointState,
+    advance_validation_state,
+    base_validation_identity,
+)
 from scratch_llm.bpe import RegexBPETokenizer
 from scratch_llm.checkpoint import (
     ExactTrainingState,
@@ -28,7 +36,15 @@ from scratch_llm.checkpoint import (
 )
 from scratch_llm.config import ProjectConfig
 from scratch_llm.data import NextTokenDataset, create_token_loader
+from scratch_llm.full_document_bpb import (
+    FullDocumentProtocolConfig,
+    evaluate_full_document_bpb,
+)
 from scratch_llm.model import GPT
+from scratch_llm.nanochat_bpb import (
+    NanochatCompatibilityConfig,
+    evaluate_nanochat_compatible_bpb,
+)
 from scratch_llm.oom_diagnostics import (
     PretrainingOOMError,
     diagnose_out_of_memory,
@@ -40,7 +56,10 @@ from scratch_llm.rng_state import (
     restore_training_rng_state,
 )
 from scratch_llm.tokenizer import NANOCHAT_SPECIAL_TOKENS, ByteTokenizer, Tokenizer
-from scratch_llm.tokenized_data import TokenizedShardReader
+from scratch_llm.tokenized_data import (
+    TokenizedShardReader,
+    tokenized_manifest_identity,
+)
 from scratch_llm.tracking import Tracker
 from scratch_llm.training import (
     OptimizerStepResult,
@@ -65,6 +84,8 @@ class PretrainingResult:
     initial_step: int
     final_step: int
     steps: tuple[OptimizerStepResult, ...]
+    validation_state: ValidationCheckpointState | None
+    validation_results: tuple[PeriodicValidationResult, ...]
 
 
 class TinyTextLoaderStateError(ValueError):
@@ -477,6 +498,26 @@ def _load_production_tokenizer(config: ProjectConfig) -> RegexBPETokenizer:
     return tokenizer
 
 
+def _load_periodic_validation_token_bytes(config: ProjectConfig) -> Tensor:
+    artifact_dir = config.tokenizer.artifact_dir
+    if artifact_dir is None:
+        raise PretrainingError(
+            "periodic BPB validation requires tokenizer.artifact_dir"
+        )
+    path = Path(artifact_dir) / "token_bytes.pt"
+    try:
+        value = torch.load(path, map_location="cpu", weights_only=True)
+    except Exception as error:
+        raise PretrainingError(
+            f"could not load periodic validation token bytes {path}: {error}"
+        ) from error
+    if not isinstance(value, Tensor):
+        raise PretrainingError(
+            f"periodic validation token bytes {path} must contain a Tensor"
+        )
+    return value
+
+
 def _resume_comparison(config: ProjectConfig) -> dict[str, Any]:
     values = config.to_dict()
     run = values["run"]
@@ -564,6 +605,7 @@ def run_pretraining(
     resume_from: str | Path | None = None,
     progress: Callable[[str], None] | None = None,
     allow_non_exact_resume: bool = False,
+    validation_runner: Callable[[int], PeriodicValidationResult] | None = None,
 ) -> PretrainingResult:
     """Run pretraining and transform only supported PyTorch OOM failures."""
 
@@ -575,6 +617,7 @@ def run_pretraining(
             resume_from=resume_from,
             progress=progress,
             allow_non_exact_resume=allow_non_exact_resume,
+            validation_runner=validation_runner,
         )
     except torch.OutOfMemoryError as error:
         memory = _collect_memory_after_oom(config.run.device)
@@ -596,6 +639,7 @@ def _run_pretraining_impl(
     resume_from: str | Path | None = None,
     progress: Callable[[str], None] | None = None,
     allow_non_exact_resume: bool = False,
+    validation_runner: Callable[[int], PeriodicValidationResult] | None = None,
 ) -> PretrainingResult:
     """Train or resume either supported data profile through one shared loop."""
 
@@ -607,6 +651,8 @@ def _run_pretraining_impl(
         raise TypeError(f"tracker must be a Tracker, got {type(tracker).__name__}")
     if not isinstance(allow_non_exact_resume, bool):
         raise TypeError("allow_non_exact_resume must be a boolean")
+    if validation_runner is not None and not callable(validation_runner):
+        raise TypeError("validation_runner must be callable or None")
     if allow_non_exact_resume and resume_from is None:
         raise PretrainingError(
             "allow_non_exact_resume requires an explicit resume checkpoint"
@@ -629,6 +675,7 @@ def _run_pretraining_impl(
         prepared_tokenizer: Tokenizer
         batches: _TinyTextBatchLoader | _PreparedBatchIterator
         loader: object
+        production_reader: TokenizedShardReader | None = None
         if config.data.profile == "tiny_text":
             prepared_tokenizer = ByteTokenizer()
             tiny_loader = _build_batches(
@@ -646,6 +693,7 @@ def _run_pretraining_impl(
                     tokenizer=prepared_tokenizer,
                 )
             )
+            production_reader = reader
             production_loader = create_token_loader(
                 reader,
                 strategy=config.data.loader_strategy,
@@ -679,6 +727,7 @@ def _run_pretraining_impl(
             model = GPT(config.model).to(device)
             optimizer = build_optimizer(model, config.train)
             scheduler = build_lr_scheduler(optimizer, config.train)
+            validation_state: ValidationCheckpointState | None = None
         else:
             checkpoint = load_training_checkpoint(
                 resume_from,
@@ -695,6 +744,17 @@ def _run_pretraining_impl(
             tokenizer = checkpoint.tokenizer
             optimizer = checkpoint.optimizer
             scheduler = checkpoint.scheduler
+            validation_state = checkpoint.validation
+            if (
+                validation_state is not None
+                and validation_state.ranking_protocol_id
+                != BEST_CHECKPOINT_RANKING_PROTOCOL_ID
+            ):
+                raise PretrainingError(
+                    "resume checkpoint ranking protocol changed: "
+                    f"{validation_state.ranking_protocol_id!r} != "
+                    f"{BEST_CHECKPOINT_RANKING_PROTOCOL_ID!r}"
+                )
             initial_step = checkpoint.step
             if initial_step >= config.train.max_steps:
                 raise PretrainingError(
@@ -723,20 +783,143 @@ def _run_pretraining_impl(
                     checkpoint.continuation.total_training_flops
                 )
 
-        checkpoint_path = paths.checkpoints_dir / "last.pt"
+        active_validation_runner = validation_runner
+        if production_reader is not None:
+            compatibility_config = NanochatCompatibilityConfig(
+                device_batch_size=config.train.device_batch_size,
+                context_length=config.model.seq_len,
+                eval_tokens=config.train.eval_tokens,
+            )
+            full_document_config = FullDocumentProtocolConfig(
+                device_batch_size=config.train.device_batch_size,
+                context_length=config.model.seq_len,
+            )
+            expected_validation_identity = base_validation_identity(
+                tokenizer_identity=tokenizer.get_identity(),
+                validation_manifest_identity=tokenized_manifest_identity(
+                    production_reader.manifest
+                ),
+                compatibility_reference_config=compatibility_config.to_dict(),
+                full_document_reference_config=full_document_config.to_dict(),
+            )
+            if (
+                validation_state is not None
+                and validation_runner is None
+                and validation_state.validation_identity != expected_validation_identity
+            ):
+                raise PretrainingError(
+                    "resume checkpoint validation identity changed: "
+                    f"{validation_state.validation_identity!r} != "
+                    f"{expected_validation_identity!r}"
+                )
+            if active_validation_runner is None:
+                token_bytes = _load_periodic_validation_token_bytes(config)
 
-        def save_periodic_checkpoint(
+                def run_periodic_validation(
+                    step: int,
+                ) -> PeriodicValidationResult:
+                    checkpoint_identity = (
+                        f"pretrain:{paths.run_dir.resolve()}#step:{step}"
+                    )
+                    compatibility = evaluate_nanochat_compatible_bpb(
+                        model,
+                        tokenizer,
+                        production_reader,
+                        token_bytes,
+                        parquet_dir=config.data.parquet_dir,
+                        checkpoint_identity=checkpoint_identity,
+                        config=compatibility_config,
+                        device=device,
+                    )
+                    full_document = evaluate_full_document_bpb(
+                        model,
+                        tokenizer,
+                        production_reader,
+                        token_bytes,
+                        checkpoint_identity=checkpoint_identity,
+                        config=full_document_config,
+                        device=device,
+                    )
+                    return PeriodicValidationResult(
+                        compatibility=compatibility,
+                        full_document=full_document,
+                    )
+
+                active_validation_runner = run_periodic_validation
+
+        checkpoint_path = paths.checkpoints_dir / "last.pt"
+        validation_results: list[PeriodicValidationResult] = []
+
+        def report_validation_failure(step: int, reason: object) -> None:
+            if progress is not None:
+                progress(f"Validation at step {step} was not accepted: {reason}")
+
+        def validate_and_save_checkpoints(
             step: int,
-            _result: OptimizerStepResult,
+            result: OptimizerStepResult,
         ) -> None:
+            nonlocal validation_state
+            continuation: ExactTrainingState | None = None
+            if (
+                active_validation_runner is not None
+                and step % config.train.eval_every == 0
+            ):
+                try:
+                    validation = active_validation_runner(step)
+                except torch.OutOfMemoryError:
+                    raise
+                except Exception as error:
+                    report_validation_failure(step, error)
+                else:
+                    if isinstance(validation, PeriodicValidationResult):
+                        validation_results.append(validation)
+                    try:
+                        decision = advance_validation_state(
+                            validation_state,
+                            validation,
+                            validation_step=step,
+                        )
+                    except BestCheckpointError as error:
+                        raise PretrainingError(str(error)) from error
+                    except (TypeError, ValueError) as error:
+                        report_validation_failure(step, error)
+                    else:
+                        if not decision.accepted:
+                            report_validation_failure(step, decision.reason)
+                        else:
+                            candidate = decision.state
+                            if candidate is None:  # pragma: no cover - invariant.
+                                raise RuntimeError(
+                                    "accepted validation produced no checkpoint state"
+                                )
+                            if decision.improved:
+                                continuation = _capture_exact_continuation(
+                                    loader,
+                                    device=device,
+                                    step=step,
+                                    result=result,
+                                )
+                                save_checkpoint(
+                                    paths.checkpoints_dir / "best.pt",
+                                    model=model,
+                                    optimizer=optimizer,
+                                    scheduler=scheduler,
+                                    config=config,
+                                    step=step,
+                                    tokenizer=tokenizer,
+                                    continuation=continuation,
+                                    validation=candidate,
+                                )
+                            validation_state = candidate
             if step % config.train.save_every != 0:
                 return
-            continuation = _capture_exact_continuation(
-                loader,
-                device=device,
-                step=step,
-                result=_result,
-            )
+            if continuation is None:
+                continuation = _capture_exact_continuation(
+                    loader,
+                    device=device,
+                    step=step,
+                    result=result,
+                )
             save_checkpoint(
                 paths.checkpoints_dir / f"step_{step:06d}.pt",
                 model=model,
@@ -746,6 +929,7 @@ def _run_pretraining_impl(
                 step=step,
                 tokenizer=tokenizer,
                 continuation=continuation,
+                validation=validation_state,
             )
             save_checkpoint(
                 checkpoint_path,
@@ -756,6 +940,7 @@ def _run_pretraining_impl(
                 step=step,
                 tokenizer=tokenizer,
                 continuation=continuation,
+                validation=validation_state,
             )
 
         grad_accum_steps = derive_grad_accum_steps(
@@ -775,7 +960,7 @@ def _run_pretraining_impl(
                 device=device,
                 tracker=tracker,
                 log_every=config.train.log_every,
-                on_step=save_periodic_checkpoint,
+                on_step=validate_and_save_checkpoints,
                 initial_total_training_time_seconds=(
                     initial_total_training_time_seconds
                 ),
@@ -804,6 +989,7 @@ def _run_pretraining_impl(
                 step=final_step,
                 result=final_result,
             ),
+            validation=validation_state,
         )
         return PretrainingResult(
             paths=paths,
@@ -812,6 +998,8 @@ def _run_pretraining_impl(
             initial_step=initial_step,
             final_step=final_step,
             steps=tuple(step_results),
+            validation_state=validation_state,
+            validation_results=tuple(validation_results),
         )
 
 

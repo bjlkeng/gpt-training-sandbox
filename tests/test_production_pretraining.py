@@ -4,17 +4,26 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
+import pyarrow as pa  # type: ignore[import-untyped]
+import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import torch
 
 from scratch_llm import pretraining
+from scratch_llm.best_checkpoint import PeriodicValidationResult
+from scratch_llm.bpb import BPBAccumulation, BaseValidationResult
 from scratch_llm.bpe import RegexBPETokenizer, train_reference_bpe
-from scratch_llm.checkpoint import CheckpointError, load_model_checkpoint
+from scratch_llm.checkpoint import (
+    CheckpointError,
+    load_model_checkpoint,
+    load_training_checkpoint,
+)
 from scratch_llm.config import (
     DataConfig,
     GPTConfig,
@@ -26,6 +35,15 @@ from scratch_llm.config import (
 )
 from scratch_llm.data import write_tokenized_parquet_shards
 from scratch_llm.generation import generate
+from scratch_llm.full_document_bpb import (
+    FULL_DOCUMENT_PROTOCOL_ID,
+    FULL_DOCUMENT_PROTOCOL_VERSION,
+)
+from scratch_llm.nanochat_bpb import (
+    NANOCHAT_COMPAT_PROTOCOL_ID,
+    NANOCHAT_COMPAT_PROTOCOL_VERSION,
+    NANOCHAT_REFERENCE_COMMIT,
+)
 from scratch_llm.pretraining import prepare_pretraining_batch, run_pretraining
 from scratch_llm.run import prepare_run
 from scratch_llm.tokenized_data import TokenizedDataError
@@ -36,6 +54,61 @@ from scratch_llm.training_telemetry import estimate_gpt_training_flops
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PARQUET_FIXTURE_DIR = PROJECT_ROOT / "data" / "fixtures" / "parquet"
 PRODUCTION_VOCAB_SIZE = 265
+
+
+class _EventTracker(NullTracker):
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    def log(self, metrics: dict[str, Any], step: int | None = None) -> None:
+        del metrics
+        self.events.append(f"tracker:{step}")
+
+
+def _fake_validation_result(
+    *,
+    step: int,
+    compatibility_bpb: float,
+    full_document_bpb: float | None,
+) -> PeriodicValidationResult:
+    def result(protocol_id: str, bpb: float) -> BaseValidationResult:
+        compatibility = protocol_id == NANOCHAT_COMPAT_PROTOCOL_ID
+        return BaseValidationResult.from_accumulation(
+            BPBAccumulation(
+                processed_model_tokens=4,
+                counted_target_tokens=2,
+                counted_target_bytes=2,
+                total_nats=bpb * math.log(2) * 2,
+            ),
+            protocol_id=protocol_id,
+            protocol_version=(
+                NANOCHAT_COMPAT_PROTOCOL_VERSION
+                if compatibility
+                else FULL_DOCUMENT_PROTOCOL_VERSION
+            ),
+            reference_commit=NANOCHAT_REFERENCE_COMMIT if compatibility else None,
+            reference_config={"fixture": protocol_id},
+            checkpoint_identity=f"checkpoint:{step}",
+            tokenizer_identity="tokenizer:fixture",
+            validation_manifest_identity="manifest:fixture",
+            source_documents=1,
+            source_tokens=2,
+            source_bytes=2,
+            unique_source_tokens=2,
+            unique_source_bytes=2,
+        )
+
+    return PeriodicValidationResult(
+        compatibility=result(
+            NANOCHAT_COMPAT_PROTOCOL_ID,
+            compatibility_bpb,
+        ),
+        full_document=(
+            None
+            if full_document_bpb is None
+            else result(FULL_DOCUMENT_PROTOCOL_ID, full_document_bpb)
+        ),
+    )
 
 
 def _write_production_inputs(
@@ -259,6 +332,295 @@ def test_production_profile_supports_each_explicit_loader(
     assert telemetry.peak_memory_mib is None
 
 
+def test_periodic_validation_installs_best_before_independent_step_and_last(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, artifact_dir, tokenized_dir = _write_production_inputs(tmp_path)
+    config = _production_config(
+        tmp_path,
+        artifact_dir=artifact_dir,
+        tokenized_dir=tokenized_dir,
+        max_steps=1,
+    )
+    config.train.eval_every = 1
+    events: list[str] = []
+    real_save_checkpoint = pretraining.save_checkpoint
+
+    def validation_runner(step: int) -> PeriodicValidationResult:
+        events.append(f"validate:{step}")
+        return _fake_validation_result(
+            step=step,
+            compatibility_bpb=1.5,
+            full_document_bpb=1.75,
+        )
+
+    def record_checkpoint(path: str | Path, **kwargs: Any) -> Path:
+        events.append(f"save:{Path(path).name}:{kwargs['step']}")
+        return real_save_checkpoint(path, **kwargs)
+
+    monkeypatch.setattr(pretraining, "save_checkpoint", record_checkpoint)
+    result = run_pretraining(
+        config,
+        paths=prepare_run(config),
+        tracker=_EventTracker(events),
+        validation_runner=validation_runner,
+    )
+
+    assert events == [
+        "tracker:1",
+        "validate:1",
+        "save:best.pt:1",
+        "save:step_000001.pt:1",
+        "save:last.pt:1",
+        "save:last.pt:1",
+    ]
+    assert result.validation_state is not None
+    assert result.validation_state.validation_step == 1
+    assert result.validation_state.current_compatibility_bpb == 1.5
+    assert result.validation_state.minimum_compatibility_bpb == 1.5
+    assert result.validation_state.current_full_document_bpb == 1.75
+    assert result.validation_state.minimum_full_document_bpb == 1.75
+    assert len(result.validation_results) == 1
+    for name in ("best.pt", "step_000001.pt", "last.pt"):
+        payload = torch.load(
+            result.paths.checkpoints_dir / name,
+            map_location="cpu",
+            weights_only=True,
+        )
+        assert payload["format_version"] == 4
+        assert payload["validation"] == result.validation_state.to_dict()
+    resumable_best = load_training_checkpoint(result.paths.checkpoints_dir / "best.pt")
+    assert resumable_best.step == 1
+    assert resumable_best.continuation is not None
+    assert resumable_best.validation == result.validation_state
+
+
+def test_real_periodic_bpb_protocols_rank_one_bounded_cpu_step(
+    tmp_path: Path,
+) -> None:
+    parquet_dir = tmp_path / "validation-parquet"
+    parquet_dir.mkdir()
+    pq.write_table(
+        pa.table({"text": pa.array(["training fixture"], type=pa.string())}),
+        parquet_dir / "shard_00000.parquet",
+        compression="NONE",
+        use_dictionary=False,
+    )
+    pq.write_table(
+        pa.table({"text": pa.array(["v"] * 1001, type=pa.string())}),
+        parquet_dir / "shard_06542.parquet",
+        row_group_size=128,
+        compression="NONE",
+        use_dictionary=False,
+    )
+    tokenizer = RegexBPETokenizer(
+        train_reference_bpe(
+            ["validation tokenizer fixture"],
+            vocab_size=PRODUCTION_VOCAB_SIZE,
+        )
+    )
+    artifact_dir = tmp_path / "validation-tokenizer"
+    tokenizer.save(artifact_dir)
+    tokenized_dir = tmp_path / "validation-tokenized"
+    write_tokenized_parquet_shards(
+        parquet_dir,
+        tokenized_dir,
+        tokenizer=tokenizer,
+        num_train_shards=1,
+        batch_size=128,
+    )
+    config = _production_config(
+        tmp_path,
+        artifact_dir=artifact_dir,
+        tokenized_dir=tokenized_dir,
+        run_name="real-validation",
+        max_steps=1,
+    )
+    config.data.parquet_dir = str(parquet_dir)
+    config.train.eval_every = 1
+    config.train.eval_tokens = 4 * config.train.device_batch_size * config.model.seq_len
+    progress: list[str] = []
+
+    result = run_pretraining(
+        config,
+        paths=prepare_run(config),
+        tracker=NullTracker(),
+        progress=progress.append,
+    )
+
+    assert len(result.validation_results) == 1, progress
+    validation = result.validation_results[0]
+    assert validation.compatibility.protocol_id == NANOCHAT_COMPAT_PROTOCOL_ID
+    assert validation.full_document is not None
+    assert validation.full_document.protocol_id == FULL_DOCUMENT_PROTOCOL_ID
+    assert validation.compatibility.checkpoint_identity == (
+        validation.full_document.checkpoint_identity
+    )
+    assert validation.compatibility.tokenizer_identity == tokenizer.get_identity()
+    assert math.isfinite(validation.compatibility.bpb)
+    assert math.isfinite(validation.full_document.bpb)
+    assert result.validation_state is not None
+    assert result.validation_state.validation_identity == (
+        validation.validation_identity
+    )
+    best = load_model_checkpoint(result.paths.checkpoints_dir / "best.pt")
+    assert best.step == 1
+    assert best.validation == result.validation_state
+
+
+def test_best_checkpoint_uses_strict_compatibility_improvement_across_resume(
+    tmp_path: Path,
+) -> None:
+    _, artifact_dir, tokenized_dir = _write_production_inputs(tmp_path)
+    config = _production_config(
+        tmp_path,
+        artifact_dir=artifact_dir,
+        tokenized_dir=tokenized_dir,
+        run_name="ranking-source",
+        max_steps=4,
+    )
+    config.train.eval_every = 1
+    curve = {
+        1: (2.0, 3.0),
+        2: (1.5, 2.8),
+        3: (1.5, 2.4),
+        4: (1.8, 2.2),
+    }
+
+    def source_runner(step: int) -> PeriodicValidationResult:
+        compatibility_bpb, full_document_bpb = curve[step]
+        return _fake_validation_result(
+            step=step,
+            compatibility_bpb=compatibility_bpb,
+            full_document_bpb=full_document_bpb,
+        )
+
+    source = run_pretraining(
+        config,
+        paths=prepare_run(config),
+        tracker=NullTracker(),
+        validation_runner=source_runner,
+    )
+    source_best = load_model_checkpoint(source.paths.checkpoints_dir / "best.pt")
+    assert source_best.step == 2
+    assert source.validation_state is not None
+    assert source.validation_state.validation_step == 4
+    assert source.validation_state.current_compatibility_bpb == 1.8
+    assert source.validation_state.minimum_compatibility_bpb == 1.5
+    assert source.validation_state.minimum_full_document_bpb == 2.2
+
+    resume_point = source.paths.checkpoints_dir / "step_000002.pt"
+    no_improvement_config = deepcopy(config)
+    no_improvement_config.run.name = "ranking-resume-no-improvement"
+    no_improvement_events: list[int] = []
+
+    def no_improvement_runner(step: int) -> PeriodicValidationResult:
+        no_improvement_events.append(step)
+        value = 1.5 if step == 3 else 1.6
+        return _fake_validation_result(
+            step=step,
+            compatibility_bpb=value,
+            full_document_bpb=2.0,
+        )
+
+    no_improvement = run_pretraining(
+        no_improvement_config,
+        paths=prepare_run(no_improvement_config),
+        tracker=NullTracker(),
+        resume_from=resume_point,
+        validation_runner=no_improvement_runner,
+    )
+    assert no_improvement_events == [3, 4]
+    assert not (no_improvement.paths.checkpoints_dir / "best.pt").exists()
+    assert no_improvement.validation_state is not None
+    assert no_improvement.validation_state.minimum_compatibility_bpb == 1.5
+
+    improvement_config = deepcopy(config)
+    improvement_config.run.name = "ranking-resume-improvement"
+    best_save_steps: list[int] = []
+
+    def improvement_runner(step: int) -> PeriodicValidationResult:
+        value = 1.5 if step == 3 else 1.4
+        return _fake_validation_result(
+            step=step,
+            compatibility_bpb=value,
+            full_document_bpb=2.0,
+        )
+
+    improvement = run_pretraining(
+        improvement_config,
+        paths=prepare_run(improvement_config),
+        tracker=NullTracker(),
+        resume_from=resume_point,
+        validation_runner=improvement_runner,
+    )
+    improved_best = load_model_checkpoint(improvement.paths.checkpoints_dir / "best.pt")
+    best_save_steps.append(improved_best.step)
+    assert best_save_steps == [4]
+    assert improvement.validation_state is not None
+    assert improvement.validation_state.minimum_compatibility_bpb == 1.4
+
+
+def test_failed_and_partial_validation_preserve_best_and_periodic_checkpoints(
+    tmp_path: Path,
+) -> None:
+    _, artifact_dir, tokenized_dir = _write_production_inputs(tmp_path)
+    config = _production_config(
+        tmp_path,
+        artifact_dir=artifact_dir,
+        tokenized_dir=tokenized_dir,
+        run_name="ranking-failures",
+        max_steps=4,
+    )
+    config.train.eval_every = 1
+    progress: list[str] = []
+
+    def validation_runner(step: int) -> PeriodicValidationResult:
+        if step == 2:
+            raise RuntimeError("synthetic validation failure")
+        validation = _fake_validation_result(
+            step=step,
+            compatibility_bpb=1.0 if step == 1 else 0.5,
+            full_document_bpb=1.5 if step == 1 else None,
+        )
+        if step == 4:
+            validation = _fake_validation_result(
+                step=step,
+                compatibility_bpb=0.25,
+                full_document_bpb=1.0,
+            )
+            object.__setattr__(validation.compatibility, "bpb", float("inf"))
+        return validation
+
+    result = run_pretraining(
+        config,
+        paths=prepare_run(config),
+        tracker=NullTracker(),
+        validation_runner=validation_runner,
+        progress=progress.append,
+    )
+
+    best = load_model_checkpoint(result.paths.checkpoints_dir / "best.pt")
+    assert best.step == 1
+    assert result.validation_state is not None
+    assert result.validation_state.validation_step == 1
+    assert len(result.validation_results) == 3
+    assert sorted(
+        path.name for path in result.paths.checkpoints_dir.glob("step_*")
+    ) == [
+        "step_000001.pt",
+        "step_000002.pt",
+        "step_000003.pt",
+        "step_000004.pt",
+    ]
+    assert any("synthetic validation failure" in message for message in progress)
+    assert any(
+        "full_documents_v1 result is unavailable" in message for message in progress
+    )
+    assert any("finite" in message for message in progress)
+
+
 def test_scripts_pretrain_runs_offline_regex_bpe_to_sample(
     tmp_path: Path,
 ) -> None:
@@ -294,7 +656,8 @@ def test_scripts_pretrain_runs_offline_regex_bpe_to_sample(
     assert [record["step"] for record in metric_records] == [1, 2]
 
     payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-    assert payload["format_version"] == 3
+    assert payload["format_version"] == 4
+    assert payload["validation"] is None
     assert payload["continuation"]["loader_format"] == (
         "scratch_llm_document_packing_loader_state"
     )
@@ -414,8 +777,10 @@ def test_exact_resume_matches_uninterrupted_batches_losses_and_state(
         map_location="cpu",
         weights_only=True,
     )
-    assert uninterrupted_payload["format_version"] == 3
-    assert resumed_payload["format_version"] == 3
+    assert uninterrupted_payload["format_version"] == 4
+    assert resumed_payload["format_version"] == 4
+    assert uninterrupted_payload["validation"] is None
+    assert resumed_payload["validation"] is None
     for field in ("model", "optimizer", "scheduler"):
         _assert_nested_state_equal(
             resumed_payload[field],

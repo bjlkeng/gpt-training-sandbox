@@ -15,6 +15,7 @@ from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
 
 from scratch_llm import checkpoint
+from scratch_llm.best_checkpoint import ValidationCheckpointState
 from scratch_llm.checkpoint import (
     CheckpointError,
     ExactTrainingState,
@@ -328,6 +329,84 @@ def test_malformed_exact_state_fails_before_model_or_rng_mutation(
     np.testing.assert_array_equal(restored_numpy[1], numpy_state[1])
     assert restored_numpy[2:] == numpy_state[2:]
     torch.testing.assert_close(torch.get_rng_state(), torch_state, rtol=0, atol=0)
+
+
+def test_format_four_round_trips_validation_ranking_with_exact_state(
+    tmp_path: Path,
+) -> None:
+    config, tokenizer, model, optimizer, scheduler, _ = _checkpoint_state()
+    continuation = ExactTrainingState(
+        loader_format="test_loader",
+        loader_state={"format": "test_loader", "position": 0},
+        rng_state=capture_training_rng_state("cpu"),
+        tracker_step=0,
+        total_training_time_seconds=1.5,
+        total_training_flops=2.5,
+    )
+    validation = ValidationCheckpointState(
+        ranking_protocol_id="nanochat_compat_v1",
+        validation_identity="sha256:" + "a" * 64,
+        validation_step=0,
+        current_compatibility_bpb=1.5,
+        minimum_compatibility_bpb=1.25,
+        current_full_document_bpb=1.75,
+        minimum_full_document_bpb=1.5,
+    )
+
+    checkpoint_path = save_checkpoint(
+        tmp_path / "format-four.pt",
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        config=config,
+        step=0,
+        tokenizer=tokenizer,
+        continuation=continuation,
+        validation=validation,
+    )
+
+    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    assert payload["format_version"] == 4
+    assert payload["validation"] == validation.to_dict()
+    model_only = load_model_checkpoint(checkpoint_path)
+    resumed = load_training_checkpoint(checkpoint_path)
+    assert model_only.validation == validation
+    assert resumed.validation == validation
+    assert resumed.continuation == continuation
+
+
+def test_format_three_exact_checkpoint_remains_resumable_without_validation(
+    tmp_path: Path,
+) -> None:
+    config, tokenizer, model, optimizer, scheduler, _ = _checkpoint_state()
+    continuation = ExactTrainingState(
+        loader_format="test_loader",
+        loader_state={"format": "test_loader", "position": 0},
+        rng_state=capture_training_rng_state("cpu"),
+        tracker_step=0,
+        total_training_time_seconds=0.0,
+        total_training_flops=0.0,
+    )
+    current = save_checkpoint(
+        tmp_path / "format-four.pt",
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        config=config,
+        step=0,
+        tokenizer=tokenizer,
+        continuation=continuation,
+    )
+    payload = torch.load(current, map_location="cpu", weights_only=True)
+    payload["format_version"] = 3
+    del payload["validation"]
+    previous = tmp_path / "format-three.pt"
+    torch.save(payload, previous)
+
+    resumed = load_training_checkpoint(previous)
+
+    assert resumed.continuation == continuation
+    assert resumed.validation is None
 
 
 def test_cpu_training_load_never_checks_or_initializes_cuda(
