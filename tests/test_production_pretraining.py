@@ -16,6 +16,10 @@ import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import torch
 
 from scratch_llm import pretraining
+from scratch_llm.base_evaluation_tracking import (
+    FULL_DOCUMENT_MINIMUM_TRAIN_METRIC,
+    NANOCHAT_MINIMUM_TRAIN_METRIC,
+)
 from scratch_llm.best_checkpoint import PeriodicValidationResult
 from scratch_llm.bpb import BPBAccumulation, BaseValidationResult
 from scratch_llm.bpe import RegexBPETokenizer, train_reference_bpe
@@ -38,10 +42,12 @@ from scratch_llm.generation import generate
 from scratch_llm.full_document_bpb import (
     FULL_DOCUMENT_PROTOCOL_ID,
     FULL_DOCUMENT_PROTOCOL_VERSION,
+    FULL_DOCUMENT_TRAIN_METRIC,
 )
 from scratch_llm.nanochat_bpb import (
     NANOCHAT_COMPAT_PROTOCOL_ID,
     NANOCHAT_COMPAT_PROTOCOL_VERSION,
+    NANOCHAT_COMPAT_TRAIN_METRIC,
     NANOCHAT_REFERENCE_COMMIT,
 )
 from scratch_llm.pretraining import prepare_pretraining_batch, run_pretraining
@@ -61,8 +67,20 @@ class _EventTracker(NullTracker):
         self.events = events
 
     def log(self, metrics: dict[str, Any], step: int | None = None) -> None:
-        del metrics
-        self.events.append(f"tracker:{step}")
+        event = (
+            "validation-tracker"
+            if NANOCHAT_COMPAT_TRAIN_METRIC in metrics
+            else "tracker"
+        )
+        self.events.append(f"{event}:{step}")
+
+
+class _MetricsTracker(NullTracker):
+    def __init__(self) -> None:
+        self.records: list[tuple[dict[str, Any], int | None]] = []
+
+    def log(self, metrics: dict[str, Any], step: int | None = None) -> None:
+        self.records.append((metrics, step))
 
 
 def _fake_validation_result(
@@ -371,6 +389,7 @@ def test_periodic_validation_installs_best_before_independent_step_and_last(
         "tracker:1",
         "validate:1",
         "save:best.pt:1",
+        "validation-tracker:1",
         "save:step_000001.pt:1",
         "save:last.pt:1",
         "save:last.pt:1",
@@ -394,6 +413,43 @@ def test_periodic_validation_installs_best_before_independent_step_and_last(
     assert resumable_best.step == 1
     assert resumable_best.continuation is not None
     assert resumable_best.validation == result.validation_state
+
+
+def test_periodic_validation_forwards_dual_protocol_metrics_on_training_step(
+    tmp_path: Path,
+) -> None:
+    _, artifact_dir, tokenized_dir = _write_production_inputs(tmp_path)
+    config = _production_config(
+        tmp_path,
+        artifact_dir=artifact_dir,
+        tokenized_dir=tokenized_dir,
+        run_name="tracked-validation",
+        max_steps=1,
+    )
+    config.train.eval_every = 1
+    tracker = _MetricsTracker()
+
+    result = run_pretraining(
+        config,
+        paths=prepare_run(config),
+        tracker=tracker,
+        validation_runner=lambda step: _fake_validation_result(
+            step=step,
+            compatibility_bpb=1.5,
+            full_document_bpb=1.75,
+        ),
+    )
+
+    assert result.validation_state is not None
+    assert tracker.records[-1] == (
+        {
+            NANOCHAT_COMPAT_TRAIN_METRIC: 1.5,
+            NANOCHAT_MINIMUM_TRAIN_METRIC: 1.5,
+            FULL_DOCUMENT_TRAIN_METRIC: 1.75,
+            FULL_DOCUMENT_MINIMUM_TRAIN_METRIC: 1.75,
+        },
+        1,
+    )
 
 
 def test_real_periodic_bpb_protocols_rank_one_bounded_cpu_step(

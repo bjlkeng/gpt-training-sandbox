@@ -888,6 +888,24 @@ RNG state.
 reference-config, checkpoint/tokenizer/manifest identity, and source-coverage
 metadata. It rejects inconsistent counts, retention ratios, non-finite values,
 and zero-byte results before callers can serialize its canonical JSON.
+Accepted periodic validation is logged on its optimizer step as `val_bpb` and
+`min_val_bpb` for `nanochat_compat_v1`, plus
+`val_bpb_full_documents` and `min_val_bpb_full_documents` for
+`full_documents_v1`. The unsuffixed minimum therefore follows the same pinned
+compatibility ranking used by `best.pt`; the complete-corpus minimum remains
+independent.
+
+Standalone reporting atomically writes both unchanged protocol records to
+`metrics/base_eval.json`, including their full reference configuration,
+identities, token/byte counts, retention, total nats, and BPB. It logs
+`eval/val_bpb`, `eval/val_bpb_full_documents`,
+`eval/val_bpb_nanochat_source_byte_retention`, and
+`eval/val_bpb_full_document_source_byte_retention` without aliases between the
+protocols. The report and `metrics/base_samples.md` are registered as stable,
+run-relative evaluation artifacts; fixed sampling also reports aggregate
+`eval/sample_tokens_per_sec`. Local JSONL metadata is always written, while an
+enabled W&B backend receives the same finalized values and completed files.
+
 Document selection and packing remain protocol-owned: the existing `val_bpb`
 name is reserved for a frozen nanochat-compatible packing/cropping protocol. A
 distinct `val_bpb_full_documents` metric uses continuation-aware windows and

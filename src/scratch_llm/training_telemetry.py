@@ -6,7 +6,12 @@ from dataclasses import dataclass
 import math
 from typing import Final
 
-from scratch_llm._validation import require_positive_integer
+from scratch_llm._validation import (
+    require_finite_non_negative_real,
+    require_finite_positive_real,
+    require_non_negative_integer,
+    require_positive_integer,
+)
 from scratch_llm.config import GPTConfig, TrainConfig
 
 
@@ -65,7 +70,7 @@ class PeakFlopsBasis:
     description: str
 
     def __post_init__(self) -> None:
-        flops_per_second = _finite_positive_real(
+        flops_per_second = require_finite_positive_real(
             self.flops_per_second,
             name="flops_per_second",
         )
@@ -102,21 +107,19 @@ class TrainingStepTelemetry:
             self.processed_model_tokens,
             name="processed_model_tokens",
         )
-        if (
-            not isinstance(self.supervised_target_tokens, int)
-            or isinstance(self.supervised_target_tokens, bool)
-            or self.supervised_target_tokens < 0
-        ):
-            raise ValueError("supervised_target_tokens must be a non-negative integer")
+        require_non_negative_integer(
+            self.supervised_target_tokens,
+            name="supervised_target_tokens",
+        )
         if self.supervised_target_tokens > processed_model_tokens:
             raise ValueError(
                 "supervised_target_tokens cannot exceed processed_model_tokens"
             )
-        duration_seconds = _finite_positive_real(
+        duration_seconds = require_finite_positive_real(
             self.duration_seconds,
             name="duration_seconds",
         )
-        tokens_per_second = _finite_positive_real(
+        tokens_per_second = require_finite_positive_real(
             self.tokens_per_second,
             name="tokens_per_second",
         )
@@ -129,13 +132,13 @@ class TrainingStepTelemetry:
                 "tokens_per_second must use processed_model_tokens / duration_seconds"
             )
         step_flops = require_positive_integer(self.step_flops, name="step_flops")
-        total_training_flops = _finite_non_negative_real(
+        total_training_flops = require_finite_non_negative_real(
             self.total_training_flops,
             name="total_training_flops",
         )
         if total_training_flops < step_flops:
             raise ValueError("total_training_flops cannot be less than step_flops")
-        total_training_time_seconds = _finite_non_negative_real(
+        total_training_time_seconds = require_finite_non_negative_real(
             self.total_training_time_seconds,
             name="total_training_time_seconds",
         )
@@ -157,7 +160,7 @@ class TrainingStepTelemetry:
         if self.mfu is not None:
             if not isinstance(self.peak_flops_basis, PeakFlopsBasis):
                 raise TypeError("peak_flops_basis must be a PeakFlopsBasis")
-            mfu = _finite_non_negative_real(self.mfu, name="mfu")
+            mfu = require_finite_non_negative_real(self.mfu, name="mfu")
             expected_mfu = (
                 step_flops / duration_seconds / self.peak_flops_basis.flops_per_second
             )
@@ -170,7 +173,7 @@ class TrainingStepTelemetry:
             object.__setattr__(
                 self,
                 "peak_memory_mib",
-                _finite_non_negative_real(
+                require_finite_non_negative_real(
                     self.peak_memory_mib,
                     name="peak_memory_mib",
                 ),
@@ -250,24 +253,6 @@ def peak_flops_basis_from_config(config: TrainConfig) -> PeakFlopsBasis | None:
         flops_per_second=config.mfu_peak_flops_per_second,
         description=config.mfu_peak_flops_basis,
     )
-
-
-def _finite_positive_real(value: object, *, name: str) -> float:
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        raise TypeError(f"{name} must be a number")
-    numeric = float(value)
-    if not math.isfinite(numeric) or numeric <= 0:
-        raise ValueError(f"{name} must be finite and greater than zero")
-    return numeric
-
-
-def _finite_non_negative_real(value: object, *, name: str) -> float:
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        raise TypeError(f"{name} must be a number")
-    numeric = float(value)
-    if not math.isfinite(numeric) or numeric < 0:
-        raise ValueError(f"{name} must be finite and non-negative")
-    return numeric
 
 
 __all__ = [

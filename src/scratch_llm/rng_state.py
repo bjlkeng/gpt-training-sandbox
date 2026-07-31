@@ -11,6 +11,8 @@ from typing import Any, Iterator, Literal, Protocol, cast
 import numpy as np
 import torch
 
+from scratch_llm._validation import require_finite_real, require_integer
+
 
 class RNGStateError(RuntimeError):
     """A saved RNG state is malformed or incompatible with this runtime."""
@@ -126,16 +128,32 @@ class TrainingRNGState:
         if backend not in ("cpu", "cuda"):
             raise RNGStateError("RNG state backend must be 'cpu' or 'cuda'")
         python_gauss_value = value["python_gauss"]
-        if python_gauss_value is not None and not _is_real(python_gauss_value):
-            raise RNGStateError("RNG state python_gauss must be a number or null")
+        try:
+            python_gauss = (
+                None
+                if python_gauss_value is None
+                else require_finite_real(
+                    python_gauss_value,
+                    name="RNG state python_gauss",
+                )
+            )
+        except (TypeError, ValueError) as error:
+            raise RNGStateError(
+                "RNG state python_gauss must be a number or null"
+            ) from error
         numpy_algorithm = value["numpy_algorithm"]
         if not isinstance(numpy_algorithm, str) or not numpy_algorithm:
             raise RNGStateError("RNG state numpy_algorithm must be a string")
         numpy_cached = value["numpy_cached_gaussian"]
-        if not _is_real(numpy_cached):
+        try:
+            normalized_numpy_cached = require_finite_real(
+                numpy_cached,
+                name="RNG state numpy_cached_gaussian",
+            )
+        except (TypeError, ValueError) as error:
             raise RNGStateError(
                 "RNG state numpy_cached_gaussian must be a finite number"
-            )
+            ) from error
         return cls(
             backend=backend,
             python_version=_require_integer(
@@ -148,9 +166,7 @@ class TrainingRNGState:
                 label="python_internal",
                 minimum=0,
             ),
-            python_gauss=(
-                None if python_gauss_value is None else float(python_gauss_value)
-            ),
+            python_gauss=python_gauss,
             numpy_algorithm=numpy_algorithm,
             numpy_keys=_integer_tuple(
                 value["numpy_keys"],
@@ -169,7 +185,7 @@ class TrainingRNGState:
                 minimum=0,
                 maximum=1,
             ),
-            numpy_cached_gaussian=float(numpy_cached),
+            numpy_cached_gaussian=normalized_numpy_cached,
             torch_cpu_state=_byte_tuple(
                 value["torch_cpu_state"],
                 label="torch_cpu_state",
@@ -478,19 +494,13 @@ def _require_integer(
     minimum: int,
     maximum: int | None = None,
 ) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise RNGStateError(f"RNG state {label} must be an integer")
-    if value < minimum or (maximum is not None and value > maximum):
+    try:
+        normalized = require_integer(value, name=f"RNG state {label}")
+    except TypeError as error:
+        raise RNGStateError(f"RNG state {label} must be an integer") from error
+    if normalized < minimum or (maximum is not None and normalized > maximum):
         raise RNGStateError(f"RNG state {label} is outside its valid range")
-    return value
-
-
-def _is_real(value: object) -> bool:
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(float(value))
-    )
+    return normalized
 
 
 __all__ = [

@@ -6,7 +6,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 import hashlib
 import json
-import math
 import os
 from pathlib import Path
 import time
@@ -15,6 +14,14 @@ from typing import Any, Final
 import torch
 from torch import nn
 
+from scratch_llm._validation import (
+    require_finite_non_negative_real,
+    require_finite_positive_real,
+    require_finite_real,
+    require_non_empty_string,
+    require_non_negative_integer,
+    require_positive_integer,
+)
 from scratch_llm.generation import (
     CompletionReason,
     generate_sequences,
@@ -62,15 +69,15 @@ class FixedBaseSamplingConfig:
     seed: int = 42
 
     def __post_init__(self) -> None:
-        _positive_integer(self.max_new_tokens, name="max_new_tokens")
-        temperature = _finite_non_negative_real(
+        require_positive_integer(self.max_new_tokens, name="max_new_tokens")
+        temperature = require_finite_non_negative_real(
             self.temperature,
             name="temperature",
         )
         object.__setattr__(self, "temperature", temperature)
         if self.top_k is not None:
-            _positive_integer(self.top_k, name="top_k")
-        seed = _non_negative_integer(self.seed, name="seed")
+            require_positive_integer(self.top_k, name="top_k")
+        seed = require_non_negative_integer(self.seed, name="seed")
         if seed > _MAX_SEED:
             raise ValueError(f"seed must be at most {_MAX_SEED}")
 
@@ -103,7 +110,7 @@ class BaseSample:
     text: str
 
     def __post_init__(self) -> None:
-        prompt_index = _non_negative_integer(
+        prompt_index = require_non_negative_integer(
             self.prompt_index,
             name="prompt_index",
         )
@@ -113,14 +120,14 @@ class BaseSample:
             )
         if not isinstance(self.prompt, str) or not self.prompt:
             raise ValueError("prompt must be a non-empty string")
-        _positive_integer(self.prompt_token_count, name="prompt_token_count")
-        _non_negative_integer(self.seed, name="seed")
+        require_positive_integer(self.prompt_token_count, name="prompt_token_count")
+        require_non_negative_integer(self.seed, name="seed")
         _token_tuple(self.generated_token_ids, name="generated_token_ids")
-        sampled_token_count = _positive_integer(
+        sampled_token_count = require_positive_integer(
             self.sampled_token_count,
             name="sampled_token_count",
         )
-        elapsed_seconds = _finite_positive_real(
+        elapsed_seconds = require_finite_positive_real(
             self.elapsed_seconds,
             name="elapsed_seconds",
         )
@@ -128,7 +135,7 @@ class BaseSample:
         if self.completion_reason == "stop_token":
             if self.stop_token_id is None:
                 raise ValueError("stop_token_id is required for stop_token completion")
-            stop_token_id = _non_negative_integer(
+            stop_token_id = require_non_negative_integer(
                 self.stop_token_id,
                 name="stop_token_id",
             )
@@ -205,12 +212,12 @@ class BaseSamplesResult:
             "prompt_set_identity",
             "generation_identity",
         ):
-            _non_empty_string(getattr(self, name), name=name)
+            require_non_empty_string(getattr(self, name), name=name)
         if self.prompt_set_identity != FIXED_BASE_PROMPT_SET_IDENTITY:
             raise ValueError(
                 "prompt_set_identity does not match the frozen base prompt suite"
             )
-        bos_token_id = _non_negative_integer(
+        bos_token_id = require_non_negative_integer(
             self.bos_token_id,
             name="bos_token_id",
         )
@@ -296,18 +303,18 @@ def generate_fixed_base_samples(
         raise TypeError(
             f"config must be a FixedBaseSamplingConfig, got {type(config).__name__}"
         )
-    checkpoint_identity = _non_empty_string(
+    checkpoint_identity = require_non_empty_string(
         checkpoint_identity,
         name="checkpoint_identity",
     )
-    tokenizer_identity = _non_empty_string(
+    tokenizer_identity = require_non_empty_string(
         tokenizer.get_identity(),
         name="tokenizer identity",
     )
     if not callable(clock):
         raise TypeError("clock must be callable")
     resolved_device = get_device(device)
-    bos_token_id = _non_negative_integer(
+    bos_token_id = require_non_negative_integer(
         tokenizer.get_bos_token_id(),
         name="tokenizer BOS token ID",
     )
@@ -326,7 +333,7 @@ def generate_fixed_base_samples(
             dtype=torch.long,
             device=resolved_device,
         )
-        started_at = _clock_value(clock(), name="clock start")
+        started_at = require_finite_real(clock(), name="clock start")
         generated = generate_sequences(
             model,
             prompt_tensor,
@@ -336,7 +343,7 @@ def generate_fixed_base_samples(
             seed=seed,
             stop_token_ids={bos_token_id},
         )
-        finished_at = _clock_value(clock(), name="clock end")
+        finished_at = require_finite_real(clock(), name="clock end")
         elapsed_seconds = finished_at - started_at
         if elapsed_seconds <= 0:
             raise ValueError("clock must advance by a positive amount for each sample")
@@ -515,55 +522,11 @@ def _maximum_character_run(value: str, character: str) -> int:
     return maximum
 
 
-def _clock_value(value: object, *, name: str) -> float:
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        raise TypeError(f"{name} must be a number")
-    normalized = float(value)
-    if not math.isfinite(normalized):
-        raise ValueError(f"{name} must be finite")
-    return normalized
-
-
-def _finite_positive_real(value: object, *, name: str) -> float:
-    normalized = _finite_non_negative_real(value, name=name)
-    if normalized == 0:
-        raise ValueError(f"{name} must be positive")
-    return normalized
-
-
-def _finite_non_negative_real(value: object, *, name: str) -> float:
-    normalized = _clock_value(value, name=name)
-    if normalized < 0:
-        raise ValueError(f"{name} must be non-negative")
-    return normalized
-
-
-def _positive_integer(value: object, *, name: str) -> int:
-    normalized = _non_negative_integer(value, name=name)
-    if normalized == 0:
-        raise ValueError(f"{name} must be positive")
-    return normalized
-
-
-def _non_negative_integer(value: object, *, name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise TypeError(f"{name} must be an integer")
-    if value < 0:
-        raise ValueError(f"{name} must be non-negative")
-    return value
-
-
-def _non_empty_string(value: object, *, name: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{name} must be a non-empty string")
-    return value
-
-
 def _token_tuple(value: object, *, name: str) -> None:
     if not isinstance(value, tuple):
         raise TypeError(f"{name} must be a tuple")
     for position, token_id in enumerate(value):
-        _non_negative_integer(token_id, name=f"{name}[{position}]")
+        require_non_negative_integer(token_id, name=f"{name}[{position}]")
 
 
 __all__ = [

@@ -8,16 +8,14 @@ from torch import Tensor, nn
 from torch.optim import AdamW, Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
+from scratch_llm._validation import require_non_negative_integer
 from scratch_llm.config import TrainConfig
 
 
 def get_lr_multiplier(step: int, config: TrainConfig) -> float:
     """Return the configured LR multiplier for a zero-based optimizer step."""
 
-    if not isinstance(step, int) or isinstance(step, bool):
-        raise TypeError(f"step must be an integer, got {type(step).__name__}")
-    if step < 0:
-        raise ValueError(f"step must be non-negative, got {step}")
+    step = require_non_negative_integer(step, name="step")
     if not isinstance(config, TrainConfig):
         raise TypeError(f"config must be a TrainConfig, got {type(config).__name__}")
     config.validate()

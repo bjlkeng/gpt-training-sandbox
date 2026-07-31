@@ -16,7 +16,11 @@ from typing import Final, Literal
 
 import numpy as np
 
-from scratch_llm._validation import JsonValueValidator
+from scratch_llm._validation import (
+    JsonValueValidator,
+    require_integer,
+    require_positive_integer,
+)
 from scratch_llm.tokenizer import Tokenizer
 from scratch_llm.utils import save_json
 
@@ -474,15 +478,11 @@ def _validate_encoded_ids(
             f"for {source!r} document {document_index}"
         )
     for position, token_id in enumerate(token_ids):
-        if not isinstance(token_id, int) or isinstance(token_id, bool):
-            raise TypeError(
-                f"token ID at {source!r} document {document_index}, position "
-                f"{position} must be an integer, got {type(token_id).__name__}"
-            )
-        if not 0 <= token_id < vocab_size:
+        label = f"token ID at {source!r} document {document_index}, position {position}"
+        normalized = require_integer(token_id, name=label)
+        if not 0 <= normalized < vocab_size:
             raise TokenizedDataError(
-                f"token ID at {source!r} document {document_index}, position "
-                f"{position} must be in range [0, {vocab_size}); got {token_id}"
+                f"{label} must be in range [0, {vocab_size}); got {normalized}"
             )
 
 
@@ -527,13 +527,11 @@ def _tokenizer_metadata(
         raise TypeError(
             f"tokenizer must implement Tokenizer, got {type(tokenizer).__name__}"
         )
-    vocab_size = tokenizer.get_vocab_size()
-    if not isinstance(vocab_size, int) or isinstance(vocab_size, bool):
-        raise TypeError(
-            "tokenizer vocabulary size must be an integer, "
-            f"got {type(vocab_size).__name__}"
-        )
-    if not 0 < vocab_size <= _MAX_UINT32_VOCAB_SIZE:
+    vocab_size = require_positive_integer(
+        tokenizer.get_vocab_size(),
+        name="tokenizer vocabulary size",
+    )
+    if vocab_size > _MAX_UINT32_VOCAB_SIZE:
         raise ValueError(
             "tokenizer vocabulary size must be in range "
             f"[1, {_MAX_UINT32_VOCAB_SIZE}], got {vocab_size}"
@@ -554,16 +552,14 @@ def _tokenizer_metadata(
     for token in sorted(special_tokens):
         if not isinstance(token, str) or not token:
             raise ValueError("tokenizer special tokens must be non-empty strings")
-        token_id = tokenizer.encode_special(token)
-        if not isinstance(token_id, int) or isinstance(token_id, bool):
-            raise TypeError(
-                f"special token ID for {token!r} must be an integer, "
-                f"got {type(token_id).__name__}"
-            )
+        label = f"special token ID for {token!r}"
+        token_id = require_integer(
+            tokenizer.encode_special(token),
+            name=label,
+        )
         if not 0 <= token_id < vocab_size:
             raise ValueError(
-                f"special token ID for {token!r} must be in range "
-                f"[0, {vocab_size}); got {token_id}"
+                f"{label} must be in range [0, {vocab_size}); got {token_id}"
             )
         if token_id in used_ids:
             raise ValueError(f"special token ID {token_id} is assigned more than once")

@@ -12,6 +12,7 @@ import time
 from types import MappingProxyType
 from typing import Any, Final
 
+from scratch_llm._validation import require_finite_real
 from scratch_llm.climbmix import CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX
 from scratch_llm.data import write_tokenized_parquet_shards
 from scratch_llm.data_stats import (
@@ -528,13 +529,7 @@ def _log_artifact_once(
 
 
 def _clock_value(clock: Callable[[], float], *, label: str) -> float:
-    value = clock()
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        raise TypeError(f"clock {label} value must be numeric")
-    converted = float(value)
-    if not math.isfinite(converted):
-        raise ValueError(f"clock {label} value must be finite")
-    return converted
+    return require_finite_real(clock(), name=f"clock {label} value")
 
 
 __all__ = [

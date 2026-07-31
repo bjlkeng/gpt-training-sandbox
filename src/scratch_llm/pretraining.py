@@ -15,10 +15,12 @@ from torch import Tensor
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
+from scratch_llm._validation import require_integer, require_positive_integer
 from scratch_llm.accelerator_memory import (
     AcceleratorMemorySnapshot,
     collect_accelerator_memory,
 )
+from scratch_llm.base_evaluation_tracking import track_periodic_base_validation
 from scratch_llm.best_checkpoint import (
     BEST_CHECKPOINT_RANKING_PROTOCOL_ID,
     BestCheckpointError,
@@ -192,12 +194,8 @@ class _TinyTextBatchLoader(Iterator[tuple[Tensor, Tensor]]):
     ) -> None:
         if not isinstance(dataset, NextTokenDataset):
             raise TypeError("dataset must be a NextTokenDataset")
-        if not isinstance(batch_size, int) or isinstance(batch_size, bool):
-            raise TypeError("batch_size must be an integer")
-        if batch_size <= 0:
-            raise ValueError("batch_size must be positive")
-        if not isinstance(seed, int) or isinstance(seed, bool):
-            raise TypeError("seed must be an integer")
+        batch_size = require_positive_integer(batch_size, name="batch_size")
+        seed = require_integer(seed, name="seed")
         if not 0 <= seed <= _MAX_TORCH_SEED:
             raise ValueError("seed is outside the supported torch range")
         if not isinstance(source_identity, str) or not source_identity:
@@ -354,11 +352,12 @@ class _TinyTextBatchLoader(Iterator[tuple[Tensor, Tensor]]):
 
 
 def _tiny_state_integer(value: object, *, name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
+    try:
+        return require_integer(value, name=name)
+    except TypeError as error:
         raise TinyTextLoaderStateError(
             f"tiny-text loader state {name} must be an integer"
-        )
-    return value
+        ) from error
 
 
 def _tiny_rng_state(value: object) -> Tensor:
@@ -753,6 +752,7 @@ def _run_pretraining_impl(
             runtime=runtime,
             loader=data.loader,
             device=device,
+            tracker=tracker,
             validation_runner=active_validation_runner,
             progress=progress,
         )
@@ -1011,6 +1011,7 @@ class _CheckpointLifecycle:
         runtime: _TrainingRuntime,
         loader: object,
         device: torch.device,
+        tracker: Tracker,
         validation_runner: _ValidationRunner | None,
         progress: Callable[[str], None] | None,
     ) -> None:
@@ -1019,6 +1020,7 @@ class _CheckpointLifecycle:
         self._runtime = runtime
         self._loader = loader
         self._device = device
+        self._tracker = tracker
         self._validation_runner = validation_runner
         self._progress = progress
         self._validation_state = runtime.validation_state
@@ -1107,6 +1109,12 @@ class _CheckpointLifecycle:
                 validation=candidate,
             )
         self._validation_state = candidate
+        track_periodic_base_validation(
+            validation,
+            candidate,
+            tracker=self._tracker,
+            step=step,
+        )
         return continuation
 
     def on_step(self, step: int, result: OptimizerStepResult) -> None:

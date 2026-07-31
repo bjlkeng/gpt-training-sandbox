@@ -4,13 +4,19 @@ from __future__ import annotations
 
 from collections.abc import Collection
 from dataclasses import dataclass
-import math
 import random
 from typing import Literal, overload
 
 import numpy as np
 import torch
 from torch import nn
+
+from scratch_llm._validation import (
+    require_finite_non_negative_real,
+    require_integer,
+    require_non_negative_integer,
+    require_positive_integer,
+)
 
 
 CompletionReason = Literal["stop_token", "max_new_tokens"]
@@ -44,14 +50,14 @@ class GeneratedSequence:
             raise ValueError(
                 "completion_reason must be 'stop_token' or 'max_new_tokens'"
             )
-        _non_negative_integer(
+        require_non_negative_integer(
             self.sampled_token_count,
             name="sampled_token_count",
         )
         if self.completion_reason == "stop_token":
             if self.stop_token_id is None:
                 raise ValueError("stop_token_id is required for stop_token completion")
-            _non_negative_integer(self.stop_token_id, name="stop_token_id")
+            require_non_negative_integer(self.stop_token_id, name="stop_token_id")
             expected_sampled = len(self.generated_token_ids) + 1
         else:
             if self.stop_token_id is not None:
@@ -182,28 +188,18 @@ def generate_sequences(
         raise TypeError(f"token_ids must use an integer dtype, got {token_ids.dtype}")
     if bool(token_ids.lt(0).any().item()):
         raise ValueError("token_ids must be non-negative")
-    if not isinstance(max_new_tokens, int) or isinstance(max_new_tokens, bool):
-        raise TypeError(
-            f"max_new_tokens must be an integer, got {type(max_new_tokens).__name__}"
-        )
-    if max_new_tokens <= 0:
-        raise ValueError(f"max_new_tokens must be positive, got {max_new_tokens}")
-    if not isinstance(temperature, (int, float)) or isinstance(temperature, bool):
-        raise TypeError(
-            f"temperature must be a number, got {type(temperature).__name__}"
-        )
-    temperature = float(temperature)
-    if not math.isfinite(temperature) or temperature < 0:
-        raise ValueError(
-            f"temperature must be finite and non-negative, got {temperature}"
-        )
+    max_new_tokens = require_positive_integer(
+        max_new_tokens,
+        name="max_new_tokens",
+    )
+    temperature = require_finite_non_negative_real(
+        temperature,
+        name="temperature",
+    )
     if top_k is not None:
-        if not isinstance(top_k, int) or isinstance(top_k, bool):
-            raise TypeError(f"top_k must be an integer, got {type(top_k).__name__}")
-        if top_k <= 0:
-            raise ValueError(f"top_k must be positive, got {top_k}")
-    if seed is not None and (not isinstance(seed, int) or isinstance(seed, bool)):
-        raise TypeError(f"seed must be an integer, got {type(seed).__name__}")
+        top_k = require_positive_integer(top_k, name="top_k")
+    if seed is not None:
+        seed = require_integer(seed, name="seed")
     normalized_stop_ids = _normalize_stop_token_ids(stop_token_ids)
 
     generated_rows = [row.clone() for row in token_ids]
@@ -373,7 +369,7 @@ def _normalize_stop_token_ids(
     normalized: set[int] = set()
     for position, token_id in enumerate(stop_token_ids):
         normalized.add(
-            _non_negative_integer(
+            require_non_negative_integer(
                 token_id,
                 name=f"stop_token_ids item {position}",
             )
@@ -385,15 +381,7 @@ def _validate_token_tuple(value: object, *, name: str) -> None:
     if not isinstance(value, tuple):
         raise TypeError(f"{name} must be a tuple")
     for position, token_id in enumerate(value):
-        _non_negative_integer(token_id, name=f"{name}[{position}]")
-
-
-def _non_negative_integer(value: object, *, name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise TypeError(f"{name} must be an integer")
-    if value < 0:
-        raise ValueError(f"{name} must be non-negative")
-    return value
+        require_non_negative_integer(token_id, name=f"{name}[{position}]")
 
 
 __all__ = [

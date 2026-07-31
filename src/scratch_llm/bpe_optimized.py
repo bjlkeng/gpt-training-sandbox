@@ -14,6 +14,11 @@ import tracemalloc
 from types import MappingProxyType
 from typing import Any, Final
 
+from scratch_llm._validation import (
+    require_non_negative_integer,
+    require_non_negative_real,
+    require_optional_non_negative_integer,
+)
 from scratch_llm.bpe import (
     BPEMerge,
     BPETrainingError,
@@ -23,8 +28,6 @@ from scratch_llm.bpe import (
     _collect_training_chunks,
     _normalized_chunks,
     _normalize_pair,
-    _optional_non_negative_integer,
-    _require_token_id,
     _validate_special_tokens,
     _validate_vocab_size,
 )
@@ -176,9 +179,9 @@ class IncrementalPairIndex:
         """Merge one selected pair left-to-right and update local adjacencies."""
 
         normalized_pair = _normalize_pair(pair)
-        normalized_new_token_id = _require_token_id(
+        normalized_new_token_id = require_non_negative_integer(
             new_token_id,
-            label="new_token_id",
+            name="new_token_id",
         )
         selected_left_nodes = self._occurrences.get(normalized_pair)
         if not selected_left_nodes:
@@ -322,11 +325,11 @@ def train_optimized_bpe(
         vocab_size,
         special_token_count=len(ordered_special_tokens),
     )
-    max_documents = _optional_non_negative_integer(
+    max_documents = require_optional_non_negative_integer(
         max_documents,
         name="max_documents",
     )
-    max_characters = _optional_non_negative_integer(
+    max_characters = require_optional_non_negative_integer(
         max_characters,
         name="max_characters",
     )
@@ -408,11 +411,11 @@ def benchmark_bpe_trainers(
     normalized_texts = tuple(texts)
     if not normalized_texts:
         raise ValueError("texts must contain at least one document")
-    max_documents = _optional_non_negative_integer(
+    max_documents = require_optional_non_negative_integer(
         max_documents,
         name="max_documents",
     )
-    max_characters = _optional_non_negative_integer(
+    max_characters = require_optional_non_negative_integer(
         max_characters,
         name="max_characters",
     )
@@ -437,20 +440,14 @@ def benchmark_bpe_trainers(
         )
         if not isinstance(result, ReferenceBPETrainingResult):
             raise TypeError("benchmark measure must return ReferenceBPETrainingResult")
-        if (
-            not isinstance(elapsed_seconds, (int, float))
-            or isinstance(elapsed_seconds, bool)
-            or elapsed_seconds < 0
-        ):
-            raise ValueError("benchmark elapsed seconds must be a non-negative number")
-        if (
-            not isinstance(peak_memory_bytes, int)
-            or isinstance(peak_memory_bytes, bool)
-            or peak_memory_bytes < 0
-        ):
-            raise ValueError(
-                "benchmark peak memory bytes must be a non-negative integer"
-            )
+        elapsed_seconds = require_non_negative_real(
+            elapsed_seconds,
+            name="benchmark elapsed seconds",
+        )
+        peak_memory_bytes = require_non_negative_integer(
+            peak_memory_bytes,
+            name="benchmark peak memory bytes",
+        )
         measured_results.append(
             (
                 algorithm,

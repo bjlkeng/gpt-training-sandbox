@@ -10,6 +10,7 @@ from os import PathLike
 from types import MappingProxyType
 from typing import Final, Mapping
 
+from scratch_llm._validation import require_integer
 from scratch_llm.regex_chunking import (
     SPLIT_PATTERN,
     RegexChunkingDependencyError,
@@ -253,15 +254,12 @@ class ByteTokenizer(Tokenizer):
     @staticmethod
     def _validate_token_id(token_id: object, *, position: int | None = None) -> int:
         label = "token ID" if position is None else f"token ID at position {position}"
-        if not isinstance(token_id, int) or isinstance(token_id, bool):
-            raise TypeError(
-                f"{label} must be an integer, got {type(token_id).__name__}"
-            )
-        if not 0 <= token_id < VOCAB_SIZE:
+        normalized = require_integer(token_id, name=label)
+        if not 0 <= normalized < VOCAB_SIZE:
             raise ValueError(
-                f"{label} must be in range [0, {VOCAB_SIZE}); got {token_id}"
+                f"{label} must be in range [0, {VOCAB_SIZE}); got {normalized}"
             )
-        return token_id
+        return normalized
 
 
 __all__ = [

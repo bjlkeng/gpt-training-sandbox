@@ -9,7 +9,10 @@ from pathlib import Path
 import time
 from typing import Any, Final, Literal
 
-from scratch_llm._validation import require_positive_integer
+from scratch_llm._validation import (
+    require_non_negative_integer,
+    require_positive_integer,
+)
 from scratch_llm.climbmix import CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX
 from scratch_llm.data import (
     list_parquet_files,
@@ -418,7 +421,7 @@ def evaluate_tokenizer(
         raise TypeError(f"compare must be a boolean, got {type(compare).__name__}")
     if not callable(clock):
         raise TypeError(f"clock must be callable, got {type(clock).__name__}")
-    warmup_iterations = _require_non_negative_integer(
+    warmup_iterations = require_non_negative_integer(
         benchmark_warmup_iterations,
         name="benchmark_warmup_iterations",
     )
@@ -943,14 +946,6 @@ def _collect_bounded_documents(
             documents.append(bounded)
             characters += len(bounded)
     return tuple(documents)
-
-
-def _require_non_negative_integer(value: object, *, name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise TypeError(f"{name} must be an integer, got {type(value).__name__}")
-    if value < 0:
-        raise ValueError(f"{name} must be non-negative, got {value}")
-    return value
 
 
 __all__ = [

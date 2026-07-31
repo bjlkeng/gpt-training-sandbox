@@ -6,7 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from scratch_llm._validation import require_positive_integer
+from scratch_llm._validation import (
+    require_optional_positive_integer,
+    require_positive_integer,
+)
 from scratch_llm.climbmix import (
     CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX,
     DEFAULT_CLIMBMIX_DATA_DIR,
@@ -130,15 +133,15 @@ def compute_raw_data_statistics(
             "include_validation must be a boolean, "
             f"got {type(include_validation).__name__}"
         )
-    max_documents = _validate_optional_limit(
+    max_documents = require_optional_positive_integer(
         max_documents,
         name="max_documents",
     )
-    max_characters = _validate_optional_limit(
+    max_characters = require_optional_positive_integer(
         max_characters,
         name="max_characters",
     )
-    document_char_cap = _validate_optional_limit(
+    document_char_cap = require_optional_positive_integer(
         document_char_cap,
         name="document_char_cap",
     )
@@ -273,12 +276,6 @@ def _count_split(
         characters=characters,
         utf8_bytes=utf8_bytes,
     )
-
-
-def _validate_optional_limit(value: object, *, name: str) -> int | None:
-    if value is None:
-        return None
-    return require_positive_integer(value, name=name)
 
 
 __all__ = [

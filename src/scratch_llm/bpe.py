@@ -10,6 +10,12 @@ from os import PathLike
 from types import MappingProxyType
 from typing import Final
 
+from scratch_llm._validation import (
+    require_integer,
+    require_non_negative_integer,
+    require_optional_non_negative_integer,
+    require_positive_integer,
+)
 from scratch_llm.regex_chunking import bpe_encoding_chunks, iter_bpe_training_chunks
 from scratch_llm.tokenizer import (
     BYTE_VOCAB_SIZE,
@@ -264,16 +270,13 @@ class RegexBPETokenizer(Tokenizer):
         position: int | None = None,
     ) -> int:
         label = "token ID" if position is None else f"token ID at position {position}"
-        if not isinstance(token_id, int) or isinstance(token_id, bool):
-            raise TypeError(
-                f"{label} must be an integer, got {type(token_id).__name__}"
-            )
-        if not 0 <= token_id < self._training_result.vocab_size:
+        normalized = require_integer(token_id, name=label)
+        if not 0 <= normalized < self._training_result.vocab_size:
             raise ValueError(
                 f"{label} must be in range "
-                f"[0, {self._training_result.vocab_size}); got {token_id}"
+                f"[0, {self._training_result.vocab_size}); got {normalized}"
             )
-        return token_id
+        return normalized
 
 
 def count_pairs(chunks: Iterable[Sequence[int]]) -> dict[TokenPair, int]:
@@ -298,7 +301,7 @@ def merge_pair(
 
     normalized_chunk = _normalize_chunk(chunk, label="chunk")
     normalized_pair = _normalize_pair(pair)
-    new_token_id = _require_token_id(new_token_id, label="new_token_id")
+    new_token_id = require_non_negative_integer(new_token_id, name="new_token_id")
 
     merged: list[int] = []
     index = 0
@@ -324,7 +327,7 @@ def apply_merge(
     """Apply one merge independently to every chunk without mutating inputs."""
 
     normalized_pair = _normalize_pair(pair)
-    new_token_id = _require_token_id(new_token_id, label="new_token_id")
+    new_token_id = require_non_negative_integer(new_token_id, name="new_token_id")
     return tuple(
         merge_pair(chunk, normalized_pair, new_token_id)
         for chunk in _normalized_chunks(chunks)
@@ -345,11 +348,10 @@ def select_best_pair(pair_counts: Mapping[TokenPair, int]) -> TokenPair:
     normalized: dict[TokenPair, int] = {}
     for raw_pair, raw_count in pair_counts.items():
         pair = _normalize_pair(raw_pair)
-        if not isinstance(raw_count, int) or isinstance(raw_count, bool):
-            raise TypeError(f"pair count for {pair} must be an integer")
-        if raw_count <= 0:
-            raise ValueError(f"pair count for {pair} must be positive")
-        normalized[pair] = raw_count
+        normalized[pair] = require_positive_integer(
+            raw_count,
+            name=f"pair count for {pair}",
+        )
     return min(normalized, key=lambda pair: (-normalized[pair], pair))
 
 
@@ -375,11 +377,11 @@ def train_reference_bpe(
         vocab_size,
         special_token_count=len(ordered_special_tokens),
     )
-    max_documents = _optional_non_negative_integer(
+    max_documents = require_optional_non_negative_integer(
         max_documents,
         name="max_documents",
     )
-    max_characters = _optional_non_negative_integer(
+    max_characters = require_optional_non_negative_integer(
         max_characters,
         name="max_characters",
     )
@@ -552,7 +554,7 @@ def _normalize_chunk(chunk: Sequence[int], *, label: str) -> TokenChunk:
             f"got {type(chunk).__name__}"
         ) from error
     return tuple(
-        _require_token_id(token_id, label=f"{label} token {index}")
+        require_non_negative_integer(token_id, name=f"{label} token {index}")
         for index, token_id in enumerate(values)
     )
 
@@ -564,14 +566,6 @@ def _normalize_pair(pair: Sequence[int]) -> TokenPair:
             f"pair must contain exactly two token IDs, got {len(normalized)}"
         )
     return normalized[0], normalized[1]
-
-
-def _require_token_id(value: object, *, label: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise TypeError(f"{label} must be an integer, got {type(value).__name__}")
-    if value < 0:
-        raise ValueError(f"{label} must be non-negative, got {value}")
-    return value
 
 
 def _validate_special_tokens(special_tokens: Iterable[str]) -> tuple[str, ...]:
@@ -597,10 +591,7 @@ def _validate_special_tokens(special_tokens: Iterable[str]) -> tuple[str, ...]:
 
 
 def _validate_vocab_size(vocab_size: object, *, special_token_count: int) -> int:
-    if not isinstance(vocab_size, int) or isinstance(vocab_size, bool):
-        raise TypeError(
-            f"vocab_size must be an integer, got {type(vocab_size).__name__}"
-        )
+    vocab_size = require_integer(vocab_size, name="vocab_size")
     minimum = BYTE_VOCAB_SIZE + special_token_count
     if vocab_size < minimum:
         raise ValueError(
@@ -608,16 +599,6 @@ def _validate_vocab_size(vocab_size: object, *, special_token_count: int) -> int
             f"{special_token_count} special tokens, got {vocab_size}"
         )
     return vocab_size
-
-
-def _optional_non_negative_integer(value: object, *, name: str) -> int | None:
-    if value is None:
-        return None
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise TypeError(f"{name} must be an integer or None")
-    if value < 0:
-        raise ValueError(f"{name} must be non-negative, got {value}")
-    return value
 
 
 __all__ = [
