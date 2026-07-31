@@ -64,7 +64,11 @@ UNIMPLEMENTED_CHECKPOINT_COMMANDS = (
 ROADMAP_COMMANDS = (
     CONFIG_COMMANDS
     + CHECKPOINT_COMMANDS
-    + ("scripts.data_stats", "scripts.download_climbmix")
+    + (
+        "scripts.compare_runs",
+        "scripts.data_stats",
+        "scripts.download_climbmix",
+    )
 )
 
 
