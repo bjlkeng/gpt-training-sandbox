@@ -19,6 +19,7 @@ from scratch_llm.accelerator_memory import (
     AcceleratorMemorySnapshot,
     collect_accelerator_memory,
 )
+from scratch_llm.base_evaluation_tracking import track_periodic_base_validation
 from scratch_llm.best_checkpoint import (
     BEST_CHECKPOINT_RANKING_PROTOCOL_ID,
     BestCheckpointError,
@@ -753,6 +754,7 @@ def _run_pretraining_impl(
             runtime=runtime,
             loader=data.loader,
             device=device,
+            tracker=tracker,
             validation_runner=active_validation_runner,
             progress=progress,
         )
@@ -1011,6 +1013,7 @@ class _CheckpointLifecycle:
         runtime: _TrainingRuntime,
         loader: object,
         device: torch.device,
+        tracker: Tracker,
         validation_runner: _ValidationRunner | None,
         progress: Callable[[str], None] | None,
     ) -> None:
@@ -1019,6 +1022,7 @@ class _CheckpointLifecycle:
         self._runtime = runtime
         self._loader = loader
         self._device = device
+        self._tracker = tracker
         self._validation_runner = validation_runner
         self._progress = progress
         self._validation_state = runtime.validation_state
@@ -1107,6 +1111,12 @@ class _CheckpointLifecycle:
                 validation=candidate,
             )
         self._validation_state = candidate
+        track_periodic_base_validation(
+            validation,
+            candidate,
+            tracker=self._tracker,
+            step=step,
+        )
         return continuation
 
     def on_step(self, step: int, result: OptimizerStepResult) -> None:
