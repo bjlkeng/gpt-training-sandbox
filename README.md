@@ -584,7 +584,7 @@ uv run python -m scripts.pretrain \
   --resume runs/smoke/checkpoints/step_000075.pt
 ```
 
-Pretraining checkpoints use checkpoint format version 4. State is captured at
+Pretraining checkpoints use checkpoint format version 5. State is captured at
 the completed optimizer-step boundary after all microbatches, the optimizer
 and scheduler updates, and the tracker step. The checkpoint atomically records
 the concrete loader format and next-batch state, its corpus or manifest
@@ -595,14 +595,15 @@ tokenizer, and data pipeline before installing the loader and RNG continuation
 as one transaction. Model-only sampling and evaluation loads preserve the
 caller's global RNG streams.
 
-Format version 4 adds periodic-validation metadata to the exact version-3
-continuation: the pinned ranking protocol, validation identity and step,
-current/minimum compatibility BPB, and current/minimum full-document BPB.
-Version-3 checkpoints remain exactly resumable with no prior validation
-minimum. Format-version-1 and version-2 checkpoints remain valid for sampling.
-They do not contain exact loader/RNG continuation, so training resume rejects
-them by default. To migrate one explicitly, accept a fresh data/RNG position
-and reset telemetry counters with:
+Format version 5 adds the active remote tracker backend/run ID used for an
+explicit same-run W&B resume. Format version 4 adds periodic-validation
+metadata to the exact version-3 continuation: the pinned ranking protocol,
+validation identity and step, current/minimum compatibility BPB, and
+current/minimum full-document BPB. Versions 3 and 4 remain exactly resumable;
+they simply have no saved remote identity. Format-version-1 and version-2
+checkpoints remain valid for sampling. They do not contain exact loader/RNG
+continuation, so training resume rejects them by default. To migrate one
+explicitly, accept a fresh data/RNG position and reset telemetry counters with:
 
 ```bash
 uv run python -m scripts.pretrain \
@@ -614,6 +615,39 @@ uv run python -m scripts.pretrain \
 
 That opt-in migration restores the model, optimizer, scheduler, and completed
 step, but the resulting continuation is intentionally not bit-exact.
+
+Every successful `best.pt`, periodic `step_*.pt`, and `last.pt` install is
+registered afterward with deterministic `checkpoint_best`,
+`checkpoint_step_NNNNNN`, or `checkpoint_latest` metadata. JSONL keeps these
+run-relative records locally. W&B uploads the files only when
+`tracking.wandb.log_model_artifacts=true`; the default remains false.
+
+For a W&B-enabled resume, an unchanged `run.name` and `run.output_dir` defaults
+to the checkpoint's saved remote run. If either local identity changes, choose
+the remote behavior explicitly:
+
+```bash
+# New local directory, same remote W&B run.
+uv run --extra tracking python -m scripts.pretrain \
+  --config configs/base_smoke.yaml \
+  --override run.name=base-smoke-resumed \
+  --wandb --wandb-mode offline \
+  --wandb-resume same \
+  --resume runs/base-smoke/checkpoints/step_000100.pt
+
+# New local directory and a new remote W&B run.
+uv run --extra tracking python -m scripts.pretrain \
+  --config configs/base_smoke.yaml \
+  --override run.name=base-smoke-fork \
+  --wandb --wandb-mode offline \
+  --wandb-resume fork \
+  --resume runs/base-smoke/checkpoints/step_000100.pt
+```
+
+`same` passes the persisted ID to W&B with a required resume and fails
+actionably when the checkpoint has no compatible identity. `fork` creates a
+fresh ID and requires a changed local run identity. W&B-disabled checkpoint
+resume remains purely local and does not require the optional dependency.
 
 Production pretraining runs both pinned BPB protocols every
 `train.eval_every` optimizer steps. Only a complete result can advance the

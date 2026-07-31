@@ -229,6 +229,7 @@ class _FakeWandbArtifact:
 
 class _FakeWandbRun:
     def __init__(self) -> None:
+        self.id = "data-run"
         self.config = _FakeWandbConfig()
         self.logs: list[dict[str, Any]] = []
         self.artifacts: list[_FakeWandbArtifact] = []

@@ -54,6 +54,7 @@ from scratch_llm.pretraining import prepare_pretraining_batch, run_pretraining
 from scratch_llm.run import prepare_run
 from scratch_llm.tokenized_data import TokenizedDataError, TokenizedShardReader
 from scratch_llm.tracking import NullTracker
+from scratch_llm.tracking_state import TrackingState
 from scratch_llm.training_telemetry import estimate_gpt_training_flops
 
 
@@ -73,6 +74,13 @@ class _EventTracker(NullTracker):
             else "tracker"
         )
         self.events.append(f"{event}:{step}")
+
+    def log_artifact(self, path: str, name: str, type: str) -> None:
+        assert type == "model"
+        self.events.append(f"artifact:{name}:{path}")
+
+    def checkpoint_state(self) -> TrackingState:
+        return TrackingState(backend="wandb", run_id="fixture-run")
 
 
 class _MetricsTracker(NullTracker):
@@ -389,9 +397,12 @@ def test_periodic_validation_installs_best_before_independent_step_and_last(
         "tracker:1",
         "validate:1",
         "save:best.pt:1",
+        "artifact:checkpoint_best:checkpoints/best.pt",
         "validation-tracker:1",
         "save:step_000001.pt:1",
+        "artifact:checkpoint_step_000001:checkpoints/step_000001.pt",
         "save:last.pt:1",
+        "artifact:checkpoint_latest:checkpoints/last.pt",
         "save:last.pt:1",
     ]
     assert result.validation_state is not None
@@ -407,8 +418,12 @@ def test_periodic_validation_installs_best_before_independent_step_and_last(
             map_location="cpu",
             weights_only=True,
         )
-        assert payload["format_version"] == 4
+        assert payload["format_version"] == 5
         assert payload["validation"] == result.validation_state.to_dict()
+        assert payload["tracking"] == {
+            "backend": "wandb",
+            "run_id": "fixture-run",
+        }
     resumable_best = load_training_checkpoint(result.paths.checkpoints_dir / "best.pt")
     assert resumable_best.step == 1
     assert resumable_best.continuation is not None
@@ -744,7 +759,7 @@ def test_scripts_pretrain_runs_offline_regex_bpe_to_sample(
         assert "train/peak_memory_mib" not in metrics
 
     payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-    assert payload["format_version"] == 4
+    assert payload["format_version"] == 5
     assert payload["validation"] is None
     assert payload["continuation"]["loader_format"] == (
         "scratch_llm_document_packing_loader_state"
@@ -895,8 +910,8 @@ def test_exact_resume_matches_uninterrupted_batches_losses_and_state(
         map_location="cpu",
         weights_only=True,
     )
-    assert uninterrupted_payload["format_version"] == 4
-    assert resumed_payload["format_version"] == 4
+    assert uninterrupted_payload["format_version"] == 5
+    assert resumed_payload["format_version"] == 5
     assert uninterrupted_payload["validation"] is None
     assert resumed_payload["validation"] is None
     for field in ("model", "optimizer", "scheduler"):

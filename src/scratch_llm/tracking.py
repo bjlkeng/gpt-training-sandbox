@@ -15,6 +15,7 @@ from typing import Any, Literal, TextIO
 from scratch_llm._validation import require_non_negative_integer
 from scratch_llm.config import ProjectConfig
 from scratch_llm.run import RunPaths
+from scratch_llm.tracking_state import TrackingState
 from scratch_llm.utils import load_json, save_json
 
 
@@ -55,6 +56,11 @@ class Tracker(ABC):
     @abstractmethod
     def finish(self) -> None:
         """Flush pending records and release resources idempotently."""
+
+    def checkpoint_state(self) -> TrackingState | None:
+        """Return small resumable remote state, or None for local-only trackers."""
+
+        return None
 
 
 class NullTracker(Tracker):
@@ -464,7 +470,9 @@ class WandbTracker(Tracker):
         dir: str | os.PathLike[str] | None = None,
         log_dataset_artifacts: bool = True,
         log_tokenizer_artifacts: bool = True,
+        log_model_artifacts: bool = False,
         artifact_root: str | os.PathLike[str] | None = None,
+        resume_state: TrackingState | None = None,
     ) -> None:
         if mode not in {"online", "offline", "disabled"}:
             raise ValueError(
@@ -474,6 +482,14 @@ class WandbTracker(Tracker):
             raise TypeError("log_dataset_artifacts must be a boolean")
         if not isinstance(log_tokenizer_artifacts, bool):
             raise TypeError("log_tokenizer_artifacts must be a boolean")
+        if not isinstance(log_model_artifacts, bool):
+            raise TypeError("log_model_artifacts must be a boolean")
+        if resume_state is not None and not isinstance(resume_state, TrackingState):
+            raise TypeError("resume_state must be a TrackingState or None")
+        if resume_state is not None and resume_state.backend != "wandb":
+            raise ValueError(
+                f"W&B cannot resume tracking backend {resume_state.backend!r}"
+            )
 
         self._active = enabled and mode != "disabled"
         self._finished = False
@@ -481,7 +497,11 @@ class WandbTracker(Tracker):
         self._run: Any = None
         self._log_dataset_artifacts = log_dataset_artifacts
         self._log_tokenizer_artifacts = log_tokenizer_artifacts
+        self._log_model_artifacts = log_model_artifacts
         self._artifact_root = Path(artifact_root) if artifact_root is not None else None
+        self._checkpoint_state: TrackingState | None = None
+        if resume_state is not None and not self._active:
+            raise ValueError("cannot resume W&B state when W&B is disabled")
         if not self._active:
             return
 
@@ -500,6 +520,13 @@ class WandbTracker(Tracker):
             "tags": list(tags),
             "mode": mode,
         }
+        if resume_state is not None:
+            init_kwargs.update(
+                {
+                    "id": resume_state.run_id,
+                    "resume": "must",
+                }
+            )
         optional_values: dict[str, Any] = {
             "entity": entity,
             "group": group,
@@ -512,6 +539,24 @@ class WandbTracker(Tracker):
         self._run = self._wandb.init(**init_kwargs)
         if self._run is None:
             raise RuntimeError("wandb.init did not return a run")
+        run_id = getattr(self._run, "id", None)
+        if not isinstance(run_id, str):
+            raise RuntimeError(
+                "wandb.init returned a run without a valid resumable run id"
+            )
+        try:
+            self._checkpoint_state = TrackingState(
+                backend="wandb",
+                run_id=run_id,
+            )
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(
+                "wandb.init returned a run without a valid resumable run id"
+            ) from error
+        if resume_state is not None and self._checkpoint_state != resume_state:
+            raise RuntimeError(
+                "W&B resumed a different run id than the checkpoint requested"
+            )
 
     def _run_for_logging(self) -> Any | None:
         if not self._active:
@@ -549,12 +594,19 @@ class WandbTracker(Tracker):
             return
         if type == "tokenizer" and not self._log_tokenizer_artifacts:
             return
+        if type == "model" and not self._log_model_artifacts:
+            return
         artifact_path = Path(path)
         if not artifact_path.is_absolute() and self._artifact_root is not None:
             artifact_path = self._artifact_root / artifact_path
         artifact = self._wandb.Artifact(name=name, type=type)
         artifact.add_file(str(artifact_path))
         run.log_artifact(artifact)
+
+    def checkpoint_state(self) -> TrackingState | None:
+        """Return the remote run ID needed by an exact checkpoint resume."""
+
+        return self._checkpoint_state
 
     def finish(self) -> None:
         """Finish the active W&B run at most once."""
@@ -618,6 +670,18 @@ class CompositeTracker(Tracker):
 
         self._ensure_open()
         self._fan_out("log_artifact", path, name, type)
+
+    def checkpoint_state(self) -> TrackingState | None:
+        """Return the sole remote child state, rejecting ambiguous fan-out."""
+
+        states = [
+            state
+            for tracker in self._trackers
+            if (state := tracker.checkpoint_state()) is not None
+        ]
+        if len(states) > 1:
+            raise RuntimeError("multiple tracker children expose checkpoint state")
+        return None if not states else states[0]
 
     def finish(self) -> None:
         """Finish every child once, preserving fan-out when one raises."""
@@ -758,6 +822,7 @@ def build_tracker(
     paths: RunPaths,
     *,
     stage: str,
+    wandb_resume_state: TrackingState | None = None,
 ) -> RunTracker:
     """Build the run's always-local tracker and optional W&B fan-out.
 
@@ -773,6 +838,11 @@ def build_tracker(
     if not isinstance(stage, str) or not stage.strip():
         raise ValueError("stage must be a non-empty string")
     config.validate()
+    if wandb_resume_state is not None and not isinstance(
+        wandb_resume_state,
+        TrackingState,
+    ):
+        raise TypeError("wandb_resume_state must be a TrackingState or None")
 
     local = JsonlTracker(paths.run_dir / config.tracking.jsonl.path)
     trackers: list[Tracker] = [local]
@@ -792,6 +862,8 @@ def build_tracker(
 
         wandb_config = config.tracking.wandb
         if not wandb_config.enabled or wandb_config.mode == "disabled":
+            if wandb_resume_state is not None:
+                raise ValueError("cannot resume W&B state while W&B is disabled")
             return RunTracker(summary, *trackers)
 
         wandb_dir = Path(wandb_config.dir)
@@ -808,9 +880,28 @@ def build_tracker(
             dir=wandb_dir,
             log_dataset_artifacts=wandb_config.log_dataset_artifacts,
             log_tokenizer_artifacts=wandb_config.log_tokenizer_artifacts,
+            log_model_artifacts=wandb_config.log_model_artifacts,
             artifact_root=paths.run_dir,
+            resume_state=wandb_resume_state,
         )
         trackers.append(remote)
+        state = remote.checkpoint_state()
+        if state is None:  # pragma: no cover - active W&B guarantees this.
+            raise RuntimeError("active W&B tracker did not expose resume state")
+        state_path = paths.metrics_dir / "tracking_state.json"
+        if state_path.exists():
+            try:
+                existing_state = TrackingState.from_dict(load_json(state_path))
+            except (OSError, ValueError) as error:
+                raise ValueError(
+                    f"invalid tracking state {state_path}: {error}"
+                ) from error
+            if existing_state != state:
+                raise ValueError(
+                    f"{state_path} belongs to a different remote tracking run"
+                )
+        else:
+            save_json(state.to_dict(), state_path)
         remote.log_config(resolved_config)
         return RunTracker(summary, *trackers)
     except BaseException as error:
