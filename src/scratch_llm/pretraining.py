@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,7 +14,6 @@ import torch
 from torch import Tensor
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
-from torch.utils.data import DataLoader
 
 from scratch_llm.accelerator_memory import (
     AcceleratorMemorySnapshot,
@@ -21,6 +21,7 @@ from scratch_llm.accelerator_memory import (
 )
 from scratch_llm.bpe import RegexBPETokenizer
 from scratch_llm.checkpoint import (
+    ExactTrainingState,
     load_model_checkpoint,
     load_training_checkpoint,
     save_checkpoint,
@@ -34,6 +35,10 @@ from scratch_llm.oom_diagnostics import (
 )
 from scratch_llm.optim import build_lr_scheduler, build_optimizer
 from scratch_llm.run import RunPaths
+from scratch_llm.rng_state import (
+    capture_training_rng_state,
+    restore_training_rng_state,
+)
 from scratch_llm.tokenizer import NANOCHAT_SPECIAL_TOKENS, ByteTokenizer, Tokenizer
 from scratch_llm.tokenized_data import TokenizedShardReader
 from scratch_llm.tracking import Tracker
@@ -61,6 +66,226 @@ class PretrainingResult:
     steps: tuple[OptimizerStepResult, ...]
 
 
+class TinyTextLoaderStateError(ValueError):
+    """A tiny-text loader state is malformed or belongs to another corpus."""
+
+
+_TINY_TEXT_LOADER_FORMAT = "scratch_llm_tiny_text_loader_state"
+_TINY_TEXT_LOADER_FORMAT_VERSION = 1
+_TINY_TEXT_LOADER_STATE_KEYS = frozenset(
+    {
+        "batch_size",
+        "epoch",
+        "epoch_seed",
+        "format",
+        "format_version",
+        "position",
+        "rng_state",
+        "row_position",
+        "seq_len",
+        "source_identity",
+    }
+)
+_MAX_TORCH_SEED = 2**63 - 1
+
+
+class _TinyTextBatchLoader(Iterator[tuple[Tensor, Tensor]]):
+    """Yield seeded shuffled tiny-text batches with exact next-batch state."""
+
+    def __init__(
+        self,
+        dataset: NextTokenDataset,
+        *,
+        batch_size: int,
+        seed: int,
+        source_identity: str,
+    ) -> None:
+        if not isinstance(dataset, NextTokenDataset):
+            raise TypeError("dataset must be a NextTokenDataset")
+        if not isinstance(batch_size, int) or isinstance(batch_size, bool):
+            raise TypeError("batch_size must be an integer")
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+        if not isinstance(seed, int) or isinstance(seed, bool):
+            raise TypeError("seed must be an integer")
+        if not 0 <= seed <= _MAX_TORCH_SEED:
+            raise ValueError("seed is outside the supported torch range")
+        if not isinstance(source_identity, str) or not source_identity:
+            raise ValueError("source_identity must be a non-empty string")
+        usable_example_count = len(dataset) // batch_size * batch_size
+        if usable_example_count == 0:
+            raise ValueError(
+                "tiny text must produce at least one complete device batch"
+            )
+
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.seq_len = dataset.seq_len
+        self.source_identity = source_identity
+        self.usable_example_count = usable_example_count
+        self._generator = torch.Generator(device="cpu").manual_seed(seed)
+        self._order: tuple[int, ...] = ()
+        self.epoch = -1
+        self.epoch_seed = 0
+        self.position = 0
+        self.row_position = 0
+        self._start_next_epoch()
+
+    def __iter__(self) -> _TinyTextBatchLoader:
+        return self
+
+    def __len__(self) -> int:
+        return self.usable_example_count // self.batch_size
+
+    def __next__(self) -> tuple[Tensor, Tensor]:
+        if self.row_position == len(self._order):
+            self._start_next_epoch()
+        indices = self._order[self.row_position : self.row_position + self.batch_size]
+        if len(indices) != self.batch_size:
+            raise RuntimeError("tiny-text epoch ended with an incomplete batch")
+        examples = [self.dataset[index] for index in indices]
+        inputs = torch.stack([example[0] for example in examples])
+        targets = torch.stack([example[1] for example in examples])
+        self.row_position += self.batch_size
+        self.position += self.batch_size
+        return inputs, targets
+
+    def state_dict(self) -> dict[str, object]:
+        """Return JSON-compatible exact next-batch state."""
+
+        return {
+            "batch_size": self.batch_size,
+            "epoch": self.epoch,
+            "epoch_seed": self.epoch_seed,
+            "format": _TINY_TEXT_LOADER_FORMAT,
+            "format_version": _TINY_TEXT_LOADER_FORMAT_VERSION,
+            "position": self.position,
+            "rng_state": self._generator.get_state().tolist(),
+            "row_position": self.row_position,
+            "seq_len": self.seq_len,
+            "source_identity": self.source_identity,
+        }
+
+    def load_state_dict(self, state: Mapping[str, object]) -> None:
+        """Validate a candidate completely before changing loader state."""
+
+        if not isinstance(state, Mapping):
+            raise TinyTextLoaderStateError("tiny-text loader state must be a mapping")
+        if set(state) != _TINY_TEXT_LOADER_STATE_KEYS:
+            missing = sorted(_TINY_TEXT_LOADER_STATE_KEYS - set(state))
+            unexpected = sorted(set(state) - _TINY_TEXT_LOADER_STATE_KEYS)
+            raise TinyTextLoaderStateError(
+                "tiny-text loader state fields do not match format version 1; "
+                f"missing={missing}, unexpected={unexpected}"
+            )
+        if state["format"] != _TINY_TEXT_LOADER_FORMAT:
+            raise TinyTextLoaderStateError("unknown tiny-text loader state format")
+        if state["format_version"] != _TINY_TEXT_LOADER_FORMAT_VERSION:
+            raise TinyTextLoaderStateError(
+                "unknown tiny-text loader state format version"
+            )
+        for name, expected in (
+            ("batch_size", self.batch_size),
+            ("seq_len", self.seq_len),
+            ("source_identity", self.source_identity),
+        ):
+            if state[name] != expected:
+                raise TinyTextLoaderStateError(
+                    f"tiny-text loader state {name} does not match this loader"
+                )
+        epoch = _tiny_state_integer(state["epoch"], name="epoch")
+        epoch_seed = _tiny_state_integer(state["epoch_seed"], name="epoch_seed")
+        position = _tiny_state_integer(state["position"], name="position")
+        row_position = _tiny_state_integer(
+            state["row_position"],
+            name="row_position",
+        )
+        if epoch < 0:
+            raise TinyTextLoaderStateError(
+                "tiny-text loader epoch must be non-negative"
+            )
+        if not 0 <= epoch_seed <= _MAX_TORCH_SEED:
+            raise TinyTextLoaderStateError("tiny-text loader epoch_seed is invalid")
+        if position < 0 or position % self.batch_size:
+            raise TinyTextLoaderStateError(
+                "tiny-text loader position must be batch-aligned"
+            )
+        if (
+            row_position < 0
+            or row_position > self.usable_example_count
+            or row_position % self.batch_size
+        ):
+            raise TinyTextLoaderStateError(
+                "tiny-text loader row_position must be an in-epoch batch offset"
+            )
+        rng_state = _tiny_rng_state(state["rng_state"])
+        candidate_generator = torch.Generator(device="cpu")
+        try:
+            candidate_generator.set_state(rng_state)
+        except RuntimeError as error:
+            raise TinyTextLoaderStateError(
+                f"tiny-text loader rng_state is invalid: {error}"
+            ) from error
+        order = self._build_order(epoch_seed)
+
+        self._generator.set_state(rng_state)
+        self._order = order
+        self.epoch = epoch
+        self.epoch_seed = epoch_seed
+        self.position = position
+        self.row_position = row_position
+
+    def _start_next_epoch(self) -> None:
+        epoch_seed = int(
+            torch.randint(
+                0,
+                _MAX_TORCH_SEED,
+                (1,),
+                generator=self._generator,
+                dtype=torch.int64,
+                device="cpu",
+            ).item()
+        )
+        self._order = self._build_order(epoch_seed)
+        self.epoch += 1
+        self.epoch_seed = epoch_seed
+        self.row_position = 0
+
+    def _build_order(self, epoch_seed: int) -> tuple[int, ...]:
+        order_generator = torch.Generator(device="cpu").manual_seed(epoch_seed)
+        return tuple(
+            torch.randperm(
+                len(self.dataset),
+                generator=order_generator,
+                dtype=torch.int64,
+                device="cpu",
+            )[: self.usable_example_count].tolist()
+        )
+
+
+def _tiny_state_integer(value: object, *, name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise TinyTextLoaderStateError(
+            f"tiny-text loader state {name} must be an integer"
+        )
+    return value
+
+
+def _tiny_rng_state(value: object) -> Tensor:
+    if not isinstance(value, list) or not value:
+        raise TinyTextLoaderStateError(
+            "tiny-text loader rng_state must be a non-empty byte list"
+        )
+    if any(
+        not isinstance(item, int) or isinstance(item, bool) or not 0 <= item <= 255
+        for item in value
+    ):
+        raise TinyTextLoaderStateError(
+            "tiny-text loader rng_state must contain integer bytes"
+        )
+    return torch.tensor(value, dtype=torch.uint8, device="cpu")
+
+
 def _read_tiny_text(config: ProjectConfig) -> str:
     if config.data.profile != "tiny_text":
         raise PretrainingError(
@@ -79,7 +304,7 @@ def _build_batches(
     text: str,
     config: ProjectConfig,
     tokenizer: Tokenizer,
-) -> DataLoader[tuple[torch.Tensor, torch.Tensor]]:
+) -> _TinyTextBatchLoader:
     token_ids = tokenizer.encode(text)
     dataset = NextTokenDataset(
         token_ids,
@@ -92,13 +317,17 @@ def _build_batches(
             f"found {len(dataset)} examples for batch size "
             f"{config.train.device_batch_size}"
         )
-    generator = torch.Generator().manual_seed(config.run.seed)
-    return DataLoader(
+    source_identity = (
+        "sha256:"
+        + hashlib.sha256(
+            text.encode("utf-8") + b"\0" + tokenizer.get_identity().encode("utf-8")
+        ).hexdigest()
+    )
+    return _TinyTextBatchLoader(
         dataset,
         batch_size=config.train.device_batch_size,
-        shuffle=True,
-        drop_last=True,
-        generator=generator,
+        seed=config.run.seed,
+        source_identity=source_identity,
     )
 
 
@@ -333,6 +562,7 @@ def run_pretraining(
     tracker: Tracker,
     resume_from: str | Path | None = None,
     progress: Callable[[str], None] | None = None,
+    allow_non_exact_resume: bool = False,
 ) -> PretrainingResult:
     """Run pretraining and transform only supported PyTorch OOM failures."""
 
@@ -343,6 +573,7 @@ def run_pretraining(
             tracker=tracker,
             resume_from=resume_from,
             progress=progress,
+            allow_non_exact_resume=allow_non_exact_resume,
         )
     except torch.OutOfMemoryError as error:
         memory = _collect_memory_after_oom(config.run.device)
@@ -363,6 +594,7 @@ def _run_pretraining_impl(
     tracker: Tracker,
     resume_from: str | Path | None = None,
     progress: Callable[[str], None] | None = None,
+    allow_non_exact_resume: bool = False,
 ) -> PretrainingResult:
     """Train or resume either supported data profile through one shared loop."""
 
@@ -372,6 +604,12 @@ def _run_pretraining_impl(
         raise TypeError(f"paths must be RunPaths, got {type(paths).__name__}")
     if not isinstance(tracker, Tracker):
         raise TypeError(f"tracker must be a Tracker, got {type(tracker).__name__}")
+    if not isinstance(allow_non_exact_resume, bool):
+        raise TypeError("allow_non_exact_resume must be a boolean")
+    if allow_non_exact_resume and resume_from is None:
+        raise PretrainingError(
+            "allow_non_exact_resume requires an explicit resume checkpoint"
+        )
     if config.data.profile == "tiny_text":
         _validate_tiny_text_config(config)
     elif config.data.profile == "nanochat_climbmix":
@@ -388,14 +626,17 @@ def _run_pretraining_impl(
 
     with ExitStack() as resources:
         prepared_tokenizer: Tokenizer
-        batches: DataLoader[tuple[Tensor, Tensor]] | _PreparedBatchIterator
+        batches: _TinyTextBatchLoader | _PreparedBatchIterator
+        loader: object
         if config.data.profile == "tiny_text":
             prepared_tokenizer = ByteTokenizer()
-            batches = _build_batches(
+            tiny_loader = _build_batches(
                 _read_tiny_text(config),
                 config,
                 prepared_tokenizer,
             )
+            loader = tiny_loader
+            batches = tiny_loader
         else:
             prepared_tokenizer = _load_production_tokenizer(config)
             reader = resources.enter_context(
@@ -404,7 +645,7 @@ def _run_pretraining_impl(
                     tokenizer=prepared_tokenizer,
                 )
             )
-            loader = create_token_loader(
+            production_loader = create_token_loader(
                 reader,
                 strategy=config.data.loader_strategy,
                 split="train",
@@ -413,8 +654,9 @@ def _run_pretraining_impl(
                 seed=config.run.seed,
                 planning_progress=progress,
             )
+            loader = production_loader
             batches = _PreparedBatchIterator(
-                iter(loader),  # type: ignore[arg-type]
+                iter(production_loader),  # type: ignore[arg-type]
                 strategy=config.data.loader_strategy,
             )
 
@@ -424,6 +666,8 @@ def _run_pretraining_impl(
         scheduler: LRScheduler
         if resume_from is None:
             initial_step = 0
+            initial_total_training_time_seconds = 0.0
+            initial_total_training_flops = 0.0
             _validate_existing_outputs(
                 paths,
                 metrics_path,
@@ -435,7 +679,11 @@ def _run_pretraining_impl(
             optimizer = build_optimizer(model, config.train)
             scheduler = build_lr_scheduler(optimizer, config.train)
         else:
-            checkpoint = load_training_checkpoint(resume_from, device=device)
+            checkpoint = load_training_checkpoint(
+                resume_from,
+                device=device,
+                allow_non_exact_resume=allow_non_exact_resume,
+            )
             _validate_resume_config(config, checkpoint.config)
             if checkpoint.tokenizer.get_identity() != prepared_tokenizer.get_identity():
                 raise PretrainingError(
@@ -458,6 +706,21 @@ def _run_pretraining_impl(
                 initial_step=initial_step,
                 is_resume=True,
             )
+            if checkpoint.continuation is None:
+                initial_total_training_time_seconds = 0.0
+                initial_total_training_flops = 0.0
+            else:
+                _restore_exact_continuation(
+                    loader,
+                    checkpoint.continuation,
+                    device=device,
+                )
+                initial_total_training_time_seconds = (
+                    checkpoint.continuation.total_training_time_seconds
+                )
+                initial_total_training_flops = (
+                    checkpoint.continuation.total_training_flops
+                )
 
         checkpoint_path = paths.checkpoints_dir / "last.pt"
 
@@ -467,6 +730,12 @@ def _run_pretraining_impl(
         ) -> None:
             if step % config.train.save_every != 0:
                 return
+            continuation = _capture_exact_continuation(
+                loader,
+                device=device,
+                step=step,
+                result=_result,
+            )
             save_checkpoint(
                 paths.checkpoints_dir / f"step_{step:06d}.pt",
                 model=model,
@@ -475,6 +744,7 @@ def _run_pretraining_impl(
                 config=config,
                 step=step,
                 tokenizer=tokenizer,
+                continuation=continuation,
             )
             save_checkpoint(
                 checkpoint_path,
@@ -484,6 +754,7 @@ def _run_pretraining_impl(
                 config=config,
                 step=step,
                 tokenizer=tokenizer,
+                continuation=continuation,
             )
 
         grad_accum_steps = derive_grad_accum_steps(
@@ -504,6 +775,10 @@ def _run_pretraining_impl(
                 tracker=tracker,
                 log_every=config.train.log_every,
                 on_step=save_periodic_checkpoint,
+                initial_total_training_time_seconds=(
+                    initial_total_training_time_seconds
+                ),
+                initial_total_training_flops=initial_total_training_flops,
             )
         except torch.OutOfMemoryError:
             try:
@@ -512,6 +787,7 @@ def _run_pretraining_impl(
                 pass
             raise
         final_step = scheduler.last_epoch
+        final_result = step_results[-1]
         save_checkpoint(
             checkpoint_path,
             model=model,
@@ -520,6 +796,12 @@ def _run_pretraining_impl(
             config=config,
             step=final_step,
             tokenizer=tokenizer,
+            continuation=_capture_exact_continuation(
+                loader,
+                device=device,
+                step=final_step,
+                result=final_result,
+            ),
         )
         return PretrainingResult(
             paths=paths,
@@ -529,6 +811,75 @@ def _run_pretraining_impl(
             final_step=final_step,
             steps=tuple(step_results),
         )
+
+
+def _capture_exact_continuation(
+    loader: object,
+    *,
+    device: torch.device,
+    step: int,
+    result: OptimizerStepResult,
+) -> ExactTrainingState:
+    state_dict = getattr(loader, "state_dict", None)
+    if not callable(state_dict):
+        raise PretrainingError(
+            f"loader {type(loader).__name__} does not expose exact state"
+        )
+    loader_state = state_dict()
+    if not isinstance(loader_state, dict):
+        raise PretrainingError("loader state_dict must return a dictionary")
+    loader_format = loader_state.get("format")
+    if not isinstance(loader_format, str) or not loader_format:
+        raise PretrainingError("loader state must contain a concrete format")
+    return ExactTrainingState(
+        loader_format=loader_format,
+        loader_state=loader_state,
+        rng_state=capture_training_rng_state(device),
+        tracker_step=step,
+        total_training_time_seconds=result.total_training_time_seconds,
+        total_training_flops=result.total_training_flops,
+    )
+
+
+def _restore_exact_continuation(
+    loader: object,
+    continuation: ExactTrainingState,
+    *,
+    device: torch.device,
+) -> None:
+    state_dict = getattr(loader, "state_dict", None)
+    load_state_dict = getattr(loader, "load_state_dict", None)
+    if not callable(state_dict) or not callable(load_state_dict):
+        raise PretrainingError(
+            f"loader {type(loader).__name__} does not support exact resume"
+        )
+    original_loader_state = state_dict()
+    if not isinstance(original_loader_state, dict):
+        raise PretrainingError("loader state_dict must return a dictionary")
+    if original_loader_state.get("format") != continuation.loader_format:
+        raise PretrainingError(
+            "checkpoint loader format does not match the configured loader: "
+            f"checkpoint={continuation.loader_format!r}, "
+            f"configured={original_loader_state.get('format')!r}"
+        )
+    original_rng_state = capture_training_rng_state(device)
+    try:
+        load_state_dict(continuation.loader_state)
+        restore_training_rng_state(continuation.rng_state, device=device)
+    except Exception as error:
+        rollback_errors: list[str] = []
+        try:
+            load_state_dict(original_loader_state)
+        except Exception as rollback_error:
+            rollback_errors.append(f"loader rollback failed: {rollback_error}")
+        try:
+            restore_training_rng_state(original_rng_state, device=device)
+        except Exception as rollback_error:
+            rollback_errors.append(f"RNG rollback failed: {rollback_error}")
+        suffix = f"; {'; '.join(rollback_errors)}" if rollback_errors else ""
+        raise PretrainingError(
+            f"could not restore exact training continuation: {error}{suffix}"
+        ) from error
 
 
 def _collect_memory_after_oom(device: str) -> AcceleratorMemorySnapshot:
@@ -562,6 +913,7 @@ def run_tiny_pretraining(
     paths: RunPaths,
     tracker: Tracker,
     resume_from: str | Path | None = None,
+    allow_non_exact_resume: bool = False,
 ) -> PretrainingResult:
     """Backward-compatible entry point for the deterministic tiny-text profile."""
 
@@ -572,6 +924,7 @@ def run_tiny_pretraining(
         paths=paths,
         tracker=tracker,
         resume_from=resume_from,
+        allow_non_exact_resume=allow_non_exact_resume,
     )
 
 

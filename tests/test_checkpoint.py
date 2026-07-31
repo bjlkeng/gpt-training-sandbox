@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import random
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 import torch
 from torch.optim import SGD
@@ -14,6 +16,8 @@ from torch.utils.data import DataLoader
 
 from scratch_llm import checkpoint
 from scratch_llm.checkpoint import (
+    CheckpointError,
+    ExactTrainingState,
     load_model_checkpoint,
     load_training_checkpoint,
     save_checkpoint,
@@ -28,6 +32,7 @@ from scratch_llm.config import (
 from scratch_llm.data import NextTokenDataset
 from scratch_llm.model import GPT
 from scratch_llm.optim import build_lr_scheduler, build_optimizer
+from scratch_llm.rng_state import capture_training_rng_state
 from scratch_llm.tokenizer import (
     BYTE_VOCAB_SIZE,
     SPECIAL_TOKENS,
@@ -226,6 +231,142 @@ def test_version_one_byte_checkpoint_remains_readable(tmp_path: Path) -> None:
     assert isinstance(loaded.tokenizer, ByteTokenizer)
 
 
+def test_model_only_load_preserves_python_numpy_and_torch_rng(
+    tmp_path: Path,
+) -> None:
+    config, tokenizer, model, optimizer, scheduler, _ = _checkpoint_state()
+    checkpoint_path = save_checkpoint(
+        tmp_path / "model-only.pt",
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        config=config,
+        step=0,
+        tokenizer=tokenizer,
+    )
+    random.seed(11)
+    np.random.seed(12)
+    torch.manual_seed(13)
+    python_state = random.getstate()
+    numpy_state = np.random.get_state(legacy=True)
+    torch_state = torch.get_rng_state().clone()
+
+    load_model_checkpoint(checkpoint_path, device="cpu")
+
+    assert random.getstate() == python_state
+    restored_numpy = np.random.get_state(legacy=True)
+    assert restored_numpy[0] == numpy_state[0]
+    np.testing.assert_array_equal(restored_numpy[1], numpy_state[1])
+    assert restored_numpy[2:] == numpy_state[2:]
+    torch.testing.assert_close(torch.get_rng_state(), torch_state, rtol=0, atol=0)
+
+
+def test_legacy_training_resume_requires_explicit_non_exact_opt_in(
+    tmp_path: Path,
+) -> None:
+    config, tokenizer, model, optimizer, scheduler, _ = _checkpoint_state()
+    checkpoint_path = save_checkpoint(
+        tmp_path / "legacy-v2.pt",
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        config=config,
+        step=0,
+        tokenizer=tokenizer,
+    )
+
+    with pytest.raises(CheckpointError, match="exact training resume.*version 3"):
+        load_training_checkpoint(checkpoint_path, device="cpu")
+
+    migrated = load_training_checkpoint(
+        checkpoint_path,
+        device="cpu",
+        allow_non_exact_resume=True,
+    )
+    assert migrated.continuation is None
+
+
+def test_malformed_exact_state_fails_before_model_or_rng_mutation(
+    tmp_path: Path,
+) -> None:
+    config, tokenizer, model, optimizer, scheduler, _ = _checkpoint_state()
+    continuation = ExactTrainingState(
+        loader_format="test_loader",
+        loader_state={"format": "test_loader", "position": 0},
+        rng_state=capture_training_rng_state("cpu"),
+        tracker_step=0,
+        total_training_time_seconds=0.0,
+        total_training_flops=0.0,
+    )
+    valid_path = save_checkpoint(
+        tmp_path / "valid-v3.pt",
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        config=config,
+        step=0,
+        tokenizer=tokenizer,
+        continuation=continuation,
+    )
+    payload = torch.load(valid_path, map_location="cpu", weights_only=True)
+    del payload["continuation"]["rng_state"]["torch_cpu_state"]
+    malformed_path = tmp_path / "malformed-v3.pt"
+    torch.save(payload, malformed_path)
+    random.seed(21)
+    np.random.seed(22)
+    torch.manual_seed(23)
+    python_state = random.getstate()
+    numpy_state = np.random.get_state(legacy=True)
+    torch_state = torch.get_rng_state().clone()
+
+    with pytest.raises(CheckpointError, match="invalid exact continuation"):
+        load_training_checkpoint(malformed_path, device="cpu")
+
+    assert random.getstate() == python_state
+    restored_numpy = np.random.get_state(legacy=True)
+    assert restored_numpy[0] == numpy_state[0]
+    np.testing.assert_array_equal(restored_numpy[1], numpy_state[1])
+    assert restored_numpy[2:] == numpy_state[2:]
+    torch.testing.assert_close(torch.get_rng_state(), torch_state, rtol=0, atol=0)
+
+
+def test_cpu_training_load_never_checks_or_initializes_cuda(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, tokenizer, model, optimizer, scheduler, _ = _checkpoint_state()
+    continuation = ExactTrainingState(
+        loader_format="test_loader",
+        loader_state={"format": "test_loader", "position": 0},
+        rng_state=capture_training_rng_state("cpu"),
+        tracker_step=0,
+        total_training_time_seconds=0.0,
+        total_training_flops=0.0,
+    )
+    checkpoint_path = save_checkpoint(
+        tmp_path / "cpu-v3.pt",
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        config=config,
+        step=0,
+        tokenizer=tokenizer,
+        continuation=continuation,
+    )
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AssertionError("CPU checkpoint load touched CUDA")
+
+    monkeypatch.setattr(torch.cuda, "is_available", forbidden)
+    monkeypatch.setattr(torch.cuda, "get_rng_state_all", forbidden)
+    monkeypatch.setattr(torch.cuda, "set_rng_state_all", forbidden)
+
+    loaded = load_training_checkpoint(checkpoint_path, device="cpu")
+
+    assert loaded.continuation == continuation
+
+
 def test_shared_loaders_reconstruct_sampling_and_next_step_training_state(
     tmp_path: Path,
 ) -> None:
@@ -266,7 +407,11 @@ def test_shared_loaders_reconstruct_sampling_and_next_step_training_state(
     with torch.inference_mode():
         torch.testing.assert_close(sampling.model(inputs), expected_logits)
 
-    resumed = load_training_checkpoint(checkpoint_path, device="cpu")
+    resumed = load_training_checkpoint(
+        checkpoint_path,
+        device="cpu",
+        allow_non_exact_resume=True,
+    )
 
     assert resumed.config == config
     assert resumed.step == 2

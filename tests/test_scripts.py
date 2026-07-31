@@ -92,6 +92,22 @@ def test_config_commands_share_explicit_wandb_options(module: str) -> None:
     assert "--wandb-mode {online,offline,disabled}" in result.stdout
 
 
+def test_pretrain_help_and_validation_expose_legacy_resume_migration() -> None:
+    help_result = _run_module("scripts.pretrain", "--help")
+    invalid_result = _run_module(
+        "scripts.pretrain",
+        "--config",
+        str(SMOKE_CONFIG),
+        "--allow-non-exact-resume",
+    )
+
+    assert help_result.returncode == 0, help_result.stderr
+    assert "--allow-non-exact-resume" in help_result.stdout
+    assert invalid_result.returncode != 0
+    assert "--allow-non-exact-resume requires --resume" in invalid_result.stderr
+    assert "Traceback" not in invalid_result.stderr
+
+
 def test_dry_run_applies_wandb_environment_then_cli_without_importing_wandb(
     tmp_path: Path,
 ) -> None:
@@ -338,6 +354,9 @@ def test_readme_documents_the_subprocess_tested_setup_and_smoke_commands() -> No
         "--checkpoint runs/smoke/checkpoints/last.pt" in readme
     )
     assert "--resume runs/smoke/checkpoints/step_000075.pt" in readme
+    assert "--allow-non-exact-resume" in readme
+    assert "checkpoint format version 3" in readme
+    assert "completed optimizer-step boundary" in readme
     assert "metrics/metrics.jsonl" in readme
     assert "metrics/summary.json" in readme
     assert '"schema_version": 1' in readme

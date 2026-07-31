@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import math
 import os
 import tempfile
 from dataclasses import dataclass
@@ -21,6 +23,11 @@ from scratch_llm.optim import (
     build_lr_scheduler,
     build_optimizer,
 )
+from scratch_llm.rng_state import (
+    RNGStateError,
+    TrainingRNGState,
+    preserve_global_rng_state,
+)
 from scratch_llm.tokenizer import (
     BYTE_VOCAB_SIZE,
     NANOCHAT_SPECIAL_TOKENS,
@@ -30,9 +37,12 @@ from scratch_llm.tokenizer import (
 from scratch_llm.utils import get_device
 
 
-CHECKPOINT_FORMAT_VERSION = 2
-_SUPPORTED_CHECKPOINT_FORMAT_VERSIONS = frozenset({1, CHECKPOINT_FORMAT_VERSION})
-_CHECKPOINT_KEYS = frozenset(
+CHECKPOINT_FORMAT_VERSION = 3
+_LEGACY_CHECKPOINT_FORMAT_VERSION = 2
+_SUPPORTED_CHECKPOINT_FORMAT_VERSIONS = frozenset(
+    {1, _LEGACY_CHECKPOINT_FORMAT_VERSION, CHECKPOINT_FORMAT_VERSION}
+)
+_BASE_CHECKPOINT_KEYS = frozenset(
     {
         "format_version",
         "model",
@@ -41,6 +51,17 @@ _CHECKPOINT_KEYS = frozenset(
         "config",
         "step",
         "tokenizer",
+    }
+)
+_EXACT_CHECKPOINT_KEYS = _BASE_CHECKPOINT_KEYS | {"continuation"}
+_CONTINUATION_KEYS = frozenset(
+    {
+        "loader_format",
+        "loader_state",
+        "rng_state",
+        "total_training_flops",
+        "total_training_time_seconds",
+        "tracker_step",
     }
 )
 
@@ -65,6 +86,124 @@ class TrainingCheckpoint(ModelCheckpoint):
 
     optimizer: Optimizer
     scheduler: LRScheduler
+    continuation: ExactTrainingState | None
+
+
+@dataclass(frozen=True)
+class ExactTrainingState:
+    """State installed only after all resume-time objects are reconstructed."""
+
+    loader_format: str
+    loader_state: dict[str, object]
+    rng_state: TrainingRNGState
+    tracker_step: int
+    total_training_time_seconds: float
+    total_training_flops: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.loader_format, str) or not self.loader_format.strip():
+            raise ValueError("loader_format must be a non-empty string")
+        canonical_loader_state = _canonical_json_object(
+            self.loader_state,
+            label="loader_state",
+        )
+        if canonical_loader_state.get("format") != self.loader_format:
+            raise ValueError(
+                "loader_state format must match continuation loader_format"
+            )
+        if not isinstance(self.rng_state, TrainingRNGState):
+            raise TypeError(
+                "rng_state must be a TrainingRNGState, got "
+                f"{type(self.rng_state).__name__}"
+            )
+        if (
+            not isinstance(self.tracker_step, int)
+            or isinstance(self.tracker_step, bool)
+            or self.tracker_step < 0
+        ):
+            raise ValueError("tracker_step must be a non-negative integer")
+        _require_non_negative_finite(
+            self.total_training_time_seconds,
+            label="total_training_time_seconds",
+        )
+        _require_non_negative_finite(
+            self.total_training_flops,
+            label="total_training_flops",
+        )
+        object.__setattr__(self, "loader_state", canonical_loader_state)
+        object.__setattr__(
+            self,
+            "total_training_time_seconds",
+            float(self.total_training_time_seconds),
+        )
+        object.__setattr__(
+            self,
+            "total_training_flops",
+            float(self.total_training_flops),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        """Return the serialized format-v3 continuation payload."""
+
+        return {
+            "loader_format": self.loader_format,
+            "loader_state": _canonical_json_object(
+                self.loader_state,
+                label="loader_state",
+            ),
+            "rng_state": self.rng_state.to_dict(),
+            "total_training_flops": self.total_training_flops,
+            "total_training_time_seconds": self.total_training_time_seconds,
+            "tracker_step": self.tracker_step,
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> ExactTrainingState:
+        """Validate a serialized continuation without mutating runtime state."""
+
+        if not isinstance(value, dict) or not all(
+            isinstance(key, str) for key in value
+        ):
+            raise CheckpointError(
+                "checkpoint continuation must be an object with string keys"
+            )
+        if set(value) != _CONTINUATION_KEYS:
+            missing = sorted(_CONTINUATION_KEYS - set(value))
+            unexpected = sorted(set(value) - _CONTINUATION_KEYS)
+            raise CheckpointError(
+                "checkpoint continuation fields do not match format version 3; "
+                f"missing={missing}, unexpected={unexpected}"
+            )
+        try:
+            loader_format = value["loader_format"]
+            if not isinstance(loader_format, str):
+                raise TypeError("loader_format must be a string")
+            tracker_step = value["tracker_step"]
+            if not isinstance(tracker_step, int) or isinstance(tracker_step, bool):
+                raise TypeError("tracker_step must be an integer")
+            return cls(
+                loader_format=loader_format,
+                loader_state=_canonical_json_object(
+                    value["loader_state"],
+                    label="loader_state",
+                ),
+                rng_state=TrainingRNGState.from_dict(value["rng_state"]),
+                tracker_step=tracker_step,
+                total_training_time_seconds=_require_real(
+                    value["total_training_time_seconds"],
+                    label="total_training_time_seconds",
+                ),
+                total_training_flops=_require_real(
+                    value["total_training_flops"],
+                    label="total_training_flops",
+                ),
+            )
+        except CheckpointError:
+            raise
+        except (RNGStateError, TypeError, ValueError) as error:
+            raise CheckpointError(
+                f"checkpoint contains invalid exact continuation state: {error}"
+            ) from error
 
 
 @dataclass(frozen=True)
@@ -74,6 +213,7 @@ class _DecodedCheckpoint:
     tokenizer: Tokenizer
     step: int
     device: torch.device
+    continuation: ExactTrainingState | None
 
 
 def _validate_save_state(
@@ -246,8 +386,9 @@ def save_checkpoint(
     config: ProjectConfig,
     step: int,
     tokenizer: Tokenizer,
+    continuation: ExactTrainingState | None = None,
 ) -> Path:
-    """Atomically save all state needed for sampling and basic training resume."""
+    """Atomically save legacy state or an exact format-v3 continuation."""
 
     _validate_save_state(
         model=model,
@@ -257,8 +398,23 @@ def save_checkpoint(
         step=step,
         tokenizer=tokenizer,
     )
-    payload = {
-        "format_version": CHECKPOINT_FORMAT_VERSION,
+    if continuation is not None and not isinstance(continuation, ExactTrainingState):
+        raise TypeError(
+            "continuation must be an ExactTrainingState or None, got "
+            f"{type(continuation).__name__}"
+        )
+    if continuation is not None and continuation.tracker_step != step:
+        raise ValueError(
+            f"continuation tracker_step {continuation.tracker_step} "
+            f"does not match checkpoint step {step}"
+        )
+    format_version = (
+        CHECKPOINT_FORMAT_VERSION
+        if continuation is not None
+        else _LEGACY_CHECKPOINT_FORMAT_VERSION
+    )
+    payload: dict[str, object] = {
+        "format_version": format_version,
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict(),
         "scheduler": scheduler.state_dict(),
@@ -266,6 +422,8 @@ def save_checkpoint(
         "step": step,
         "tokenizer": _tokenizer_metadata(config, tokenizer),
     }
+    if continuation is not None:
+        payload["continuation"] = continuation.to_dict()
     return _atomic_torch_save(payload, Path(path))
 
 
@@ -438,14 +596,7 @@ def _load_checkpoint(
         ) from error
     if not isinstance(payload, dict):
         raise CheckpointError("checkpoint payload must be a dictionary")
-    if set(payload) != _CHECKPOINT_KEYS:
-        missing = sorted(_CHECKPOINT_KEYS - set(payload))
-        unexpected = sorted(set(payload) - _CHECKPOINT_KEYS)
-        raise CheckpointError(
-            "checkpoint fields do not match the supported schema; "
-            f"missing={missing}, unexpected={unexpected}"
-        )
-    format_version = payload["format_version"]
+    format_version = payload.get("format_version")
     if (
         not isinstance(format_version, int)
         or isinstance(format_version, bool)
@@ -455,6 +606,18 @@ def _load_checkpoint(
             "unsupported checkpoint format version "
             f"{format_version!r}; expected one of "
             f"{sorted(_SUPPORTED_CHECKPOINT_FORMAT_VERSIONS)}"
+        )
+    expected_keys = (
+        _EXACT_CHECKPOINT_KEYS
+        if format_version == CHECKPOINT_FORMAT_VERSION
+        else _BASE_CHECKPOINT_KEYS
+    )
+    if set(payload) != expected_keys:
+        missing = sorted(expected_keys - set(payload))
+        unexpected = sorted(set(payload) - expected_keys)
+        raise CheckpointError(
+            "checkpoint fields do not match format version "
+            f"{format_version}; missing={missing}, unexpected={unexpected}"
         )
 
     step = payload["step"]
@@ -473,12 +636,22 @@ def _load_checkpoint(
         config,
         format_version=format_version,
     )
+    continuation = (
+        ExactTrainingState.from_dict(payload["continuation"])
+        if format_version == CHECKPOINT_FORMAT_VERSION
+        else None
+    )
+    if continuation is not None and continuation.tracker_step != step:
+        raise CheckpointError(
+            "checkpoint continuation tracker_step does not match checkpoint step"
+        )
     return _DecodedCheckpoint(
         payload=payload,
         config=config,
         tokenizer=tokenizer,
         step=step,
         device=resolved_device,
+        continuation=continuation,
     )
 
 
@@ -498,52 +671,100 @@ def load_model_checkpoint(
 ) -> ModelCheckpoint:
     """Reconstruct an evaluation-mode GPT and its tokenizer for sampling."""
 
-    checkpoint = _load_checkpoint(path, device=device)
-    model = _restore_model(checkpoint)
-    model.eval()
-    return ModelCheckpoint(
-        model=model,
-        tokenizer=checkpoint.tokenizer,
-        config=checkpoint.config,
-        step=checkpoint.step,
-    )
+    with preserve_global_rng_state(device):
+        checkpoint = _load_checkpoint(path, device=device)
+        model = _restore_model(checkpoint)
+        model.eval()
+        return ModelCheckpoint(
+            model=model,
+            tokenizer=checkpoint.tokenizer,
+            config=checkpoint.config,
+            step=checkpoint.step,
+        )
 
 
 def load_training_checkpoint(
     path: str | os.PathLike[str],
     *,
     device: str | torch.device = "cpu",
+    allow_non_exact_resume: bool = False,
 ) -> TrainingCheckpoint:
     """Reconstruct train-mode model, optimizer, and scheduler state for resume."""
 
+    if not isinstance(allow_non_exact_resume, bool):
+        raise TypeError("allow_non_exact_resume must be a boolean")
     checkpoint = _load_checkpoint(path, device=device)
-    model = _restore_model(checkpoint)
-    optimizer = build_optimizer(model, checkpoint.config.train)
-    scheduler = build_lr_scheduler(optimizer, checkpoint.config.train)
-    try:
-        optimizer.load_state_dict(checkpoint.payload["optimizer"])
-        scheduler.load_state_dict(checkpoint.payload["scheduler"])
-    except Exception as error:
-        raise CheckpointError(f"could not restore training state: {error}") from error
-    if scheduler.last_epoch != checkpoint.step:
+    if checkpoint.continuation is None and not allow_non_exact_resume:
         raise CheckpointError(
-            f"checkpoint step {checkpoint.step} does not match restored "
-            f"scheduler step {scheduler.last_epoch}"
+            "exact training resume requires checkpoint format version 3; "
+            "legacy format versions remain valid for model-only loading, or "
+            "choose the documented --allow-non-exact-resume migration"
         )
-    model.train()
-    return TrainingCheckpoint(
-        model=model,
-        tokenizer=checkpoint.tokenizer,
-        config=checkpoint.config,
-        step=checkpoint.step,
-        optimizer=optimizer,
-        scheduler=scheduler,
-    )
+    with preserve_global_rng_state(device):
+        model = _restore_model(checkpoint)
+        optimizer = build_optimizer(model, checkpoint.config.train)
+        scheduler = build_lr_scheduler(optimizer, checkpoint.config.train)
+        try:
+            optimizer.load_state_dict(checkpoint.payload["optimizer"])
+            scheduler.load_state_dict(checkpoint.payload["scheduler"])
+        except Exception as error:
+            raise CheckpointError(
+                f"could not restore training state: {error}"
+            ) from error
+        if scheduler.last_epoch != checkpoint.step:
+            raise CheckpointError(
+                f"checkpoint step {checkpoint.step} does not match restored "
+                f"scheduler step {scheduler.last_epoch}"
+            )
+        model.train()
+        return TrainingCheckpoint(
+            model=model,
+            tokenizer=checkpoint.tokenizer,
+            config=checkpoint.config,
+            step=checkpoint.step,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            continuation=checkpoint.continuation,
+        )
+
+
+def _canonical_json_object(value: object, *, label: str) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise TypeError(f"{label} must be a dictionary")
+    try:
+        encoded = json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        decoded = json.loads(encoded)
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            f"{label} must contain only finite JSON values: {error}"
+        ) from error
+    if not isinstance(decoded, dict):
+        raise TypeError(f"{label} must encode a JSON object")
+    return decoded
+
+
+def _require_real(value: object, *, label: str) -> float:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise TypeError(f"{label} must be a number")
+    return float(value)
+
+
+def _require_non_negative_finite(value: object, *, label: str) -> None:
+    numeric = _require_real(value, label=label)
+    if not math.isfinite(numeric) or numeric < 0:
+        raise ValueError(f"{label} must be finite and non-negative")
 
 
 __all__ = [
     "CHECKPOINT_FORMAT_VERSION",
     "CheckpointError",
+    "ExactTrainingState",
     "ModelCheckpoint",
     "TrainingCheckpoint",
     "load_model_checkpoint",

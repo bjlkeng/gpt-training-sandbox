@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Sized
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import math
 from time import perf_counter
 
 import torch
@@ -61,6 +62,9 @@ class OptimizerStepResult:
 
     loss: float
     grad_norm: float
+    step_duration_seconds: float = 0.0
+    total_training_time_seconds: float = 0.0
+    total_training_flops: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -229,6 +233,8 @@ def run_training_steps(
     tracker: Tracker | None = None,
     log_every: int = 1,
     on_step: Callable[[int, OptimizerStepResult], None] | None = None,
+    initial_total_training_time_seconds: float = 0.0,
+    initial_total_training_flops: float = 0.0,
 ) -> list[OptimizerStepResult]:
     """Train to ``max_steps`` and call ``on_step`` after each completed step."""
 
@@ -257,6 +263,14 @@ def run_training_steps(
         raise TypeError(
             f"on_step must be callable or None, got {type(on_step).__name__}"
         )
+    total_training_time_seconds = _non_negative_finite_counter(
+        initial_total_training_time_seconds,
+        name="initial_total_training_time_seconds",
+    )
+    total_training_flops = _non_negative_finite_counter(
+        initial_total_training_flops,
+        name="initial_total_training_flops",
+    )
     resolved_device = get_device(device)
     batches_per_epoch = len(batches) if isinstance(batches, Sized) else None
     if batches_per_epoch is not None and batches_per_epoch <= 0:
@@ -295,6 +309,13 @@ def run_training_steps(
         )
         scheduler.step()
         step_duration = perf_counter() - step_started_at
+        total_training_time_seconds += step_duration
+        result = replace(
+            result,
+            step_duration_seconds=step_duration,
+            total_training_time_seconds=total_training_time_seconds,
+            total_training_flops=total_training_flops,
+        )
         results.append(result)
         if step % log_every == 0:
             metrics = {
@@ -302,6 +323,8 @@ def run_training_steps(
                 "train/lrm": learning_rate_multiplier,
                 "train/dt": step_duration,
                 "train/grad_norm": result.grad_norm,
+                "train/total_training_flops": result.total_training_flops,
+                "train/total_training_time": result.total_training_time_seconds,
             }
             if batches_per_epoch is not None:
                 metrics["train/epoch"] = step * grad_accum_steps / batches_per_epoch
@@ -310,6 +333,15 @@ def run_training_steps(
             on_step(step, result)
 
     return results
+
+
+def _non_negative_finite_counter(value: object, *, name: str) -> float:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise TypeError(f"{name} must be a number")
+    numeric = float(value)
+    if not math.isfinite(numeric) or numeric < 0:
+        raise ValueError(f"{name} must be finite and non-negative")
+    return numeric
 
 
 def train_tiny_text(
