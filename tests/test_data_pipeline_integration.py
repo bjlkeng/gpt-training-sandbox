@@ -16,13 +16,13 @@ import numpy as np
 import pytest
 import torch
 
-from scratch_llm.climbmix import (
+from scratch_llm.data.climbmix import (
     ClimbMixDownloadError,
     download_climbmix_target,
     download_climbmix_targets,
     plan_climbmix_downloads,
 )
-from scratch_llm.data import (
+from scratch_llm.data.loaders import (
     DocumentPackingTokenLoader,
     RandomOffsetTokenLoader,
     TokenizedDataError,
@@ -32,8 +32,8 @@ from scratch_llm.data import (
     select_parquet_files,
     write_tokenized_parquet_shards,
 )
-from scratch_llm.data_stats import compute_raw_data_statistics
-from scratch_llm.tokenizer import ByteTokenizer
+from scratch_llm.data.statistics import compute_raw_data_statistics
+from scratch_llm.tokenization.tokenizer import ByteTokenizer
 from scratch_llm.utils import save_json
 
 

@@ -8,10 +8,10 @@ from typing import get_type_hints
 
 import pytest
 
-import scratch_llm.checkpoint as checkpoint
-import scratch_llm.pretraining as pretraining
+import scratch_llm.training.checkpoint as checkpoint
+import scratch_llm.training.pretraining as pretraining
 from scratch_llm.config import DEFAULT_SPECIAL_TOKENS
-from scratch_llm.tokenizer import (
+from scratch_llm.tokenization.tokenizer import (
     BYTE_VOCAB_SIZE,
     NANOCHAT_SPECIAL_TOKENS,
     SPECIAL_TOKENS,
@@ -20,7 +20,7 @@ from scratch_llm.tokenizer import (
     Tokenizer,
     UnsupportedTokenizerOperationError,
 )
-from scratch_llm.training import TinyTextTrainingResult
+from scratch_llm.training.loop import TinyTextTrainingResult
 
 
 EXPECTED_SPECIAL_TOKENS = (

@@ -49,7 +49,7 @@ from scratch_llm.evaluation.nanochat_bpb import (
     NANOCHAT_COMPAT_PROTOCOL_VERSION,
     NANOCHAT_REFERENCE_COMMIT,
 )
-from scratch_llm.tokenizer import VOCAB_SIZE, ByteTokenizer
+from scratch_llm.tokenization.tokenizer import VOCAB_SIZE, ByteTokenizer
 from scratch_llm.tracking import Tracker
 
 

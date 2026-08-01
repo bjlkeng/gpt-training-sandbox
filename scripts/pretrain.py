@@ -7,12 +7,12 @@ from collections.abc import Sequence
 from pathlib import Path
 import sys
 
-from scratch_llm.checkpoint import (
+from scratch_llm.training.checkpoint import (
     CheckpointError,
     load_checkpoint_metadata,
 )
-from scratch_llm.pretraining import PretrainingError, run_pretraining
-from scratch_llm.resource_estimation import (
+from scratch_llm.training.pretraining import PretrainingError, run_pretraining
+from scratch_llm.diagnostics.resource_estimation import (
     estimate_training_resources,
     render_training_resource_estimate,
 )

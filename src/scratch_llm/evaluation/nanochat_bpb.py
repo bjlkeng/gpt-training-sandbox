@@ -24,15 +24,15 @@ from scratch_llm.evaluation.bpb import (
     BaseValidationResult,
     evaluate_bpb_batches,
 )
-from scratch_llm.climbmix import CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX
-from scratch_llm.data import list_parquet_files, select_parquet_files
-from scratch_llm.tokenized_data import (
+from scratch_llm.data.climbmix import CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX
+from scratch_llm.data.loaders import list_parquet_files, select_parquet_files
+from scratch_llm.data.tokenized import (
     TokenizedDataError,
     TokenizedDocumentSpan,
     TokenizedShardReader,
     tokenized_manifest_identity,
 )
-from scratch_llm.tokenizer import Tokenizer
+from scratch_llm.tokenization.tokenizer import Tokenizer
 
 
 NANOCHAT_COMPAT_PROTOCOL_ID: Final = "nanochat_compat_v1"

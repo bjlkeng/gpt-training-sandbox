@@ -10,19 +10,19 @@ import tracemalloc
 from typing import Any, Final
 
 from scratch_llm._validation import require_positive_integer
-from scratch_llm.bpe import (
+from scratch_llm.tokenization.bpe import (
     ReferenceBPETrainingResult,
     RegexBPETokenizer,
     train_bpe,
 )
 from scratch_llm.config import ProjectConfig
-from scratch_llm.data import (
+from scratch_llm.data.loaders import (
     list_parquet_files,
     parquets_iter_batched,
     select_parquet_files,
 )
 from scratch_llm.run import RunPaths
-from scratch_llm.tokenizer_artifacts import TOKENIZER_ARTIFACT_FILENAMES
+from scratch_llm.tokenization.artifacts import TOKENIZER_ARTIFACT_FILENAMES
 from scratch_llm.utils import save_json
 
 

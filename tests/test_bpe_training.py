@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from scratch_llm.bpe import (
+from scratch_llm.tokenization.bpe import (
     PAIR_TIE_BREAK,
     BPETrainingError,
     apply_merge,
@@ -17,8 +17,8 @@ from scratch_llm.bpe import (
     select_best_pair,
     train_reference_bpe,
 )
-from scratch_llm.regex_chunking import iter_bpe_training_chunks
-from scratch_llm.tokenizer import BYTE_VOCAB_SIZE, NANOCHAT_SPECIAL_TOKENS
+from scratch_llm.tokenization.regex_chunking import iter_bpe_training_chunks
+from scratch_llm.tokenization.tokenizer import BYTE_VOCAB_SIZE, NANOCHAT_SPECIAL_TOKENS
 
 
 def test_pair_counts_are_chunk_local() -> None:

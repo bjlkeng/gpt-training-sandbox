@@ -10,7 +10,7 @@ import sys
 import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
-from scratch_llm.checkpoint import save_checkpoint
+from scratch_llm.training.checkpoint import save_checkpoint
 from scratch_llm.config import (
     DataConfig,
     GPTConfig,
@@ -21,11 +21,11 @@ from scratch_llm.config import (
     TrainConfig,
     dump_config,
 )
-from scratch_llm.data import write_tokenized_parquet_shards
+from scratch_llm.data.loaders import write_tokenized_parquet_shards
 from scratch_llm.model import GPT
-from scratch_llm.optim import build_lr_scheduler, build_optimizer
+from scratch_llm.training.optim import build_lr_scheduler, build_optimizer
 from scratch_llm.run import prepare_run
-from scratch_llm.tokenizer import VOCAB_SIZE, ByteTokenizer
+from scratch_llm.tokenization.tokenizer import VOCAB_SIZE, ByteTokenizer
 from scratch_llm.tracking import build_tracker
 
 

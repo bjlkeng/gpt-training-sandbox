@@ -16,33 +16,33 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
 from scratch_llm._validation import require_positive_integer
-from scratch_llm.accelerator_memory import (
+from scratch_llm.diagnostics.accelerator_memory import (
     AcceleratorMemorySnapshot,
     collect_accelerator_memory,
     reset_accelerator_memory_peak,
 )
 from scratch_llm.config import ProjectConfig
-from scratch_llm.data import create_token_loader
+from scratch_llm.data.loaders import create_token_loader
 from scratch_llm.model import GPT
-from scratch_llm.oom_diagnostics import PretrainingOOMError, diagnose_out_of_memory
-from scratch_llm.optim import build_lr_scheduler, build_optimizer
-from scratch_llm.pretraining import (
+from scratch_llm.diagnostics.oom import PretrainingOOMError, diagnose_out_of_memory
+from scratch_llm.training.optim import build_lr_scheduler, build_optimizer
+from scratch_llm.training.pretraining import (
     PreparedPretrainingBatchIterator,
     load_production_tokenizer,
     validate_production_pretraining_config,
 )
-from scratch_llm.throughput_benchmark import BenchmarkExecution
-from scratch_llm.tokenized_data import (
+from scratch_llm.diagnostics.throughput import BenchmarkExecution
+from scratch_llm.data.tokenized import (
     TokenizedShardReader,
     tokenized_manifest_identity,
 )
 from scratch_llm.tracking import NullTracker
-from scratch_llm.training import (
+from scratch_llm.training.loop import (
     OptimizerStepResult,
     derive_grad_accum_steps,
     run_training_steps,
 )
-from scratch_llm.training_telemetry import peak_flops_basis_from_config
+from scratch_llm.training.telemetry import peak_flops_basis_from_config
 from scratch_llm.utils import get_device, set_seed
 
 

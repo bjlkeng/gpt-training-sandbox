@@ -15,7 +15,7 @@ from torch import nn
 
 import scratch_llm.evaluation.nanochat_bpb as nanochat_bpb
 from scratch_llm.evaluation.bpb import BPBAccumulation, BaseValidationResult
-from scratch_llm.data import write_tokenized_parquet_shards
+from scratch_llm.data.loaders import write_tokenized_parquet_shards
 from scratch_llm.evaluation.nanochat_bpb import (
     NANOCHAT_COMPAT_EVAL_METRIC,
     NANOCHAT_COMPAT_PROTOCOL_ID,
@@ -28,13 +28,13 @@ from scratch_llm.evaluation.nanochat_bpb import (
     evaluate_nanochat_compatible_bpb,
     nanochat_compatible_metric_value,
 )
-from scratch_llm.tokenized_data import (
+from scratch_llm.data.tokenized import (
     TokenizedDataError,
     TokenizedShardReader,
     tokenized_manifest_identity,
 )
-from scratch_llm.tokenizer import ByteTokenizer
-from scratch_llm.tokenizer_artifacts import build_token_byte_lengths
+from scratch_llm.tokenization.tokenizer import ByteTokenizer
+from scratch_llm.tokenization.artifacts import build_token_byte_lengths
 from tests.fixtures.bpb_conformance import BPB_CONFORMANCE_FIXTURE
 from tests.fixtures.nanochat_compat_v1 import (
     BOS_TOKEN_ID,

@@ -12,9 +12,9 @@ from typing import Any
 
 import pytest
 
-from scratch_llm.bpe import RegexBPETokenizer, train_reference_bpe
+from scratch_llm.tokenization.bpe import RegexBPETokenizer, train_reference_bpe
 from scratch_llm.config import GPTConfig, ProjectConfig, RunConfig, TokenizerConfig
-from scratch_llm.tokenizer import ByteTokenizer
+from scratch_llm.tokenization.tokenizer import ByteTokenizer
 import scratch_llm.evaluation.tokenizer as tokenizer_evaluation
 from scratch_llm.evaluation.tokenizer import (
     collect_evaluation_corpora,

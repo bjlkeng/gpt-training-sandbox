@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 import torch
 
-from scratch_llm.data import (
+from scratch_llm.data.loaders import (
     DOCUMENT_PACKING_LOADER_STATE_FORMAT_VERSION,
     DocumentPackingTokenLoader,
     DocumentPackingTokenLoaderStateError,
@@ -26,7 +26,7 @@ from scratch_llm.data import (
     create_token_loader,
     write_tokenized_shards,
 )
-from scratch_llm.tokenizer import ByteTokenizer
+from scratch_llm.tokenization.tokenizer import ByteTokenizer
 from scratch_llm.utils import save_json
 
 
@@ -250,7 +250,7 @@ def test_loader_logs_planning_start_and_completion(
     progress_messages: list[str] = []
 
     with (
-        caplog.at_level("INFO", logger="scratch_llm.data"),
+        caplog.at_level("INFO", logger="scratch_llm.data.loaders"),
         TokenizedShardReader(dataset_dir, tokenizer=tokenizer) as reader,
     ):
         DocumentPackingTokenLoader(

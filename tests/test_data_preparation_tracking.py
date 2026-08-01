@@ -16,12 +16,12 @@ from scratch_llm.config import (
     TrackingConfig,
     WandbConfig,
 )
-from scratch_llm.data_preparation import (
+from scratch_llm.data.preparation import (
     DataPreparationError,
     prepare_tracked_tokenized_parquet_shards,
 )
 from scratch_llm.run import prepare_run
-from scratch_llm.tokenizer import ByteTokenizer
+from scratch_llm.tokenization.tokenizer import ByteTokenizer
 from scratch_llm.tracking import Tracker, build_tracker
 from scratch_llm.utils import save_json
 
@@ -167,7 +167,7 @@ def test_local_run_tracker_retries_without_duplicate_or_contradictory_records(
         raise AssertionError("completed tokenized data was rewritten")
 
     monkeypatch.setattr(
-        "scratch_llm.data_preparation.write_tokenized_parquet_shards",
+        "scratch_llm.data.preparation.write_tokenized_parquet_shards",
         fail_rewrite,
     )
     resumed_tracker = build_tracker(config, paths, stage="data_preparation")
@@ -364,7 +364,7 @@ def test_failed_shard_write_logs_nothing_and_leaves_no_artifact_reports(
         raise OSError("shard write interrupted")
 
     monkeypatch.setattr(
-        "scratch_llm.data_preparation.write_tokenized_parquet_shards",
+        "scratch_llm.data.preparation.write_tokenized_parquet_shards",
         fail_write,
     )
 
@@ -407,7 +407,7 @@ def test_interrupted_artifact_write_reuses_durable_shards_on_retry(
         return real_save_json(value, path)
 
     monkeypatch.setattr(
-        "scratch_llm.data_preparation.save_json",
+        "scratch_llm.data.preparation.save_json",
         fail_manifest_artifact,
     )
     tokenized_dir = tmp_path / "tokenized"
@@ -433,7 +433,7 @@ def test_interrupted_artifact_write_reuses_durable_shards_on_retry(
     assert tracker.artifacts == []
 
     monkeypatch.setattr(
-        "scratch_llm.data_preparation.save_json",
+        "scratch_llm.data.preparation.save_json",
         real_save_json,
     )
     result = prepare_tracked_tokenized_parquet_shards(

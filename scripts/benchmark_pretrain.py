@@ -7,25 +7,25 @@ from collections.abc import Sequence
 from pathlib import Path
 import sys
 
-from scratch_llm.accelerator_memory import AcceleratorMemoryError
-from scratch_llm.pretraining import (
+from scratch_llm.diagnostics.accelerator_memory import AcceleratorMemoryError
+from scratch_llm.training.pretraining import (
     PretrainingError,
     validate_production_pretraining_config,
 )
-from scratch_llm.resource_estimation import (
+from scratch_llm.diagnostics.resource_estimation import (
     estimate_training_resources,
     render_training_resource_estimate,
 )
-from scratch_llm.throughput_benchmark import (
+from scratch_llm.diagnostics.throughput import (
     THROUGHPUT_BENCHMARK_PROTOCOL_ID,
     ThroughputBenchmarkConflictError,
     build_throughput_benchmark,
     report_throughput_benchmark,
 )
-from scratch_llm.throughput_benchmark_runtime import (
+from scratch_llm.diagnostics.throughput_runtime import (
     execute_production_throughput_benchmark,
 )
-from scratch_llm.tokenized_data import TokenizedDataError
+from scratch_llm.data.tokenized import TokenizedDataError
 from scripts._common import (
     config_parser,
     prepare_tracked_run,

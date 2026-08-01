@@ -7,7 +7,7 @@ import math
 
 import pytest
 
-from scratch_llm.best_checkpoint import (
+from scratch_llm.training.best_checkpoint import (
     BEST_CHECKPOINT_RANKING_PROTOCOL_ID,
     BestCheckpointError,
     PeriodicValidationResult,

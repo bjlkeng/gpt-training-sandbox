@@ -5,12 +5,12 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 
-from scratch_llm.data_preparation import (
+from scratch_llm.data.preparation import (
     DataPreparationError,
     prepare_tracked_tokenized_parquet_shards,
 )
-from scratch_llm.pretraining import PretrainingError, load_production_tokenizer
-from scratch_llm.tokenized_data import TokenizedDataError
+from scratch_llm.training.pretraining import PretrainingError, load_production_tokenizer
+from scratch_llm.data.tokenized import TokenizedDataError
 from scripts._common import (
     config_parser,
     prepare_tracked_run,

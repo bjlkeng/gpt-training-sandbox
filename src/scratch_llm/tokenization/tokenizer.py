@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import Final, Mapping
 
 from scratch_llm._validation import require_integer
-from scratch_llm.regex_chunking import (
+from scratch_llm.tokenization.regex_chunking import (
     SPLIT_PATTERN,
     RegexChunkingDependencyError,
     bpe_encoding_chunks,

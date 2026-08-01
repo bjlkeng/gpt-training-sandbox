@@ -17,13 +17,13 @@ from scratch_llm._validation import (
     require_positive_integer,
 )
 from scratch_llm.evaluation.bpb import BaseValidationResult, evaluate_bpb_batches
-from scratch_llm.tokenized_data import (
+from scratch_llm.data.tokenized import (
     TokenizedDataError,
     TokenizedDocumentSpan,
     TokenizedShardReader,
     tokenized_manifest_identity,
 )
-from scratch_llm.tokenizer import Tokenizer
+from scratch_llm.tokenization.tokenizer import Tokenizer
 
 
 FULL_DOCUMENT_PROTOCOL_ID: Final = "full_documents_v1"

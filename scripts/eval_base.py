@@ -13,11 +13,11 @@ from scratch_llm.evaluation.base import (
 )
 from scratch_llm.evaluation.base_pipeline import evaluate_checkpoint_base_model
 from scratch_llm.evaluation.base_tracking import BaseEvaluationReportConflictError
-from scratch_llm.checkpoint import CheckpointError, load_checkpoint_metadata
+from scratch_llm.training.checkpoint import CheckpointError, load_checkpoint_metadata
 from scratch_llm.config import ProjectConfig
 from scratch_llm.evaluation.core.results import CoreEvaluationError, CoreTaskResult
 from scratch_llm.run import RunConflictError
-from scratch_llm.tokenized_data import TokenizedDataError
+from scratch_llm.data.tokenized import TokenizedDataError
 from scratch_llm.tracking_state import (
     TrackingState,
     resolve_wandb_resume_state,

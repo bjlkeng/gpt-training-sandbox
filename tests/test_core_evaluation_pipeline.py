@@ -22,7 +22,7 @@ from scratch_llm.evaluation.core.reporting import (
     render_core_comparison_markdown,
     write_core_comparison_markdown,
 )
-from scratch_llm.tokenizer import ByteTokenizer
+from scratch_llm.tokenization.tokenizer import ByteTokenizer
 
 
 class _OracleNextTokenModel(nn.Module):

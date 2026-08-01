@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 from typing import Any, Final
 
-from scratch_llm._run_comparison_model import (
+from scratch_llm.comparison.model import (
     STEP_METRICS,
     RunComparisonError,
     RunSnapshot,

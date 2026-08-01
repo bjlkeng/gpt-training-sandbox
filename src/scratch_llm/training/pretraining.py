@@ -16,12 +16,12 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
 from scratch_llm._validation import require_integer, require_positive_integer
-from scratch_llm.accelerator_memory import (
+from scratch_llm.diagnostics.accelerator_memory import (
     AcceleratorMemorySnapshot,
     collect_accelerator_memory,
 )
 from scratch_llm.evaluation.base_tracking import track_periodic_base_validation
-from scratch_llm.best_checkpoint import (
+from scratch_llm.training.best_checkpoint import (
     BEST_CHECKPOINT_RANKING_PROTOCOL_ID,
     BestCheckpointError,
     PeriodicValidationResult,
@@ -29,15 +29,15 @@ from scratch_llm.best_checkpoint import (
     advance_validation_state,
     base_validation_identity,
 )
-from scratch_llm.bpe import RegexBPETokenizer
-from scratch_llm.checkpoint import (
+from scratch_llm.tokenization.bpe import RegexBPETokenizer
+from scratch_llm.training.checkpoint import (
     ExactTrainingState,
     load_model_checkpoint,
     load_training_checkpoint,
     save_checkpoint,
 )
 from scratch_llm.config import ProjectConfig
-from scratch_llm.data import NextTokenDataset, create_token_loader
+from scratch_llm.data.loaders import NextTokenDataset, create_token_loader
 from scratch_llm.evaluation.full_document_bpb import (
     FullDocumentProtocolConfig,
     evaluate_full_document_bpb,
@@ -47,29 +47,33 @@ from scratch_llm.evaluation.nanochat_bpb import (
     NanochatCompatibilityConfig,
     evaluate_nanochat_compatible_bpb,
 )
-from scratch_llm.oom_diagnostics import (
+from scratch_llm.diagnostics.oom import (
     PretrainingOOMError,
     diagnose_out_of_memory,
 )
-from scratch_llm.optim import build_lr_scheduler, build_optimizer
+from scratch_llm.training.optim import build_lr_scheduler, build_optimizer
 from scratch_llm.run import RunPaths
-from scratch_llm.rng_state import (
+from scratch_llm.training.rng_state import (
     capture_training_rng_state,
     restore_training_rng_state,
 )
-from scratch_llm.tokenizer import NANOCHAT_SPECIAL_TOKENS, ByteTokenizer, Tokenizer
-from scratch_llm.tokenized_data import (
+from scratch_llm.tokenization.tokenizer import (
+    NANOCHAT_SPECIAL_TOKENS,
+    ByteTokenizer,
+    Tokenizer,
+)
+from scratch_llm.data.tokenized import (
     TokenizedShardReader,
     tokenized_manifest_identity,
 )
 from scratch_llm.tracking import RunTracker, Tracker
 from scratch_llm.tracking_state import TrackingState
-from scratch_llm.training import (
+from scratch_llm.training.loop import (
     OptimizerStepResult,
     derive_grad_accum_steps,
     run_training_steps,
 )
-from scratch_llm.training_telemetry import peak_flops_basis_from_config
+from scratch_llm.training.telemetry import peak_flops_basis_from_config
 from scratch_llm.utils import get_device, set_seed
 
 

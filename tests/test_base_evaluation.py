@@ -38,7 +38,7 @@ from scratch_llm.evaluation.core.results import (
     CoreReferenceComparison,
     CoreTaskResult,
 )
-from scratch_llm.best_checkpoint import PeriodicValidationResult
+from scratch_llm.training.best_checkpoint import PeriodicValidationResult
 from scratch_llm.evaluation.bpb import BPBAccumulation, BaseValidationResult
 from scratch_llm.evaluation.full_document_bpb import (
     FULL_DOCUMENT_PROTOCOL_ID,

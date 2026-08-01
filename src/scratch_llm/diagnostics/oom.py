@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import torch
 
-from scratch_llm.accelerator_memory import AcceleratorMemorySnapshot
+from scratch_llm.diagnostics.accelerator_memory import AcceleratorMemorySnapshot
 from scratch_llm.config import ProjectConfig
 
 

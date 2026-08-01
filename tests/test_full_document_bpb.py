@@ -13,7 +13,7 @@ import torch
 from torch import nn
 
 import scratch_llm.evaluation.full_document_bpb as full_document_bpb
-from scratch_llm.data import (
+from scratch_llm.data.loaders import (
     DocumentPackingTokenLoader,
     write_tokenized_parquet_shards,
 )
@@ -30,14 +30,14 @@ from scratch_llm.evaluation.nanochat_bpb import (
     NanochatCompatibilityConfig,
     evaluate_nanochat_compatible_bpb,
 )
-from scratch_llm.tokenized_data import (
+from scratch_llm.data.tokenized import (
     TokenizedShardReader,
     TokenizedShardSource,
     tokenized_manifest_identity,
     write_tokenized_shards,
 )
-from scratch_llm.tokenizer import ByteTokenizer
-from scratch_llm.tokenizer_artifacts import build_token_byte_lengths
+from scratch_llm.tokenization.tokenizer import ByteTokenizer
+from scratch_llm.tokenization.artifacts import build_token_byte_lengths
 from tests.fixtures.bpb_conformance import BPB_CONFORMANCE_FIXTURE
 
 

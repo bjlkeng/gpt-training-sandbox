@@ -7,7 +7,7 @@ from torch import nn
 from torch.optim import AdamW
 
 from scratch_llm.config import TrainConfig
-from scratch_llm.optim import (
+from scratch_llm.training.optim import (
     WarmupConstantWarmdownLR,
     build_lr_scheduler,
     build_optimizer,

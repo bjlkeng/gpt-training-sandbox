@@ -12,7 +12,7 @@ from scratch_llm.config import (
     dump_config,
     load_config,
 )
-from scratch_llm.tokenizer import VOCAB_SIZE
+from scratch_llm.tokenization.tokenizer import VOCAB_SIZE
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

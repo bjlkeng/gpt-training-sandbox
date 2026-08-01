@@ -12,7 +12,7 @@ from scratch_llm._validation import (
     require_positive_integer,
 )
 from scratch_llm.evaluation.sampling import BaseSamplesResult
-from scratch_llm.best_checkpoint import PeriodicValidationResult
+from scratch_llm.training.best_checkpoint import PeriodicValidationResult
 from scratch_llm.evaluation.core.results import CoreEvaluationResult
 
 

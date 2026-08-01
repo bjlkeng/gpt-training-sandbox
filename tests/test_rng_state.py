@@ -10,14 +10,14 @@ import numpy as np
 import pytest
 import torch
 
-from scratch_llm.rng_state import (
+from scratch_llm.training.rng_state import (
     RNGStateError,
     TrainingRNGState,
     capture_training_rng_state,
     restore_training_rng_state,
 )
-from scratch_llm.checkpoint import ExactTrainingState
-from scratch_llm import pretraining
+from scratch_llm.training.checkpoint import ExactTrainingState
+from scratch_llm.training import pretraining
 
 
 class FakeCudaRNGBackend:

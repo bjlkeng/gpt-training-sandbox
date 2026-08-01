@@ -16,7 +16,7 @@ from torch.optim import AdamW, SGD
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
 
-import scratch_llm.training as training
+import scratch_llm.training.loop as training
 from scratch_llm.config import (
     GPTConfig,
     ProjectConfig,
@@ -24,19 +24,19 @@ from scratch_llm.config import (
     TokenizerConfig,
     TrainConfig,
 )
-from scratch_llm.data import NextTokenDataset
+from scratch_llm.data.loaders import NextTokenDataset
 from scratch_llm.model import GPT
-from scratch_llm.optim import build_lr_scheduler, build_optimizer
+from scratch_llm.training.optim import build_lr_scheduler, build_optimizer
 from scratch_llm.run import prepare_run
-from scratch_llm.tokenizer import VOCAB_SIZE, ByteTokenizer
+from scratch_llm.tokenization.tokenizer import VOCAB_SIZE, ByteTokenizer
 from scratch_llm.tracking import JsonlTracker
-from scratch_llm.training import (
+from scratch_llm.training.loop import (
     derive_grad_accum_steps,
     run_optimizer_step,
     run_training_steps,
     train_tiny_text,
 )
-from scratch_llm.training_telemetry import estimate_gpt_training_flops
+from scratch_llm.training.telemetry import estimate_gpt_training_flops
 from scratch_llm.utils import set_seed
 
 

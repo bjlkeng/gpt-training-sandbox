@@ -6,7 +6,7 @@ import argparse
 from collections.abc import Sequence
 from pathlib import Path
 
-from scratch_llm.run_comparison import RunComparisonError, compare_training_runs
+from scratch_llm.comparison.pipeline import RunComparisonError, compare_training_runs
 
 
 def build_parser() -> argparse.ArgumentParser:

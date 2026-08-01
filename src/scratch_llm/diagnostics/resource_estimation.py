@@ -14,9 +14,9 @@ from scratch_llm._validation import (
     require_non_negative_integer,
     require_positive_integer,
 )
-from scratch_llm.accelerator_memory import AcceleratorMemorySnapshot
+from scratch_llm.diagnostics.accelerator_memory import AcceleratorMemorySnapshot
 from scratch_llm.config import GPTConfig, ProjectConfig
-from scratch_llm.training import derive_grad_accum_steps
+from scratch_llm.training.loop import derive_grad_accum_steps
 
 
 RESOURCE_ESTIMATE_FORMAT: Final = "scratch_llm_training_resource_estimate"

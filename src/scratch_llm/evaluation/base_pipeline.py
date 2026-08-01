@@ -25,8 +25,8 @@ from scratch_llm.evaluation.sampling import (
     FixedBaseSamplingConfig,
     generate_fixed_base_samples,
 )
-from scratch_llm.best_checkpoint import PeriodicValidationResult
-from scratch_llm.checkpoint import load_model_checkpoint
+from scratch_llm.training.best_checkpoint import PeriodicValidationResult
+from scratch_llm.training.checkpoint import load_model_checkpoint
 from scratch_llm.config import ProjectConfig
 from scratch_llm.evaluation.core.bundle import CoreBundle, load_core_bundle
 from scratch_llm.evaluation.core.results import CoreTaskResult
@@ -40,12 +40,12 @@ from scratch_llm.evaluation.nanochat_bpb import (
     NanochatCompatibilityConfig,
     evaluate_nanochat_compatible_bpb,
 )
-from scratch_llm.tokenized_data import (
+from scratch_llm.data.tokenized import (
     TokenizedShardReader,
     tokenized_manifest_identity,
 )
-from scratch_llm.tokenizer import Tokenizer
-from scratch_llm.tokenizer_artifacts import build_token_byte_lengths
+from scratch_llm.tokenization.tokenizer import Tokenizer
+from scratch_llm.tokenization.artifacts import build_token_byte_lengths
 from scratch_llm.tracking import Tracker
 
 

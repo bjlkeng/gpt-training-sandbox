@@ -11,8 +11,8 @@ from typing import Any
 import pytest
 import regex  # type: ignore[import-untyped]
 
-from scratch_llm import regex_chunking
-from scratch_llm.regex_chunking import (
+from scratch_llm.tokenization import regex_chunking
+from scratch_llm.tokenization.regex_chunking import (
     SPLIT_PATTERN,
     RegexChunkingDependencyError,
     bpe_encoding_chunks,
@@ -20,7 +20,7 @@ from scratch_llm.regex_chunking import (
     split_regex_byte_chunks,
     split_regex_chunks,
 )
-from scratch_llm.tokenizer import SPLIT_PATTERN as TOKENIZER_SPLIT_PATTERN
+from scratch_llm.tokenization.tokenizer import SPLIT_PATTERN as TOKENIZER_SPLIT_PATTERN
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

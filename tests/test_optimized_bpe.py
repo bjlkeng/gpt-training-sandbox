@@ -14,7 +14,7 @@ import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import pytest
 import torch
 
-from scratch_llm.bpe import (
+from scratch_llm.tokenization.bpe import (
     BPETrainingError,
     ReferenceBPETrainingResult,
     RegexBPETokenizer,
@@ -24,7 +24,7 @@ from scratch_llm.bpe import (
     train_bpe,
     train_reference_bpe,
 )
-from scratch_llm.bpe_optimized import (
+from scratch_llm.tokenization.optimized_bpe import (
     BPETrainingBenchmark,
     IncrementalPairIndex,
     benchmark_bpe_trainers,
@@ -38,8 +38,8 @@ from scratch_llm.config import (
     RunConfig,
     TokenizerConfig,
 )
-from scratch_llm.tokenizer_artifacts import TOKENIZER_ARTIFACT_FILENAMES
-from scratch_llm.tokenizer_training import TOKENIZER_TRAINING_REPORT_FILENAME
+from scratch_llm.tokenization.artifacts import TOKENIZER_ARTIFACT_FILENAMES
+from scratch_llm.tokenization.training import TOKENIZER_TRAINING_REPORT_FILENAME
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

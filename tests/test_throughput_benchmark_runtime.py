@@ -6,7 +6,7 @@ from collections.abc import Iterator
 
 import torch
 
-from scratch_llm.accelerator_memory import AcceleratorMemorySnapshot
+from scratch_llm.diagnostics.accelerator_memory import AcceleratorMemorySnapshot
 from scratch_llm.config import (
     GPTConfig,
     ProjectConfig,
@@ -15,8 +15,8 @@ from scratch_llm.config import (
     TrainConfig,
 )
 from scratch_llm.model import GPT
-from scratch_llm.optim import build_lr_scheduler, build_optimizer
-from scratch_llm.throughput_benchmark_runtime import run_benchmark_training_steps
+from scratch_llm.training.optim import build_lr_scheduler, build_optimizer
+from scratch_llm.diagnostics.throughput_runtime import run_benchmark_training_steps
 
 
 def test_fake_clock_measures_only_shared_optimizer_step_work() -> None:

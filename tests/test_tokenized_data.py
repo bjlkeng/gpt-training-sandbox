@@ -12,15 +12,15 @@ from typing import Any
 import numpy as np
 import pytest
 
-from scratch_llm import tokenized_data
-from scratch_llm.data import (
+from scratch_llm.data import tokenized as tokenized_data
+from scratch_llm.data.loaders import (
     TokenizedDataError,
     TokenizedShardReader,
     TokenizedShardSource,
     write_tokenized_parquet_shards,
     write_tokenized_shards,
 )
-from scratch_llm.tokenizer import ByteTokenizer, Tokenizer
+from scratch_llm.tokenization.tokenizer import ByteTokenizer, Tokenizer
 from scratch_llm.utils import save_json
 
 

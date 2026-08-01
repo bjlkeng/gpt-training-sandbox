@@ -15,7 +15,7 @@ from scratch_llm.evaluation.core.prompting import (
     build_core_token_batch,
     render_core_prompts,
 )
-from scratch_llm.tokenizer import ByteTokenizer
+from scratch_llm.tokenization.tokenizer import ByteTokenizer
 
 
 def _task(task_type: str, *, delimiter: str = " ") -> CoreTask:

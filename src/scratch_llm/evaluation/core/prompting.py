@@ -13,7 +13,7 @@ from scratch_llm.evaluation.core.examples import (
     MultipleChoiceExample,
     SchemaExample,
 )
-from scratch_llm.tokenizer import Tokenizer
+from scratch_llm.tokenization.tokenizer import Tokenizer
 
 
 class CorePromptingError(CoreEvaluationError):

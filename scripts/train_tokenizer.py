@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 
-from scratch_llm.bpe_optimized import (
+from scratch_llm.tokenization.optimized_bpe import (
     benchmark_bpe_trainers,
     write_bpe_training_benchmark,
 )
@@ -15,7 +15,7 @@ from scratch_llm.evaluation.tokenizer import (
     write_tokenizer_evaluation_reports,
 )
 from scratch_llm.evaluation.tokenizer_tracking import track_tokenizer_training
-from scratch_llm.tokenizer_training import (
+from scratch_llm.tokenization.training import (
     collect_bounded_parquet_training_texts,
     train_tokenizer_from_parquet,
 )

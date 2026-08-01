@@ -13,18 +13,18 @@ from types import MappingProxyType
 from typing import Any, Final
 
 from scratch_llm._validation import require_finite_real
-from scratch_llm.climbmix import CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX
-from scratch_llm.data import write_tokenized_parquet_shards
-from scratch_llm.data_stats import (
+from scratch_llm.data.climbmix import CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX
+from scratch_llm.data.loaders import write_tokenized_parquet_shards
+from scratch_llm.data.statistics import (
     RawDataStatistics,
     compute_raw_data_statistics,
     write_raw_data_statistics,
 )
-from scratch_llm.tokenized_data import (
+from scratch_llm.data.tokenized import (
     TokenizedDatasetManifest,
     TokenizedShardReader,
 )
-from scratch_llm.tokenizer import Tokenizer
+from scratch_llm.tokenization.tokenizer import Tokenizer
 from scratch_llm.tracking import RunTracker, Tracker
 from scratch_llm.utils import load_json, save_json
 

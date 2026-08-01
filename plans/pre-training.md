@@ -282,49 +282,132 @@ llm-from-scratch/
 
     scratch_llm/
 
-      **init**.py
+      __init__.py
 
-      [common.py](http://common.py)
+      _validation.py
 
-      [config.py](http://config.py)
+      attention.py
 
-      [tracking.py](http://tracking.py)
+      config.py
 
-      [checkpoint.py](http://checkpoint.py)
+      generation.py
 
-      [tokenizer.py](http://tokenizer.py)
+      identity.py
 
-      [data.py](http://data.py)
+      model.py
 
-      [dataloader.py](http://dataloader.py)
+      run.py
 
-      [model.py](http://model.py)
+      tracking.py
 
-      [attention.py](http://attention.py)
+      tracking_state.py
 
-      [optim.py](http://optim.py)
+      utils.py
 
-      [schedule.py](http://schedule.py)
+      comparison/
 
-      [train.py](http://train.py)
+        loading.py
 
-      loss_[eval.py](http://eval.py)
+        model.py
 
-      base_[eval.py](http://eval.py)
+        pipeline.py
 
-      core_[eval.py](http://eval.py)
+        reporting.py
 
-      chat_[format.py](http://format.py)
+      data/
 
-      [sft.py](http://sft.py)
+        climbmix.py
 
-      chat_[eval.py](http://eval.py)
+        loaders.py
 
-      [generation.py](http://generation.py)
+        preparation.py
 
-      [engine.py](http://engine.py)
+        statistics.py
 
-      infer_[bench.py](http://bench.py)
+        tokenized.py
+
+      diagnostics/
+
+        accelerator_memory.py
+
+        oom.py
+
+        resource_estimation.py
+
+        throughput.py
+
+        throughput_runtime.py
+
+      evaluation/
+
+        base.py
+
+        base_pipeline.py
+
+        base_tracking.py
+
+        bpb.py
+
+        full_document_bpb.py
+
+        nanochat_bpb.py
+
+        sampling.py
+
+        tokenizer.py
+
+        tokenizer_tracking.py
+
+        core/
+
+          bundle.py
+
+          examples.py
+
+          pipeline.py
+
+          prompting.py
+
+          reporting.py
+
+          results.py
+
+          scoring.py
+
+          tracking.py
+
+      tokenization/
+
+        artifacts.py
+
+        bpe.py
+
+        optimized_bpe.py
+
+        regex_chunking.py
+
+        tokenizer.py
+
+        training.py
+
+      training/
+
+        best_checkpoint.py
+
+        checkpoint.py
+
+        loop.py
+
+        optim.py
+
+        pretraining.py
+
+        rng_state.py
+
+        telemetry.py
+
+      # Later-phase chat and inference boundaries will follow the same
+      # responsibility-based package convention.
 
       web/
 

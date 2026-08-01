@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import sys
 
-from scratch_llm.climbmix import (
+from scratch_llm.data.climbmix import (
     CLIMBMIX_BASE_URL,
     DEFAULT_CLIMBMIX_DATA_DIR,
     ClimbMixDownloadError,

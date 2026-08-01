@@ -12,10 +12,10 @@ from typing import Any
 import pytest
 import torch
 
-import scratch_llm.tokenizer_artifacts as tokenizer_artifacts
-from scratch_llm.bpe import RegexBPETokenizer, train_reference_bpe
-from scratch_llm.tokenizer import BYTE_VOCAB_SIZE, NANOCHAT_SPECIAL_TOKENS
-from scratch_llm.tokenizer_artifacts import (
+import scratch_llm.tokenization.artifacts as tokenizer_artifacts
+from scratch_llm.tokenization.bpe import RegexBPETokenizer, train_reference_bpe
+from scratch_llm.tokenization.tokenizer import BYTE_VOCAB_SIZE, NANOCHAT_SPECIAL_TOKENS
+from scratch_llm.tokenization.artifacts import (
     TOKENIZER_ARTIFACT_FILENAMES,
     TOKENIZER_ARTIFACT_FORMAT,
     TOKENIZER_ARTIFACT_VERSION,
@@ -173,7 +173,7 @@ def test_loaded_identity_is_stable_in_an_isolated_process(tmp_path: Path) -> Non
             "-c",
             (
                 "import sys; "
-                "from scratch_llm.bpe import RegexBPETokenizer; "
+                "from scratch_llm.tokenization.bpe import RegexBPETokenizer; "
                 "print(RegexBPETokenizer.load(sys.argv[1]).get_identity())"
             ),
             str(artifact_path),

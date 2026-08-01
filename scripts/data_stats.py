@@ -7,8 +7,8 @@ from collections.abc import Sequence
 from pathlib import Path
 import sys
 
-from scratch_llm.climbmix import DEFAULT_CLIMBMIX_DATA_DIR
-from scratch_llm.data_stats import (
+from scratch_llm.data.climbmix import DEFAULT_CLIMBMIX_DATA_DIR
+from scratch_llm.data.statistics import (
     RawDataSplitStatistics,
     compute_raw_data_statistics,
     write_raw_data_statistics,

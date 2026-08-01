@@ -10,11 +10,11 @@ from scratch_llm._validation import (
     require_optional_positive_integer,
     require_positive_integer,
 )
-from scratch_llm.climbmix import (
+from scratch_llm.data.climbmix import (
     CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX,
     DEFAULT_CLIMBMIX_DATA_DIR,
 )
-from scratch_llm.data import (
+from scratch_llm.data.loaders import (
     list_parquet_files,
     parquets_iter_batched,
     select_parquet_files,
