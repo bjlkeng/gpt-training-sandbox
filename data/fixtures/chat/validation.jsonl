@@ -1,0 +1,2 @@
+{"messages":[{"content":"Say hi.","role":"user"},{"content":"Hi!","role":"assistant"}],"schema_version":1}
+{"messages":[{"content":"Use one word.","role":"system"},{"content":"Continue?","role":"user"},{"content":"Yes.","role":"assistant"}],"schema_version":1}

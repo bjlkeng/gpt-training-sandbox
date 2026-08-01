@@ -1055,6 +1055,22 @@ All three Milestone 4 presets remain float32 baselines. AMP, `GradScaler`,
 activation checkpointing, `torch.compile`, and FlashAttention are Phase 12
 variants and must not be represented as results from this baseline protocol.
 
+### Chat conversations and rendering
+
+Phase 7 chat data uses the versioned, immutable schema in
+`scratch_llm.chat.conversation`. Strict UTF-8 JSONL loading rejects duplicate
+keys and reports the failing file and line. The tracked tiny train and
+validation corpora live in `data/fixtures/chat/`; their README documents the
+exact schema, control-token order, assistant-only mask, system-message merge,
+and completion-prompt boundary.
+
+`scratch_llm.chat.rendering` is tokenizer-agnostic and returns immutable token
+and mask tuples under protocol `scratch_llm_chat_renderer_v1`. It follows the
+nanochat control vocabulary without embedding chat behavior in either concrete
+tokenizer. `shift_sft_targets` applies the causal shift only after a full row is
+assembled, maps every ignored target to exactly `-1`, and rejects rows with no
+supervised assistant target.
+
 ### Random token batches
 
 `RandomOffsetTokenLoader` consumes a validated `TokenizedShardReader` and
