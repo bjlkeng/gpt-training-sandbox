@@ -25,6 +25,11 @@ from scratch_llm.config import (
     TokenizerConfig,
     TrainConfig,
 )
+from scratch_llm.evaluation.sft_sampling import (
+    FixedSFTSamplingConfig,
+    FixedSFTSamplesResult,
+    generate_fixed_sft_samples,
+)
 from scratch_llm.identity import file_identity
 from scratch_llm.model import GPT
 from scratch_llm.run import prepare_run
@@ -46,6 +51,47 @@ from scratch_llm.tokenization.tokenizer import ByteTokenizer, VOCAB_SIZE
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TRAIN_JSONL = PROJECT_ROOT / "data" / "fixtures" / "chat" / "train.jsonl"
 VALIDATION_JSONL = PROJECT_ROOT / "data" / "fixtures" / "chat" / "validation.jsonl"
+
+
+class _FixedSampleModel(torch.nn.Module):
+    def __init__(self, tokenizer: ByteTokenizer) -> None:
+        super().__init__()
+        self.max_seq_len = 128
+        self.vocab_size = tokenizer.get_vocab_size()
+        self.assistant_start = tokenizer.encode_special("<|assistant_start|>")
+        self.assistant_end = tokenizer.encode_special("<|assistant_end|>")
+
+    def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
+        logits = torch.full(
+            (*token_ids.shape, self.vocab_size),
+            -100.0,
+            dtype=torch.float32,
+            device=token_ids.device,
+        )
+        for row, last_token in enumerate(token_ids[:, -1].tolist()):
+            next_token = (
+                ord("X") if last_token == self.assistant_start else self.assistant_end
+            )
+            logits[row, -1, next_token] = 100.0
+        return logits
+
+
+def _fixed_samples(checkpoint_identity: str) -> FixedSFTSamplesResult:
+    tokenizer = ByteTokenizer()
+    ticks = count()
+    return generate_fixed_sft_samples(
+        _FixedSampleModel(tokenizer),
+        tokenizer,
+        checkpoint_identity=checkpoint_identity,
+        config=FixedSFTSamplingConfig(
+            max_new_tokens=2,
+            temperature=0.0,
+            top_k=1,
+            seed=11,
+        ),
+        device="cpu",
+        clock=lambda: float(next(ticks)),
+    )
 
 
 def _config(tmp_path: Path, *, run_name: str) -> ProjectConfig:
@@ -142,6 +188,7 @@ def _run(
             tracker=tracker,
             base_checkpoint=base_checkpoint,
             resume_from=resume_from,
+            sample_runner=_fixed_samples,
         )
 
 
@@ -199,7 +246,46 @@ def test_base_initialization_uses_fresh_sft_optimizer_and_writes_ranked_checkpoi
         and step.telemetry.supervised_target_tokens > 0
         for step in result.steps
     )
-    assert [record["step"] for record in records] == [1, 2, 3, 4]
+    assert [record["step"] for record in records] == [1, 2, 2, 3, 4, 4]
+    training_records = [
+        record for record in records if "sft/train_loss" in record["metrics"]
+    ]
+    validation_records = [
+        record for record in records if "sft/val_bpb" in record["metrics"]
+    ]
+    assert [record["step"] for record in training_records] == [1, 2, 3, 4]
+    assert [record["step"] for record in validation_records] == [2, 4]
+    assert all(
+        {
+            "sft/train_loss",
+            "sft/tok_per_sec",
+            "sft/mfu",
+            "sft/peak_memory_mib",
+        }
+        <= set(record["metrics"])
+        for record in training_records
+    )
+    assert not any(
+        metric.startswith("train/")
+        for record in records
+        for metric in record["metrics"]
+    )
+    assert result.evaluation_report_path.is_file()
+    assert result.samples_path.is_file()
+    assert result.samples is not None
+    assert "Compute 2+3." not in result.samples_path.read_text(encoding="utf-8")
+    artifact_records = [
+        record
+        for line in result.metrics_path.read_text(encoding="utf-8").splitlines()
+        if (record := json.loads(line))["record_type"] == "artifact"
+    ]
+    assert [
+        (record["path"], record["name"], record["type"])
+        for record in artifact_records[-2:]
+    ] == [
+        ("metrics/sft_eval.json", "sft_eval", "evaluation"),
+        ("metrics/sft_samples.md", "sft_samples", "evaluation"),
+    ]
     assert not any(
         "chatcore" in metric.lower()
         for record in records
@@ -270,6 +356,7 @@ def test_exact_sft_resume_matches_uninterrupted_training(
     assert resumed.base_checkpoint_identity == file_identity(base)
     assert [record["step"] for record in _metric_records(resumed.metrics_path)] == [
         3,
+        4,
         4,
     ]
 

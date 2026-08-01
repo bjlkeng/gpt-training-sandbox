@@ -1189,6 +1189,21 @@ loader, global RNG, assistant-BPB minimum, tracker identity, and cumulative
 time/FLOPs. Configuration changes other than run name/output directory fail
 before continuation state is installed.
 
+SFT telemetry is published under its stage-specific contract:
+`sft/train_loss`, `sft/val_bpb`, `sft/tok_per_sec`, `sft/mfu`, and
+`sft/peak_memory_mib`. Training and validation may produce separate records at
+the same completed optimizer step, so their steps are monotonically
+non-decreasing across exact resume while cumulative time and FLOPs continue
+from the checkpoint.
+
+Every completed SFT run atomically writes `metrics/sft_eval.json` and
+`metrics/sft_samples.md` and registers both as stable run-relative evaluation
+artifacts. The Markdown contains only the frozen five public prompts from the
+roadmap and their generated assistant outputs. Prompts are rendered through
+the shared chat template, and sampling stops on `assistant_end` with BOS as a
+safety stop. Training conversations are never copied into either artifact,
+and ChatCORE fields remain absent until that evaluator exists.
+
 ### Random token batches
 
 `RandomOffsetTokenLoader` consumes a validated `TokenizedShardReader` and
