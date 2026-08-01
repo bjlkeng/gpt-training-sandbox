@@ -42,9 +42,15 @@ class CoreTokenBatch:
             self.end_indices,
             strict=True,
         ):
-            if not 1 <= start < end <= len(row):
+            valid_span = (
+                1 <= start < end <= len(row)
+                if self.task_type == "language_modeling"
+                else 1 <= start <= end <= len(row)
+            )
+            if not valid_span:
                 raise CorePromptingError(
-                    "CORE scoring spans must be non-empty and follow one context token"
+                    "CORE scoring spans must follow one context token; "
+                    "language-modeling spans must also be non-empty"
                 )
         if self.task_type == "language_modeling":
             if row_count != 1 or self.gold_index is not None:

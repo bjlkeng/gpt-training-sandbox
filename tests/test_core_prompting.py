@@ -108,6 +108,20 @@ def test_build_core_token_batch_marks_non_empty_scoring_spans(
     )
 
 
+def test_multiple_choice_allows_a_prefix_option_with_an_empty_difference_span() -> None:
+    batch = build_core_token_batch(
+        _task("multiple_choice"),
+        MultipleChoiceExample("Pick", ("answer plus", "answer"), 0),
+        (),
+        tokenizer=ByteTokenizer(),
+        max_seq_len=64,
+    )
+
+    assert batch.start_indices[0] == batch.start_indices[1]
+    assert batch.start_indices[0] < batch.end_indices[0]
+    assert batch.start_indices[1] == batch.end_indices[1]
+
+
 def test_build_core_token_batch_left_truncates_context_but_preserves_answers() -> None:
     batch = build_core_token_batch(
         _task("multiple_choice"),

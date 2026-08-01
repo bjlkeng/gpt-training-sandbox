@@ -148,7 +148,16 @@ def _categorical_is_correct(
     for row, (start, end) in enumerate(
         zip(batch.start_indices, batch.end_indices, strict=True)
     ):
-        mean_loss = float(losses[row, start - 1 : end - 1].mean().item())
+        continuation_losses = losses[row, start - 1 : end - 1]
+        if continuation_losses.numel() == 0:
+            # The pinned upstream common-prefix rule leaves an empty span when
+            # one option is a complete token prefix of another. Its empty
+            # mean is NaN, and Python's stable min keeps/ignores that option
+            # according to its original position. Preserve that behavior so
+            # the production bundle can be evaluated exactly as configured.
+            mean_losses.append(math.nan)
+            continue
+        mean_loss = float(continuation_losses.mean().item())
         if not math.isfinite(mean_loss):
             raise CoreScoringError("model produced a non-finite CORE continuation loss")
         mean_losses.append(mean_loss)

@@ -76,6 +76,24 @@ def test_score_core_token_batch_uses_mean_continuation_loss_and_restores_mode() 
     assert model.training is True
 
 
+def test_score_core_token_batch_matches_upstream_prefix_option_fallback() -> None:
+    tokenizer = ByteTokenizer()
+    batch = build_core_token_batch(
+        _task(task_type="multiple_choice"),
+        MultipleChoiceExample("Pick", ("answer plus", "answer"), 0),
+        (),
+        tokenizer=tokenizer,
+        max_seq_len=64,
+    )
+
+    assert score_core_token_batch(
+        _PreferredTokenModel(ord("x")),
+        batch,
+        pad_token_id=tokenizer.get_bos_token_id(),
+        device="cpu",
+    )
+
+
 def test_score_core_token_batch_requires_every_language_model_token() -> None:
     tokenizer = ByteTokenizer()
     batch = build_core_token_batch(
