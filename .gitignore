@@ -231,5 +231,6 @@ __marimo__/
 /data/parquet/
 /data/processed/
 /data/tokenized/
+/data/eval/
 /metrics/*.jsonl
 /runs/*/

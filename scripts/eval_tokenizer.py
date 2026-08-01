@@ -8,12 +8,12 @@ from pathlib import Path
 
 from scratch_llm.bpe import RegexBPETokenizer
 from scratch_llm.tokenizer import ByteTokenizer, Tokenizer
-from scratch_llm.tokenizer_evaluation import (
+from scratch_llm.evaluation.tokenizer import (
     collect_evaluation_corpora,
     evaluate_tokenizer,
     write_tokenizer_evaluation_reports,
 )
-from scratch_llm.tokenizer_tracking import track_tokenizer_evaluation
+from scratch_llm.evaluation.tokenizer_tracking import track_tokenizer_evaluation
 from scripts._common import (
     config_parser,
     prepare_tracked_run,

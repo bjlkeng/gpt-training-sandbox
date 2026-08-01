@@ -11,11 +11,11 @@ from types import MappingProxyType
 from typing import Any, Final
 
 from scratch_llm._validation import require_non_negative_integer
-from scratch_llm.base_evaluation import (
+from scratch_llm.evaluation.base import (
     BaseEvaluationContext,
     CompletedBaseEvaluation,
 )
-from scratch_llm.base_sampling import (
+from scratch_llm.evaluation.sampling import (
     BaseSamplesResult,
     write_base_samples_markdown,
 )
@@ -24,13 +24,18 @@ from scratch_llm.best_checkpoint import (
     PeriodicValidationResult,
     ValidationCheckpointState,
 )
-from scratch_llm.bpb import BaseValidationResult
-from scratch_llm.full_document_bpb import (
+from scratch_llm.evaluation.bpb import BaseValidationResult
+from scratch_llm.evaluation.core.reporting import (
+    CORE_COMPARISON_FILENAME,
+    render_core_comparison_markdown,
+    write_core_comparison_markdown,
+)
+from scratch_llm.evaluation.full_document_bpb import (
     FULL_DOCUMENT_EVAL_METRIC,
     FULL_DOCUMENT_PROTOCOL_ID,
     FULL_DOCUMENT_TRAIN_METRIC,
 )
-from scratch_llm.nanochat_bpb import (
+from scratch_llm.evaluation.nanochat_bpb import (
     NANOCHAT_COMPAT_EVAL_METRIC,
     NANOCHAT_COMPAT_PROTOCOL_ID,
     NANOCHAT_COMPAT_TRAIN_METRIC,
@@ -40,7 +45,7 @@ from scratch_llm.utils import save_json
 
 
 BASE_EVALUATION_REPORT_FORMAT: Final = "scratch_llm_base_evaluation"
-BASE_EVALUATION_REPORT_FORMAT_VERSION: Final = 2
+BASE_EVALUATION_REPORT_FORMAT_VERSION: Final = 3
 BASE_EVALUATION_ARTIFACT_NAME: Final = "base_eval"
 BASE_SAMPLES_ARTIFACT_NAME: Final = "base_samples"
 BASE_EVALUATION_ARTIFACT_TYPE: Final = "evaluation"
@@ -55,6 +60,7 @@ FULL_DOCUMENT_SOURCE_BYTE_RETENTION_METRIC: Final = (
 BASE_SAMPLE_THROUGHPUT_METRIC: Final = "eval/sample_tokens_per_sec"
 _BASE_EVALUATION_RELATIVE_PATH = Path("metrics/base_eval.json")
 _BASE_SAMPLES_RELATIVE_PATH = Path("metrics/base_samples.md")
+_CORE_COMPARISON_RELATIVE_PATH = Path("metrics") / CORE_COMPARISON_FILENAME
 
 
 @dataclass(frozen=True)
@@ -64,6 +70,7 @@ class TrackedBaseEvaluation:
     metrics: Mapping[str, float]
     report_path: Path
     sample_markdown_path: Path | None = None
+    core_comparison_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -190,16 +197,37 @@ def report_completed_base_evaluation(
             completed.samples,
             resolved_run_dir / "metrics",
         )
-    if not report_exists:
-        report_path = save_json(payload, report_path)
+    core_comparison_path: Path | None = None
+    core_comparison_existed = False
+    if completed.core_result is not None:
+        core_comparison_path = resolved_run_dir / _CORE_COMPARISON_RELATIVE_PATH
+        expected_markdown = render_core_comparison_markdown(completed.core_result)
+        core_comparison_existed = _require_compatible_existing_text(
+            core_comparison_path,
+            expected_markdown,
+            label="CORE comparison report",
+        )
+        if not core_comparison_existed:
+            core_comparison_path = write_core_comparison_markdown(
+                completed.core_result,
+                resolved_run_dir / "metrics",
+            )
+    try:
+        if not report_exists:
+            report_path = save_json(payload, report_path)
+    except BaseException:
+        if core_comparison_path is not None and not core_comparison_existed:
+            core_comparison_path.unlink(missing_ok=True)
+        raise
 
     metrics = _completed_metrics(completed)
     event_prefix = f"base-evaluation:{_payload_identity(payload)}"
-    _log_metrics_once(
-        tracker,
-        metrics,
-        event_id=f"{event_prefix}:metrics",
-    )
+    if metrics:
+        _log_metrics_once(
+            tracker,
+            metrics,
+            event_id=f"{event_prefix}:metrics",
+        )
     _log_artifact_once(
         tracker,
         _BASE_EVALUATION_RELATIVE_PATH.as_posix(),
@@ -217,6 +245,7 @@ def report_completed_base_evaluation(
         metrics=MappingProxyType(metrics),
         report_path=report_path,
         sample_markdown_path=sample_markdown_path,
+        core_comparison_path=core_comparison_path,
     )
 
 
@@ -315,7 +344,11 @@ def _base_evaluation_payload(
             ),
         }
     if completed.core_result is not None:
-        payload["core"] = dict(completed.core_result)
+        core_payload = completed.core_result.to_dict()
+        core_payload["comparison_artifact_path"] = (
+            _CORE_COMPARISON_RELATIVE_PATH.as_posix()
+        )
+        payload["core"] = core_payload
     return payload
 
 
@@ -361,6 +394,27 @@ def _require_compatible_existing_report(
     if existing != expected:
         raise BaseEvaluationReportConflictError(
             f"{path} already contains a different completed evaluation"
+        )
+    return True
+
+
+def _require_compatible_existing_text(
+    path: Path,
+    expected: str,
+    *,
+    label: str,
+) -> bool:
+    try:
+        existing = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return False
+    except (OSError, UnicodeError) as error:
+        raise BaseEvaluationReportConflictError(
+            f"existing {label} cannot be validated: {error}"
+        ) from error
+    if existing != expected:
+        raise BaseEvaluationReportConflictError(
+            f"{path} already contains a different completed {label}"
         )
     return True
 

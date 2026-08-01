@@ -14,12 +14,12 @@ from scratch_llm._validation import (
     require_optional_real,
     require_real,
 )
-from scratch_llm.bpb import BaseValidationResult
-from scratch_llm.full_document_bpb import (
+from scratch_llm.evaluation.bpb import BaseValidationResult
+from scratch_llm.evaluation.full_document_bpb import (
     FULL_DOCUMENT_PROTOCOL_ID,
     FULL_DOCUMENT_PROTOCOL_VERSION,
 )
-from scratch_llm.nanochat_bpb import (
+from scratch_llm.evaluation.nanochat_bpb import (
     NANOCHAT_COMPAT_PROTOCOL_ID,
     NANOCHAT_COMPAT_PROTOCOL_VERSION,
     NANOCHAT_REFERENCE_COMMIT,

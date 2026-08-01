@@ -7,13 +7,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
-from scratch_llm.base_evaluation_tracking import (
+from scratch_llm.evaluation.base_tracking import (
     FULL_DOCUMENT_MINIMUM_TRAIN_METRIC,
     NANOCHAT_MINIMUM_TRAIN_METRIC,
 )
 from scratch_llm.config import ProjectConfig
-from scratch_llm.full_document_bpb import FULL_DOCUMENT_TRAIN_METRIC
-from scratch_llm.nanochat_bpb import NANOCHAT_COMPAT_TRAIN_METRIC
+from scratch_llm.evaluation.full_document_bpb import FULL_DOCUMENT_TRAIN_METRIC
+from scratch_llm.evaluation.nanochat_bpb import NANOCHAT_COMPAT_TRAIN_METRIC
 
 
 RUN_COMPARISON_FORMAT: Final = "scratch_llm_run_comparison"

@@ -19,13 +19,13 @@ from scratch_llm.config import (
     WandbConfig,
 )
 from scratch_llm.run import prepare_run
-from scratch_llm.tokenizer_evaluation import (
+from scratch_llm.evaluation.tokenizer import (
     EvaluationCorpus,
     TokenizerEvaluationResult,
     evaluate_tokenizer,
     write_tokenizer_evaluation_reports,
 )
-from scratch_llm.tokenizer_tracking import (
+from scratch_llm.evaluation.tokenizer_tracking import (
     track_tokenizer_evaluation,
     track_tokenizer_training,
 )

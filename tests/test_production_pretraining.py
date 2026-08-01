@@ -16,12 +16,12 @@ import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import torch
 
 from scratch_llm import pretraining
-from scratch_llm.base_evaluation_tracking import (
+from scratch_llm.evaluation.base_tracking import (
     FULL_DOCUMENT_MINIMUM_TRAIN_METRIC,
     NANOCHAT_MINIMUM_TRAIN_METRIC,
 )
 from scratch_llm.best_checkpoint import PeriodicValidationResult
-from scratch_llm.bpb import BPBAccumulation, BaseValidationResult
+from scratch_llm.evaluation.bpb import BPBAccumulation, BaseValidationResult
 from scratch_llm.bpe import RegexBPETokenizer, train_reference_bpe
 from scratch_llm.checkpoint import (
     CheckpointError,
@@ -39,12 +39,12 @@ from scratch_llm.config import (
 )
 from scratch_llm.data import write_tokenized_parquet_shards
 from scratch_llm.generation import generate
-from scratch_llm.full_document_bpb import (
+from scratch_llm.evaluation.full_document_bpb import (
     FULL_DOCUMENT_PROTOCOL_ID,
     FULL_DOCUMENT_PROTOCOL_VERSION,
     FULL_DOCUMENT_TRAIN_METRIC,
 )
-from scratch_llm.nanochat_bpb import (
+from scratch_llm.evaluation.nanochat_bpb import (
     NANOCHAT_COMPAT_PROTOCOL_ID,
     NANOCHAT_COMPAT_PROTOCOL_VERSION,
     NANOCHAT_COMPAT_TRAIN_METRIC,

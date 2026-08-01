@@ -20,7 +20,7 @@ from scratch_llm.accelerator_memory import (
     AcceleratorMemorySnapshot,
     collect_accelerator_memory,
 )
-from scratch_llm.base_evaluation_tracking import track_periodic_base_validation
+from scratch_llm.evaluation.base_tracking import track_periodic_base_validation
 from scratch_llm.best_checkpoint import (
     BEST_CHECKPOINT_RANKING_PROTOCOL_ID,
     BestCheckpointError,
@@ -38,12 +38,12 @@ from scratch_llm.checkpoint import (
 )
 from scratch_llm.config import ProjectConfig
 from scratch_llm.data import NextTokenDataset, create_token_loader
-from scratch_llm.full_document_bpb import (
+from scratch_llm.evaluation.full_document_bpb import (
     FullDocumentProtocolConfig,
     evaluate_full_document_bpb,
 )
 from scratch_llm.model import GPT
-from scratch_llm.nanochat_bpb import (
+from scratch_llm.evaluation.nanochat_bpb import (
     NanochatCompatibilityConfig,
     evaluate_nanochat_compatible_bpb,
 )

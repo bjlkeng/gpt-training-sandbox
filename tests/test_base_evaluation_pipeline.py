@@ -12,10 +12,10 @@ import pytest
 import torch
 from torch import nn
 
-import scratch_llm.base_evaluation_pipeline as pipeline
-from scratch_llm.base_evaluation import BaseEvaluationError
-from scratch_llm.base_evaluation_pipeline import evaluate_checkpoint_base_model
-from scratch_llm.bpb import BPBAccumulation, BaseValidationResult
+import scratch_llm.evaluation.base_pipeline as pipeline
+from scratch_llm.evaluation.base import BaseEvaluationError
+from scratch_llm.evaluation.base_pipeline import evaluate_checkpoint_base_model
+from scratch_llm.evaluation.bpb import BPBAccumulation, BaseValidationResult
 from scratch_llm.config import (
     GPTConfig,
     GenerationConfig,
@@ -24,11 +24,17 @@ from scratch_llm.config import (
     TokenizerConfig,
     TrainConfig,
 )
-from scratch_llm.full_document_bpb import (
+from scratch_llm.evaluation.core.results import (
+    CORE_PROTOCOL_ID,
+    CoreEvaluationResult,
+    CoreReferenceComparison,
+    CoreTaskResult,
+)
+from scratch_llm.evaluation.full_document_bpb import (
     FULL_DOCUMENT_PROTOCOL_ID,
     FULL_DOCUMENT_PROTOCOL_VERSION,
 )
-from scratch_llm.nanochat_bpb import (
+from scratch_llm.evaluation.nanochat_bpb import (
     NANOCHAT_COMPAT_PROTOCOL_ID,
     NANOCHAT_COMPAT_PROTOCOL_VERSION,
     NANOCHAT_REFERENCE_COMMIT,
@@ -143,6 +149,33 @@ def _protocol_result(
     )
 
 
+def _core_result(*, tokenizer_identity: str) -> CoreEvaluationResult:
+    return CoreEvaluationResult(
+        checkpoint_identity=_CHECKPOINT_IDENTITY,
+        tokenizer_identity=tokenizer_identity,
+        bundle_identity="sha256:" + "c" * 64,
+        config_identity="sha256:" + "d" * 64,
+        metadata_identity="sha256:" + "e" * 64,
+        run_kind="bounded",
+        max_per_task=1,
+        tasks=(
+            CoreTaskResult(
+                label="fixture",
+                task_type="language_modeling",
+                num_fewshot=0,
+                random_baseline_percent=0.0,
+                correct_examples=1,
+                evaluated_examples=1,
+                available_examples=2,
+                elapsed_seconds=1.0,
+                data_identity="sha256:" + "f" * 64,
+            ),
+        ),
+        references=(CoreReferenceComparison("reference", 0.25),),
+        elapsed_seconds=1.0,
+    )
+
+
 def test_sample_mode_does_not_open_validation_data(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -180,6 +213,65 @@ def test_sample_mode_does_not_open_validation_data(
     assert payload["results"] == {}
     assert result.sample_markdown_path is not None
     assert result.sample_markdown_path.is_file()
+
+
+def test_core_mode_loads_the_explicit_bundle_without_validation_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    tokenizer = ByteTokenizer()
+    checkpoint = SimpleNamespace(
+        config=config,
+        model=_ConstantCompletionModel(ord("A")),
+        step=12,
+        tokenizer=tokenizer,
+    )
+    checkpoint_path = tmp_path / "last.pt"
+    checkpoint_path.write_bytes(b"checkpoint")
+    bundle_path = tmp_path / "eval_bundle.zip"
+    bundle_path.write_bytes(b"bundle")
+    bundle = object()
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(pipeline, "load_model_checkpoint", lambda *_a, **_k: checkpoint)
+    monkeypatch.setattr(pipeline, "file_identity", lambda _path: _CHECKPOINT_IDENTITY)
+    monkeypatch.setattr(
+        pipeline,
+        "load_core_bundle",
+        lambda path: calls.append(("load", path)) or bundle,
+    )
+
+    def evaluate(*args: object, **kwargs: object) -> CoreEvaluationResult:
+        calls.append(("evaluate", args[2]))
+        assert kwargs["max_per_task"] == 1
+        return _core_result(tokenizer_identity=tokenizer.get_identity())
+
+    monkeypatch.setattr(pipeline, "evaluate_core_bundle", evaluate)
+
+    class _UnexpectedReader:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("core-only evaluation opened validation data")
+
+    monkeypatch.setattr(pipeline, "TokenizedShardReader", _UnexpectedReader)
+    tracker = _SpyTracker()
+
+    result = evaluate_checkpoint_base_model(
+        config,
+        checkpoint_path=checkpoint_path,
+        modes=("core",),
+        tracker=tracker,
+        run_dir=tmp_path / "run",
+        max_per_task=1,
+        core_bundle_path=bundle_path,
+    )
+
+    assert calls == [("load", bundle_path), ("evaluate", bundle)]
+    payload = json.loads(result.report_path.read_text(encoding="utf-8"))
+    assert payload["core"]["protocol_id"] == CORE_PROTOCOL_ID
+    assert payload["core"]["scope"]["bounded"] is True
+    assert result.core_comparison_path == tmp_path / "run/metrics/core_comparison.md"
+    assert result.core_comparison_path.is_file()
+    assert tracker.metrics == []
 
 
 def test_bpb_mode_runs_both_protocols_with_one_frozen_identity_set(

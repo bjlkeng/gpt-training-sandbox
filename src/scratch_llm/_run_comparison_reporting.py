@@ -13,16 +13,16 @@ from scratch_llm._run_comparison_model import (
     STEP_METRICS,
     RunSnapshot,
 )
-from scratch_llm.base_evaluation_tracking import (
+from scratch_llm.evaluation.base_tracking import (
     FULL_DOCUMENT_MINIMUM_TRAIN_METRIC,
     NANOCHAT_MINIMUM_TRAIN_METRIC,
 )
 from scratch_llm.identity import project_config_identity
-from scratch_llm.full_document_bpb import (
+from scratch_llm.evaluation.full_document_bpb import (
     FULL_DOCUMENT_PROTOCOL_ID,
     FULL_DOCUMENT_TRAIN_METRIC,
 )
-from scratch_llm.nanochat_bpb import (
+from scratch_llm.evaluation.nanochat_bpb import (
     NANOCHAT_COMPAT_PROTOCOL_ID,
     NANOCHAT_COMPAT_TRAIN_METRIC,
 )

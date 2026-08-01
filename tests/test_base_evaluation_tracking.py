@@ -15,7 +15,7 @@ import pytest
 import torch
 from torch import nn
 
-from scratch_llm.base_evaluation_tracking import (
+from scratch_llm.evaluation.base_tracking import (
     BASE_EVALUATION_ARTIFACT_NAME,
     BASE_EVALUATION_ARTIFACT_TYPE,
     BASE_EVALUATION_REPORT_FORMAT,
@@ -29,7 +29,7 @@ from scratch_llm.base_evaluation_tracking import (
     report_standalone_base_evaluation,
     track_periodic_base_validation,
 )
-from scratch_llm.base_sampling import (
+from scratch_llm.evaluation.sampling import (
     FixedBaseSamplingConfig,
     generate_fixed_base_samples,
 )
@@ -38,7 +38,7 @@ from scratch_llm.best_checkpoint import (
     ValidationCheckpointState,
     advance_validation_state,
 )
-from scratch_llm.bpb import BPBAccumulation, BaseValidationResult
+from scratch_llm.evaluation.bpb import BPBAccumulation, BaseValidationResult
 from scratch_llm.config import (
     ProjectConfig,
     RunConfig,
@@ -46,7 +46,7 @@ from scratch_llm.config import (
     WandbConfig,
 )
 from scratch_llm.data import write_tokenized_parquet_shards
-from scratch_llm.full_document_bpb import (
+from scratch_llm.evaluation.full_document_bpb import (
     FULL_DOCUMENT_EVAL_METRIC,
     FULL_DOCUMENT_PROTOCOL_ID,
     FULL_DOCUMENT_PROTOCOL_VERSION,
@@ -54,7 +54,7 @@ from scratch_llm.full_document_bpb import (
     FullDocumentProtocolConfig,
     evaluate_full_document_bpb,
 )
-from scratch_llm.nanochat_bpb import (
+from scratch_llm.evaluation.nanochat_bpb import (
     NANOCHAT_COMPAT_EVAL_METRIC,
     NANOCHAT_COMPAT_PROTOCOL_ID,
     NANOCHAT_COMPAT_PROTOCOL_VERSION,

@@ -13,10 +13,10 @@ import pytest
 import torch
 from torch import nn
 
-import scratch_llm.nanochat_bpb as nanochat_bpb
-from scratch_llm.bpb import BPBAccumulation, BaseValidationResult
+import scratch_llm.evaluation.nanochat_bpb as nanochat_bpb
+from scratch_llm.evaluation.bpb import BPBAccumulation, BaseValidationResult
 from scratch_llm.data import write_tokenized_parquet_shards
-from scratch_llm.nanochat_bpb import (
+from scratch_llm.evaluation.nanochat_bpb import (
     NANOCHAT_COMPAT_EVAL_METRIC,
     NANOCHAT_COMPAT_PROTOCOL_ID,
     NANOCHAT_COMPAT_TRAIN_METRIC,
