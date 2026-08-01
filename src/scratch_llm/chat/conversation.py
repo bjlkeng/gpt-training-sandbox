@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 import json
 from os import PathLike
 from pathlib import Path
 from typing import ClassVar, Final, Literal, TypeAlias
+
+from scratch_llm._validation import JsonValueValidator
 
 
 CHAT_SCHEMA_VERSION: Final = 1
@@ -21,12 +22,8 @@ class ConversationValidationError(ValueError):
     """A conversation record or JSONL line violates the chat schema."""
 
 
-def _require_text(value: object, *, path: str) -> str:
-    if not isinstance(value, str):
-        raise ConversationValidationError(
-            f"{path} must be a string, got {type(value).__name__}"
-        )
-    return value
+_JSON_VALUES: Final = JsonValueValidator(ConversationValidationError)
+_DUPLICATE_OBJECT_HOOK: Final = _JSON_VALUES.duplicate_object_hook(label="JSON object")
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,7 +34,11 @@ class TextPart:
     text: str
 
     def __post_init__(self) -> None:
-        _require_text(self.text, path="text part text")
+        _JSON_VALUES.require_string(
+            self.text,
+            label="text part text",
+            non_empty=False,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +49,11 @@ class PythonPart:
     text: str
 
     def __post_init__(self) -> None:
-        _require_text(self.text, path="python part text")
+        _JSON_VALUES.require_string(
+            self.text,
+            label="python part text",
+            non_empty=False,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,7 +64,11 @@ class PythonOutputPart:
     text: str
 
     def __post_init__(self) -> None:
-        _require_text(self.text, path="python_output part text")
+        _JSON_VALUES.require_string(
+            self.text,
+            label="python_output part text",
+            non_empty=False,
+        )
 
 
 AssistantPart: TypeAlias = TextPart | PythonPart | PythonOutputPart
@@ -74,7 +83,11 @@ class SystemMessage:
     content: str
 
     def __post_init__(self) -> None:
-        _require_text(self.content, path="system message content")
+        _JSON_VALUES.require_string(
+            self.content,
+            label="system message content",
+            non_empty=False,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,7 +98,11 @@ class UserMessage:
     content: str
 
     def __post_init__(self) -> None:
-        _require_text(self.content, path="user message content")
+        _JSON_VALUES.require_string(
+            self.content,
+            label="user message content",
+            non_empty=False,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,11 +190,10 @@ def parse_conversation(record: object) -> Conversation:
 
     if isinstance(record, Conversation):
         return record
-    obj = _require_mapping(record, path="record")
-    _require_exact_fields(
-        obj,
-        _CONVERSATION_FIELDS,
-        path="record",
+    obj = _JSON_VALUES.require_object(
+        record,
+        label="record",
+        expected_keys=_CONVERSATION_FIELDS,
         schema_label=f"conversation schema version {CHAT_SCHEMA_VERSION}",
     )
 
@@ -191,11 +207,7 @@ def parse_conversation(record: object) -> Conversation:
             f"schema_version must equal {CHAT_SCHEMA_VERSION}, got {version!r}"
         )
 
-    raw_messages = obj["messages"]
-    if not isinstance(raw_messages, list):
-        raise ConversationValidationError(
-            f"messages must be a list, got {type(raw_messages).__name__}"
-        )
+    raw_messages = _JSON_VALUES.require_list(obj["messages"], label="messages")
     if not raw_messages:
         raise ConversationValidationError("messages must be non-empty")
 
@@ -208,19 +220,35 @@ def parse_conversation(record: object) -> Conversation:
 
 def _parse_message(raw_message: object, *, index: int) -> Message:
     path = f"messages[{index}]"
-    message = _require_mapping(raw_message, path=path)
-    _require_exact_fields(message, _MESSAGE_FIELDS, path=path, schema_label="message")
-    role = message["role"]
-    if not isinstance(role, str):
-        raise ConversationValidationError(
-            f"{path}.role must be a string, got {type(role).__name__}"
-        )
+    message = _JSON_VALUES.require_object(
+        raw_message,
+        label=path,
+        expected_keys=_MESSAGE_FIELDS,
+        schema_label="message",
+    )
+    role = _JSON_VALUES.require_string(
+        message["role"],
+        label=f"{path}.role",
+        non_empty=False,
+    )
 
     content = message["content"]
     if role == "system":
-        return SystemMessage(content=_require_text(content, path=f"{path}.content"))
+        return SystemMessage(
+            content=_JSON_VALUES.require_string(
+                content,
+                label=f"{path}.content",
+                non_empty=False,
+            )
+        )
     if role == "user":
-        return UserMessage(content=_require_text(content, path=f"{path}.content"))
+        return UserMessage(
+            content=_JSON_VALUES.require_string(
+                content,
+                label=f"{path}.content",
+                non_empty=False,
+            )
+        )
     if role == "assistant":
         return AssistantMessage(content=_parse_assistant_content(content, path=path))
     raise ConversationValidationError(
@@ -245,48 +273,28 @@ def _parse_assistant_content(content: object, *, path: str) -> AssistantContent:
 
 
 def _parse_assistant_part(raw_part: object, *, path: str) -> AssistantPart:
-    part = _require_mapping(raw_part, path=path)
-    _require_exact_fields(part, _PART_FIELDS, path=path, schema_label="assistant part")
+    part = _JSON_VALUES.require_object(
+        raw_part,
+        label=path,
+        expected_keys=_PART_FIELDS,
+        schema_label="assistant part",
+    )
     part_type = part["type"]
     if not isinstance(part_type, str) or part_type not in _PART_TYPES:
         raise ConversationValidationError(
             f"{path}.type must be 'text', 'python', or 'python_output', "
             f"got {part_type!r}"
         )
-    text = _require_text(part["text"], path=f"{path}.text")
+    text = _JSON_VALUES.require_string(
+        part["text"],
+        label=f"{path}.text",
+        non_empty=False,
+    )
     if part_type == "text":
         return TextPart(text=text)
     if part_type == "python":
         return PythonPart(text=text)
     return PythonOutputPart(text=text)
-
-
-def _require_mapping(value: object, *, path: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise ConversationValidationError(
-            f"{path} must be an object, got {type(value).__name__}"
-        )
-    if not all(isinstance(key, str) for key in value):
-        raise ConversationValidationError(f"{path} keys must be strings")
-    return value
-
-
-def _require_exact_fields(
-    value: Mapping[str, object],
-    expected: frozenset[str],
-    *,
-    path: str,
-    schema_label: str,
-) -> None:
-    actual = set(value)
-    if actual == expected:
-        return
-    missing = sorted(expected - actual)
-    unexpected = sorted(actual - expected)
-    raise ConversationValidationError(
-        f"{path} fields do not match {schema_label}; "
-        f"missing={missing}, unexpected={unexpected}"
-    )
 
 
 def read_conversations(path: str | PathLike[str]) -> tuple[Conversation, ...]:
@@ -309,7 +317,7 @@ def read_conversations(path: str | PathLike[str]) -> tuple[Conversation, ...]:
             try:
                 record = json.loads(
                     line,
-                    object_pairs_hook=_reject_duplicate_keys,
+                    object_pairs_hook=_DUPLICATE_OBJECT_HOOK,
                     parse_constant=_reject_non_standard_number,
                 )
                 conversations.append(parse_conversation(record))
@@ -326,17 +334,6 @@ def read_conversations(path: str | PathLike[str]) -> tuple[Conversation, ...]:
     if not conversations:
         raise ConversationValidationError(f"{source}: file contains no conversations")
     return tuple(conversations)
-
-
-def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ConversationValidationError(
-                f"JSON object contains duplicate key {key!r}"
-            )
-        result[key] = value
-    return result
 
 
 def _reject_non_standard_number(value: str) -> object:

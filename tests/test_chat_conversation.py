@@ -97,6 +97,37 @@ def test_parse_conversation_builds_immutable_typed_values_without_mutating_input
         conversation.messages = ()  # type: ignore[misc]
 
 
+def test_parse_conversation_preserves_empty_string_content() -> None:
+    conversation = parse_conversation(
+        _record(
+            [
+                {"role": "user", "content": ""},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": ""},
+                        {"type": "python", "text": ""},
+                        {"type": "python_output", "text": ""},
+                    ],
+                },
+            ]
+        )
+    )
+
+    assert conversation == Conversation(
+        messages=(
+            UserMessage(content=""),
+            AssistantMessage(
+                content=(
+                    TextPart(text=""),
+                    PythonPart(text=""),
+                    PythonOutputPart(text=""),
+                )
+            ),
+        )
+    )
+
+
 @pytest.mark.parametrize(
     ("record", "match"),
     [

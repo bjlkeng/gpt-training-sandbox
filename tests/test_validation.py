@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import MappingProxyType
 
 import pytest
 
@@ -43,6 +44,12 @@ def test_json_object_validation_preserves_domain_errors_and_exact_keys() -> None
         )
         is value
     )
+    assert VALIDATOR.require_object(
+        MappingProxyType(value),
+        label="artifact",
+        expected_keys=frozenset({"format", "version"}),
+        schema_label="version 1",
+    ) == dict(value)
 
     with pytest.raises(
         DomainValidationError,
@@ -66,6 +73,8 @@ def test_json_list_string_and_integer_validation() -> None:
 
     assert VALIDATOR.require_list(values, label="values") is values
     assert VALIDATOR.require_string("value", label="name") == "value"
+    assert VALIDATOR.require_string("", label="text", non_empty=False) == ""
+    assert VALIDATOR.require_string(" ", label="text", non_empty=False) == " "
     assert (
         VALIDATOR.require_integer(
             2,
@@ -80,6 +89,11 @@ def test_json_list_string_and_integer_validation() -> None:
         VALIDATOR.require_list([], label="values", non_empty=True)
     with pytest.raises(DomainValidationError, match="non-empty string"):
         VALIDATOR.require_string(" ", label="name")
+    with pytest.raises(
+        DomainValidationError,
+        match="text must be a string, got int",
+    ):
+        VALIDATOR.require_string(1, label="text", non_empty=False)
     with pytest.raises(DomainValidationError, match="must be an integer"):
         VALIDATOR.require_integer(True, label="count", minimum=0)
     with pytest.raises(DomainValidationError, match=r"must be \[1, 3\]"):

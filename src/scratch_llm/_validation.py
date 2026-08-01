@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 import math
 from typing import AbstractSet, NoReturn
 
@@ -34,7 +34,7 @@ class JsonValueValidator:
     ) -> dict[str, object]:
         """Return a JSON object, optionally enforcing its exact string keys."""
 
-        if not isinstance(value, dict):
+        if not isinstance(value, Mapping):
             self._fail(f"{label} must be an object, got {type(value).__name__}")
         if not all(isinstance(key, str) for key in value):
             self._fail(f"{label} keys must be strings")
@@ -45,7 +45,7 @@ class JsonValueValidator:
                 f"{label} fields do not match {schema_label}; "
                 f"missing={missing}, unexpected={unexpected}"
             )
-        return value
+        return value if isinstance(value, dict) else dict(value)
 
     def require_list(
         self,
@@ -62,13 +62,21 @@ class JsonValueValidator:
             self._fail(f"{label} must be a non-empty list")
         return value
 
-    def require_string(self, value: object, *, label: str) -> str:
-        """Return a non-empty JSON string."""
+    def require_string(
+        self,
+        value: object,
+        *,
+        label: str,
+        non_empty: bool = True,
+    ) -> str:
+        """Return a JSON string, optionally allowing empty content."""
 
-        try:
-            return require_non_empty_string(value, name=label)
-        except (TypeError, ValueError):
+        if not isinstance(value, str):
+            requirement = "a non-empty string" if non_empty else "a string"
+            self._fail(f"{label} must be {requirement}, got {type(value).__name__}")
+        if non_empty and not value.strip():
             self._fail(f"{label} must be a non-empty string")
+        return value
 
     def require_integer(
         self,
