@@ -1,0 +1,5 @@
+{"messages":[{"content":"Hello","role":"user"},{"content":"Hi!","role":"assistant"}],"schema_version":1}
+{"messages":[{"content":"Answer briefly.","role":"system"},{"content":"2+2?","role":"user"},{"content":"4","role":"assistant"}],"schema_version":1}
+{"messages":[{"content":"Name?","role":"user"},{"content":"Nano.","role":"assistant"},{"content":"Ready?","role":"user"},{"content":"Yes.","role":"assistant"}],"schema_version":1}
+{"messages":[{"content":"Café?","role":"user"},{"content":"Oui ☕","role":"assistant"}],"schema_version":1}
+{"messages":[{"content":"Compute 2+3.","role":"user"},{"content":[{"text":"I'll calculate. ","type":"text"},{"text":"2+3","type":"python"},{"text":"5","type":"python_output"},{"text":" The answer is 5.","type":"text"}],"role":"assistant"}],"schema_version":1}

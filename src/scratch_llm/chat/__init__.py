@@ -1,0 +1,56 @@
+"""Validated chat-domain values and tokenizer-agnostic rendering."""
+
+from scratch_llm.chat.conversation import (
+    CHAT_SCHEMA_VERSION,
+    AssistantContent,
+    AssistantMessage,
+    AssistantPart,
+    Conversation,
+    ConversationValidationError,
+    Message,
+    PythonOutputPart,
+    PythonPart,
+    SystemMessage,
+    TextPart,
+    UserMessage,
+    parse_conversation,
+    read_conversations,
+)
+from scratch_llm.chat.rendering import (
+    CHAT_RENDERER_ID,
+    IGNORE_INDEX,
+    ChatRenderingError,
+    CompletionPrompt,
+    RenderedConversation,
+    ShiftedSFTSequence,
+    render_completion_prompt,
+    render_conversation,
+    shift_sft_targets,
+)
+
+
+__all__ = [
+    "CHAT_RENDERER_ID",
+    "CHAT_SCHEMA_VERSION",
+    "IGNORE_INDEX",
+    "AssistantContent",
+    "AssistantMessage",
+    "AssistantPart",
+    "ChatRenderingError",
+    "CompletionPrompt",
+    "Conversation",
+    "ConversationValidationError",
+    "Message",
+    "PythonOutputPart",
+    "PythonPart",
+    "RenderedConversation",
+    "ShiftedSFTSequence",
+    "SystemMessage",
+    "TextPart",
+    "UserMessage",
+    "parse_conversation",
+    "read_conversations",
+    "render_completion_prompt",
+    "render_conversation",
+    "shift_sft_targets",
+]

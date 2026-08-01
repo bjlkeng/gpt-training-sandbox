@@ -79,6 +79,7 @@ OBSOLETE_TOP_LEVEL_EVALUATION_MODULES = {
     "tokenizer_tracking",
 }
 EXPECTED_DOMAIN_MODULES = {
+    "chat": {"conversation", "rendering"},
     "comparison": {"loading", "model", "pipeline", "reporting"},
     "data": {"climbmix", "loaders", "preparation", "statistics", "tokenized"},
     "diagnostics": {
@@ -196,6 +197,7 @@ def test_editable_install_exposes_packages_outside_the_repository(
             "-c",
             (
                 "import scratch_llm, scripts; "
+                "import scratch_llm.chat.rendering; "
                 "import scratch_llm.comparison.pipeline; "
                 "import scratch_llm.data.loaders; "
                 "import scratch_llm.diagnostics.throughput; "
