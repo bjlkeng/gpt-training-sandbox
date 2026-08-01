@@ -9,12 +9,12 @@ from scratch_llm.bpe_optimized import (
     benchmark_bpe_trainers,
     write_bpe_training_benchmark,
 )
-from scratch_llm.tokenizer_evaluation import (
+from scratch_llm.evaluation.tokenizer import (
     collect_evaluation_corpora,
     evaluate_tokenizer,
     write_tokenizer_evaluation_reports,
 )
-from scratch_llm.tokenizer_tracking import track_tokenizer_training
+from scratch_llm.evaluation.tokenizer_tracking import track_tokenizer_training
 from scratch_llm.tokenizer_training import (
     collect_bounded_parquet_training_texts,
     train_tokenizer_from_parquet,

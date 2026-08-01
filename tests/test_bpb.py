@@ -15,7 +15,7 @@ import pytest
 import torch
 from torch import nn
 
-from scratch_llm.bpb import (
+from scratch_llm.evaluation.bpb import (
     BPBAccumulation,
     BPBAccumulator,
     BaseValidationResult,

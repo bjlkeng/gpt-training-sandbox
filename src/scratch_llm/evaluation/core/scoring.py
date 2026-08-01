@@ -14,13 +14,13 @@ from scratch_llm._validation import (
     require_non_negative_integer,
     require_positive_integer,
 )
-from scratch_llm.core_bundle import CoreTask
-from scratch_llm.core_evaluation import CoreEvaluationError
-from scratch_llm.core_examples import (
+from scratch_llm.evaluation.core.bundle import CoreTask
+from scratch_llm.evaluation.core.results import CoreEvaluationError
+from scratch_llm.evaluation.core.examples import (
     CoreExample,
     CoreTaskExamples,
 )
-from scratch_llm.core_prompting import CoreTokenBatch
+from scratch_llm.evaluation.core.prompting import CoreTokenBatch
 from scratch_llm.utils import get_device
 
 

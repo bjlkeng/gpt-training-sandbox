@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from scratch_llm.tokenizer_artifacts import TOKENIZER_ARTIFACT_FILENAMES
-from scratch_llm.tokenizer_evaluation import TokenizerEvaluationResult
+from scratch_llm.evaluation.tokenizer import TokenizerEvaluationResult
 from scratch_llm.tokenizer_training import TokenizerTrainingRunResult
 from scratch_llm.tracking import RunTracker, Tracker
 

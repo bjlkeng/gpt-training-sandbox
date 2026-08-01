@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scratch_llm.core_evaluation import CORE_PROTOCOL_ID, CoreEvaluationResult
+from scratch_llm.evaluation.core.results import CORE_PROTOCOL_ID, CoreEvaluationResult
 from scratch_llm.utils import atomic_write
 
 

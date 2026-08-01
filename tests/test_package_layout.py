@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+from importlib.util import find_spec
 from importlib.metadata import distribution
 from pathlib import Path
 
@@ -38,6 +39,44 @@ FORBIDDEN_CORE_DEPENDENCIES = {
     "transformers",
     "trl",
 }
+EXPECTED_EVALUATION_MODULES = {
+    "base",
+    "base_pipeline",
+    "base_tracking",
+    "bpb",
+    "full_document_bpb",
+    "nanochat_bpb",
+    "sampling",
+    "tokenizer",
+    "tokenizer_tracking",
+}
+EXPECTED_CORE_EVALUATION_MODULES = {
+    "bundle",
+    "examples",
+    "pipeline",
+    "prompting",
+    "reporting",
+    "results",
+    "scoring",
+}
+OBSOLETE_TOP_LEVEL_EVALUATION_MODULES = {
+    "base_evaluation",
+    "base_evaluation_pipeline",
+    "base_evaluation_tracking",
+    "base_sampling",
+    "bpb",
+    "core_bundle",
+    "core_evaluation",
+    "core_evaluation_pipeline",
+    "core_examples",
+    "core_prompting",
+    "core_reporting",
+    "core_scoring",
+    "full_document_bpb",
+    "nanochat_bpb",
+    "tokenizer_evaluation",
+    "tokenizer_tracking",
+}
 REQUIREMENT_NAME = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)")
 EXTRA_MARKER = re.compile(r"extra\s*==\s*['\"]([^'\"]+)['\"]")
 
@@ -54,6 +93,23 @@ def test_packages_import_from_the_planned_layout() -> None:
         == PROJECT_ROOT / "src" / "scratch_llm"
     )
     assert Path(scripts.__file__).resolve().parent == PROJECT_ROOT / "scripts"
+
+
+def test_evaluation_modules_are_grouped_by_scope() -> None:
+    evaluation_directory = PROJECT_ROOT / "src" / "scratch_llm" / "evaluation"
+    core_directory = evaluation_directory / "core"
+
+    for module_name in EXPECTED_EVALUATION_MODULES:
+        spec = find_spec(f"scratch_llm.evaluation.{module_name}")
+        assert spec is not None
+        assert Path(spec.origin or "").resolve().parent == evaluation_directory
+    for module_name in EXPECTED_CORE_EVALUATION_MODULES:
+        spec = find_spec(f"scratch_llm.evaluation.core.{module_name}")
+        assert spec is not None
+        assert Path(spec.origin or "").resolve().parent == core_directory
+
+    for module_name in OBSOLETE_TOP_LEVEL_EVALUATION_MODULES:
+        assert find_spec(f"scratch_llm.{module_name}") is None
 
 
 def test_editable_install_exposes_packages_outside_the_repository(

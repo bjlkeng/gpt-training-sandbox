@@ -7,14 +7,14 @@ from torch import nn
 
 import pytest
 
-from scratch_llm.core_bundle import CoreTask
-from scratch_llm.core_examples import (
+from scratch_llm.evaluation.core.bundle import CoreTask
+from scratch_llm.evaluation.core.examples import (
     CoreTaskExamples,
     LanguageModelingExample,
     MultipleChoiceExample,
 )
-from scratch_llm.core_prompting import build_core_token_batch
-from scratch_llm.core_scoring import (
+from scratch_llm.evaluation.core.prompting import build_core_token_batch
+from scratch_llm.evaluation.core.scoring import (
     CoreScoringError,
     prepare_core_evaluation_cases,
     score_core_token_batch,

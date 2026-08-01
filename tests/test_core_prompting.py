@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from scratch_llm.core_bundle import CoreTask
-from scratch_llm.core_examples import (
+from scratch_llm.evaluation.core.bundle import CoreTask
+from scratch_llm.evaluation.core.examples import (
     LanguageModelingExample,
     MultipleChoiceExample,
     SchemaExample,
 )
-from scratch_llm.core_prompting import (
+from scratch_llm.evaluation.core.prompting import (
     CorePromptingError,
     build_core_token_batch,
     render_core_prompts,

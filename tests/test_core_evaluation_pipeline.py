@@ -14,11 +14,11 @@ from torch import nn
 
 import pytest
 
-import scratch_llm.core_evaluation_pipeline as pipeline
-from scratch_llm.core_bundle import CoreBundleSpec, load_core_bundle
-from scratch_llm.core_evaluation import CoreEvaluationError
-from scratch_llm.core_evaluation_pipeline import evaluate_core_bundle
-from scratch_llm.core_reporting import (
+import scratch_llm.evaluation.core.pipeline as pipeline
+from scratch_llm.evaluation.core.bundle import CoreBundleSpec, load_core_bundle
+from scratch_llm.evaluation.core.results import CoreEvaluationError
+from scratch_llm.evaluation.core.pipeline import evaluate_core_bundle
+from scratch_llm.evaluation.core.reporting import (
     render_core_comparison_markdown,
     write_core_comparison_markdown,
 )

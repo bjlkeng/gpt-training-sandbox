@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from scratch_llm.base_sampling import (
+from scratch_llm.evaluation.sampling import (
     FIXED_BASE_PROMPTS,
     FIXED_BASE_PROMPT_SET_IDENTITY,
     BaseSamplesResult,

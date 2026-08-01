@@ -20,7 +20,7 @@ from scratch_llm._validation import (
     require_non_negative_integer,
     require_positive_integer,
 )
-from scratch_llm.bpb import (
+from scratch_llm.evaluation.bpb import (
     BaseValidationResult,
     evaluate_bpb_batches,
 )

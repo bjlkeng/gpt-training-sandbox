@@ -10,13 +10,13 @@ from typing import Any
 
 import pytest
 
-from scratch_llm.base_evaluation import (
+from scratch_llm.evaluation.base import (
     BaseEvaluationContext,
     BaseEvaluationUnavailableError,
     execute_base_evaluation_modes,
     normalize_base_evaluation_modes,
 )
-from scratch_llm.base_evaluation_tracking import (
+from scratch_llm.evaluation.base_tracking import (
     BASE_EVALUATION_ARTIFACT_NAME,
     BASE_EVALUATION_ARTIFACT_TYPE,
     BASE_EVALUATION_REPORT_FORMAT,
@@ -25,32 +25,32 @@ from scratch_llm.base_evaluation_tracking import (
     BaseEvaluationReportConflictError,
     report_completed_base_evaluation,
 )
-from scratch_llm.base_sampling import (
+from scratch_llm.evaluation.sampling import (
     BaseSample,
     BaseSamplesResult,
     FIXED_BASE_PROMPTS,
     FIXED_BASE_PROMPT_SET_IDENTITY,
     FixedBaseSamplingConfig,
 )
-from scratch_llm.core_evaluation import (
+from scratch_llm.evaluation.core.results import (
     CORE_PROTOCOL_ID,
     CoreEvaluationResult,
     CoreReferenceComparison,
     CoreTaskResult,
 )
 from scratch_llm.best_checkpoint import PeriodicValidationResult
-from scratch_llm.bpb import BPBAccumulation, BaseValidationResult
-from scratch_llm.full_document_bpb import (
+from scratch_llm.evaluation.bpb import BPBAccumulation, BaseValidationResult
+from scratch_llm.evaluation.full_document_bpb import (
     FULL_DOCUMENT_PROTOCOL_ID,
     FULL_DOCUMENT_PROTOCOL_VERSION,
 )
-from scratch_llm.nanochat_bpb import (
+from scratch_llm.evaluation.nanochat_bpb import (
     NANOCHAT_COMPAT_EVAL_METRIC,
     NANOCHAT_COMPAT_PROTOCOL_ID,
     NANOCHAT_COMPAT_PROTOCOL_VERSION,
     NANOCHAT_REFERENCE_COMMIT,
 )
-from scratch_llm.full_document_bpb import FULL_DOCUMENT_EVAL_METRIC
+from scratch_llm.evaluation.full_document_bpb import FULL_DOCUMENT_EVAL_METRIC
 from scratch_llm.tracking import Tracker
 
 
@@ -304,7 +304,7 @@ def test_core_report_marker_failure_removes_new_comparison_artifact(
         raise OSError("cannot install completion marker")
 
     monkeypatch.setattr(
-        "scratch_llm.base_evaluation_tracking.save_json",
+        "scratch_llm.evaluation.base_tracking.save_json",
         fail_save,
     )
     with pytest.raises(OSError, match="completion marker"):

@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from scratch_llm._validation import require_positive_integer
-from scratch_llm.core_bundle import CoreTask
-from scratch_llm.core_evaluation import CoreEvaluationError, CoreTaskType
-from scratch_llm.core_examples import (
+from scratch_llm.evaluation.core.bundle import CoreTask
+from scratch_llm.evaluation.core.results import CoreEvaluationError, CoreTaskType
+from scratch_llm.evaluation.core.examples import (
     CoreExample,
     LanguageModelingExample,
     MultipleChoiceExample,

@@ -9,16 +9,19 @@ import torch
 from torch import nn
 
 from scratch_llm._validation import require_non_empty_string, require_positive_integer
-from scratch_llm.core_bundle import CoreBundle, CoreTask
-from scratch_llm.core_evaluation import (
+from scratch_llm.evaluation.core.bundle import CoreBundle, CoreTask
+from scratch_llm.evaluation.core.results import (
     CoreEvaluationError,
     CoreEvaluationResult,
     CoreReferenceComparison,
     CoreTaskResult,
 )
-from scratch_llm.core_examples import CoreTaskExamples, load_core_task_examples
-from scratch_llm.core_prompting import build_core_token_batch
-from scratch_llm.core_scoring import (
+from scratch_llm.evaluation.core.examples import (
+    CoreTaskExamples,
+    load_core_task_examples,
+)
+from scratch_llm.evaluation.core.prompting import build_core_token_batch
+from scratch_llm.evaluation.core.scoring import (
     prepare_core_evaluation_cases,
     score_core_token_batch,
 )

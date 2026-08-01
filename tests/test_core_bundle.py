@@ -11,12 +11,12 @@ import zipfile
 
 import pytest
 
-from scratch_llm.core_bundle import (
+from scratch_llm.evaluation.core.bundle import (
     CoreBundleError,
     CoreBundleSpec,
     load_core_bundle,
 )
-from scratch_llm.core_examples import load_core_task_examples
+from scratch_llm.evaluation.core.examples import load_core_task_examples
 
 
 TASKS = (

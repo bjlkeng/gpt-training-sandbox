@@ -12,10 +12,10 @@ import pytest
 import torch
 from torch import nn
 
-import scratch_llm.base_evaluation_pipeline as pipeline
-from scratch_llm.base_evaluation import BaseEvaluationError
-from scratch_llm.base_evaluation_pipeline import evaluate_checkpoint_base_model
-from scratch_llm.bpb import BPBAccumulation, BaseValidationResult
+import scratch_llm.evaluation.base_pipeline as pipeline
+from scratch_llm.evaluation.base import BaseEvaluationError
+from scratch_llm.evaluation.base_pipeline import evaluate_checkpoint_base_model
+from scratch_llm.evaluation.bpb import BPBAccumulation, BaseValidationResult
 from scratch_llm.config import (
     GPTConfig,
     GenerationConfig,
@@ -24,17 +24,17 @@ from scratch_llm.config import (
     TokenizerConfig,
     TrainConfig,
 )
-from scratch_llm.core_evaluation import (
+from scratch_llm.evaluation.core.results import (
     CORE_PROTOCOL_ID,
     CoreEvaluationResult,
     CoreReferenceComparison,
     CoreTaskResult,
 )
-from scratch_llm.full_document_bpb import (
+from scratch_llm.evaluation.full_document_bpb import (
     FULL_DOCUMENT_PROTOCOL_ID,
     FULL_DOCUMENT_PROTOCOL_VERSION,
 )
-from scratch_llm.nanochat_bpb import (
+from scratch_llm.evaluation.nanochat_bpb import (
     NANOCHAT_COMPAT_PROTOCOL_ID,
     NANOCHAT_COMPAT_PROTOCOL_VERSION,
     NANOCHAT_REFERENCE_COMMIT,

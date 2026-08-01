@@ -12,12 +12,12 @@ import pytest
 import torch
 from torch import nn
 
-import scratch_llm.full_document_bpb as full_document_bpb
+import scratch_llm.evaluation.full_document_bpb as full_document_bpb
 from scratch_llm.data import (
     DocumentPackingTokenLoader,
     write_tokenized_parquet_shards,
 )
-from scratch_llm.full_document_bpb import (
+from scratch_llm.evaluation.full_document_bpb import (
     FULL_DOCUMENT_EVAL_METRIC,
     FULL_DOCUMENT_PROTOCOL_ID,
     FULL_DOCUMENT_TRAIN_METRIC,
@@ -26,7 +26,7 @@ from scratch_llm.full_document_bpb import (
     evaluate_full_document_bpb,
     full_document_metric_value,
 )
-from scratch_llm.nanochat_bpb import (
+from scratch_llm.evaluation.nanochat_bpb import (
     NanochatCompatibilityConfig,
     evaluate_nanochat_compatible_bpb,
 )
@@ -378,7 +378,7 @@ def test_production_protocol_imports_neither_compatibility_nor_training_loaders(
                 imported_modules.add(node.module)
             imported_names.update(alias.name for alias in node.names)
 
-    assert "scratch_llm.nanochat_bpb" not in imported_modules
+    assert "scratch_llm.evaluation.nanochat_bpb" not in imported_modules
     assert {
         "DocumentPackingTokenLoader",
         "RandomOffsetTokenLoader",

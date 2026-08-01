@@ -21,10 +21,10 @@ from scratch_llm._validation import (
     require_non_negative_integer,
     require_positive_integer,
 )
-from scratch_llm.bpb import BaseValidationResult
+from scratch_llm.evaluation.bpb import BaseValidationResult
 from scratch_llm.config import ProjectConfig, load_config
-from scratch_llm.full_document_bpb import FULL_DOCUMENT_PROTOCOL_ID
-from scratch_llm.nanochat_bpb import NANOCHAT_COMPAT_PROTOCOL_ID
+from scratch_llm.evaluation.full_document_bpb import FULL_DOCUMENT_PROTOCOL_ID
+from scratch_llm.evaluation.nanochat_bpb import NANOCHAT_COMPAT_PROTOCOL_ID
 from scratch_llm.utils import load_json
 
 

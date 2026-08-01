@@ -9,18 +9,18 @@ from pathlib import Path
 import torch
 from torch import Tensor
 
-from scratch_llm.base_evaluation import (
+from scratch_llm.evaluation.base import (
     BaseEvaluationContext,
     BaseEvaluationCoreRunner,
     BaseEvaluationError,
     BaseEvaluationMode,
     execute_base_evaluation_modes,
 )
-from scratch_llm.base_evaluation_tracking import (
+from scratch_llm.evaluation.base_tracking import (
     TrackedBaseEvaluation,
     report_completed_base_evaluation,
 )
-from scratch_llm.base_sampling import (
+from scratch_llm.evaluation.sampling import (
     BaseSamplesResult,
     FixedBaseSamplingConfig,
     generate_fixed_base_samples,
@@ -28,15 +28,15 @@ from scratch_llm.base_sampling import (
 from scratch_llm.best_checkpoint import PeriodicValidationResult
 from scratch_llm.checkpoint import load_model_checkpoint
 from scratch_llm.config import ProjectConfig
-from scratch_llm.core_bundle import CoreBundle, load_core_bundle
-from scratch_llm.core_evaluation import CoreTaskResult
-from scratch_llm.core_evaluation_pipeline import evaluate_core_bundle
-from scratch_llm.full_document_bpb import (
+from scratch_llm.evaluation.core.bundle import CoreBundle, load_core_bundle
+from scratch_llm.evaluation.core.results import CoreTaskResult
+from scratch_llm.evaluation.core.pipeline import evaluate_core_bundle
+from scratch_llm.evaluation.full_document_bpb import (
     FullDocumentProtocolConfig,
     evaluate_full_document_bpb,
 )
 from scratch_llm.identity import file_identity, project_config_identity
-from scratch_llm.nanochat_bpb import (
+from scratch_llm.evaluation.nanochat_bpb import (
     NanochatCompatibilityConfig,
     evaluate_nanochat_compatible_bpb,
 )

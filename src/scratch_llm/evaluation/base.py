@@ -11,9 +11,9 @@ from scratch_llm._validation import (
     require_non_negative_integer,
     require_positive_integer,
 )
-from scratch_llm.base_sampling import BaseSamplesResult
+from scratch_llm.evaluation.sampling import BaseSamplesResult
 from scratch_llm.best_checkpoint import PeriodicValidationResult
-from scratch_llm.core_evaluation import CoreEvaluationResult
+from scratch_llm.evaluation.core.results import CoreEvaluationResult
 
 
 BaseEvaluationMode: TypeAlias = Literal["bpb", "sample", "core"]

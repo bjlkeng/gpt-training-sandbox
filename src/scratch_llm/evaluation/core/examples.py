@@ -10,7 +10,7 @@ from typing import TypeAlias
 import zipfile
 
 from scratch_llm._validation import JsonValueValidator, require_integer
-from scratch_llm.core_bundle import CoreBundle, CoreBundleError, CoreTask
+from scratch_llm.evaluation.core.bundle import CoreBundle, CoreBundleError, CoreTask
 
 
 @dataclass(frozen=True)

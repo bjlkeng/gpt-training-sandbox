@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from scratch_llm.core_evaluation import centered_core_score
-from scratch_llm.core_evaluation import (
+from scratch_llm.evaluation.core.results import centered_core_score
+from scratch_llm.evaluation.core.results import (
     CoreEvaluationResult,
     CoreReferenceComparison,
     CoreTaskResult,

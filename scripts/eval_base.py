@@ -6,16 +6,16 @@ import argparse
 from collections.abc import Sequence
 from pathlib import Path
 
-from scratch_llm.base_evaluation import (
+from scratch_llm.evaluation.base import (
     BaseEvaluationError,
     BaseEvaluationUnavailableError,
     normalize_base_evaluation_modes,
 )
-from scratch_llm.base_evaluation_pipeline import evaluate_checkpoint_base_model
-from scratch_llm.base_evaluation_tracking import BaseEvaluationReportConflictError
+from scratch_llm.evaluation.base_pipeline import evaluate_checkpoint_base_model
+from scratch_llm.evaluation.base_tracking import BaseEvaluationReportConflictError
 from scratch_llm.checkpoint import CheckpointError, load_checkpoint_metadata
 from scratch_llm.config import ProjectConfig
-from scratch_llm.core_evaluation import CoreEvaluationError, CoreTaskResult
+from scratch_llm.evaluation.core.results import CoreEvaluationError, CoreTaskResult
 from scratch_llm.run import RunConflictError
 from scratch_llm.tokenized_data import TokenizedDataError
 from scratch_llm.tracking_state import (

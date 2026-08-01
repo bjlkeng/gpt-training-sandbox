@@ -11,11 +11,11 @@ from types import MappingProxyType
 from typing import Any, Final
 
 from scratch_llm._validation import require_non_negative_integer
-from scratch_llm.base_evaluation import (
+from scratch_llm.evaluation.base import (
     BaseEvaluationContext,
     CompletedBaseEvaluation,
 )
-from scratch_llm.base_sampling import (
+from scratch_llm.evaluation.sampling import (
     BaseSamplesResult,
     write_base_samples_markdown,
 )
@@ -24,18 +24,18 @@ from scratch_llm.best_checkpoint import (
     PeriodicValidationResult,
     ValidationCheckpointState,
 )
-from scratch_llm.bpb import BaseValidationResult
-from scratch_llm.core_reporting import (
+from scratch_llm.evaluation.bpb import BaseValidationResult
+from scratch_llm.evaluation.core.reporting import (
     CORE_COMPARISON_FILENAME,
     render_core_comparison_markdown,
     write_core_comparison_markdown,
 )
-from scratch_llm.full_document_bpb import (
+from scratch_llm.evaluation.full_document_bpb import (
     FULL_DOCUMENT_EVAL_METRIC,
     FULL_DOCUMENT_PROTOCOL_ID,
     FULL_DOCUMENT_TRAIN_METRIC,
 )
-from scratch_llm.nanochat_bpb import (
+from scratch_llm.evaluation.nanochat_bpb import (
     NANOCHAT_COMPAT_EVAL_METRIC,
     NANOCHAT_COMPAT_PROTOCOL_ID,
     NANOCHAT_COMPAT_TRAIN_METRIC,

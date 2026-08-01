@@ -15,7 +15,7 @@ from scratch_llm._validation import (
     require_non_negative_integer,
     require_positive_integer,
 )
-from scratch_llm.nanochat_bpb import NANOCHAT_REFERENCE_COMMIT
+from scratch_llm.evaluation.nanochat_bpb import NANOCHAT_REFERENCE_COMMIT
 
 
 CORE_PROTOCOL_ID: Final = "nanochat_core_v1"

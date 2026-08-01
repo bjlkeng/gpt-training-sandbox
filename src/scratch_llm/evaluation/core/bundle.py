@@ -19,7 +19,7 @@ from scratch_llm._validation import (
     require_non_empty_string,
     require_non_negative_integer,
 )
-from scratch_llm.core_evaluation import CoreEvaluationError, CoreTaskType
+from scratch_llm.evaluation.core.results import CoreEvaluationError, CoreTaskType
 from scratch_llm.identity import file_identity
 
 
