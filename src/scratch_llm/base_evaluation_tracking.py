@@ -11,6 +11,10 @@ from types import MappingProxyType
 from typing import Any, Final
 
 from scratch_llm._validation import require_non_negative_integer
+from scratch_llm.base_evaluation import (
+    BaseEvaluationContext,
+    CompletedBaseEvaluation,
+)
 from scratch_llm.base_sampling import (
     BaseSamplesResult,
     write_base_samples_markdown,
@@ -36,7 +40,7 @@ from scratch_llm.utils import save_json
 
 
 BASE_EVALUATION_REPORT_FORMAT: Final = "scratch_llm_base_evaluation"
-BASE_EVALUATION_REPORT_FORMAT_VERSION: Final = 1
+BASE_EVALUATION_REPORT_FORMAT_VERSION: Final = 2
 BASE_EVALUATION_ARTIFACT_NAME: Final = "base_eval"
 BASE_SAMPLES_ARTIFACT_NAME: Final = "base_samples"
 BASE_EVALUATION_ARTIFACT_TYPE: Final = "evaluation"
@@ -55,10 +59,11 @@ _BASE_SAMPLES_RELATIVE_PATH = Path("metrics/base_samples.md")
 
 @dataclass(frozen=True)
 class TrackedBaseEvaluation:
-    """Completed standalone BPB metrics and canonical report path."""
+    """Completed standalone metrics and canonical artifact paths."""
 
     metrics: Mapping[str, float]
     report_path: Path
+    sample_markdown_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +72,10 @@ class TrackedBaseSamples:
 
     metrics: Mapping[str, float]
     markdown_path: Path
+
+
+class BaseEvaluationReportConflictError(RuntimeError):
+    """A completed run already owns a different canonical evaluation report."""
 
 
 def track_periodic_base_validation(
@@ -126,27 +135,65 @@ def report_standalone_base_evaluation(
     tracker: Tracker,
     run_dir: str | Path,
 ) -> TrackedBaseEvaluation:
-    """Atomically write and track one completed standalone dual-BPB result."""
+    """Publish a dual-BPB result through the complete standalone contract."""
 
     compatibility, full_document = _complete_protocol_results(validation)
+    return report_completed_base_evaluation(
+        CompletedBaseEvaluation(
+            context=BaseEvaluationContext(
+                checkpoint_identity=compatibility.checkpoint_identity,
+                checkpoint_step=0,
+                config_identity="legacy:unspecified",
+                tokenizer_identity=compatibility.tokenizer_identity,
+                validation_manifest_identity=(
+                    compatibility.validation_manifest_identity
+                ),
+                run_kind="full",
+                max_per_task=None,
+            ),
+            requested_modes=("bpb",),
+            completed_modes=("bpb",),
+            validation=PeriodicValidationResult(
+                compatibility=compatibility,
+                full_document=full_document,
+            ),
+            samples=None,
+            core_result=None,
+        ),
+        tracker=tracker,
+        run_dir=run_dir,
+    )
+
+
+def report_completed_base_evaluation(
+    completed: CompletedBaseEvaluation,
+    *,
+    tracker: Tracker,
+    run_dir: str | Path,
+) -> TrackedBaseEvaluation:
+    """Publish one all-modes completion marker and its finalized tracker fan-out."""
+
+    if not isinstance(completed, CompletedBaseEvaluation):
+        raise TypeError(
+            "completed must be a CompletedBaseEvaluation, got "
+            f"{type(completed).__name__}"
+        )
     _require_tracker(tracker)
     resolved_run_dir = _run_directory(run_dir)
-    payload = _base_evaluation_payload(
-        compatibility,
-        full_document,
-    )
-    report_path = save_json(
-        payload,
-        resolved_run_dir / _BASE_EVALUATION_RELATIVE_PATH,
-    )
-    metrics = {
-        NANOCHAT_COMPAT_EVAL_METRIC: compatibility.bpb,
-        FULL_DOCUMENT_EVAL_METRIC: full_document.bpb,
-        NANOCHAT_SOURCE_BYTE_RETENTION_METRIC: (compatibility.source_byte_retention),
-        FULL_DOCUMENT_SOURCE_BYTE_RETENTION_METRIC: (
-            full_document.source_byte_retention
-        ),
-    }
+    payload = _base_evaluation_payload(completed)
+    report_path = resolved_run_dir / _BASE_EVALUATION_RELATIVE_PATH
+    report_exists = _require_compatible_existing_report(report_path, payload)
+
+    sample_markdown_path: Path | None = None
+    if completed.samples is not None:
+        sample_markdown_path = write_base_samples_markdown(
+            completed.samples,
+            resolved_run_dir / "metrics",
+        )
+    if not report_exists:
+        report_path = save_json(payload, report_path)
+
+    metrics = _completed_metrics(completed)
     event_prefix = f"base-evaluation:{_payload_identity(payload)}"
     _log_metrics_once(
         tracker,
@@ -159,9 +206,17 @@ def report_standalone_base_evaluation(
         name=BASE_EVALUATION_ARTIFACT_NAME,
         event_id=f"{event_prefix}:artifact:base_eval.json",
     )
+    if sample_markdown_path is not None:
+        _log_artifact_once(
+            tracker,
+            _BASE_SAMPLES_RELATIVE_PATH.as_posix(),
+            name=BASE_SAMPLES_ARTIFACT_NAME,
+            event_id=f"{event_prefix}:artifact:base_samples.md",
+        )
     return TrackedBaseEvaluation(
         metrics=MappingProxyType(metrics),
         report_path=report_path,
+        sample_markdown_path=sample_markdown_path,
     )
 
 
@@ -207,17 +262,107 @@ def report_base_samples(
 
 
 def _base_evaluation_payload(
-    compatibility: BaseValidationResult,
-    full_document: BaseValidationResult,
+    completed: CompletedBaseEvaluation,
 ) -> dict[str, object]:
-    return {
+    context = completed.context
+    payload: dict[str, object] = {
+        "bounded": context.run_kind == "bounded",
+        "completed_modes": list(completed.completed_modes),
         "format": BASE_EVALUATION_REPORT_FORMAT,
         "format_version": BASE_EVALUATION_REPORT_FORMAT_VERSION,
-        "results": {
+        "identities": {
+            "checkpoint": {
+                "identity": context.checkpoint_identity,
+                "step": context.checkpoint_step,
+            },
+            "config": context.config_identity,
+            "tokenizer": context.tokenizer_identity,
+            "validation_manifest": context.validation_manifest_identity,
+        },
+        "max_per_task": context.max_per_task,
+        "requested_modes": list(completed.requested_modes),
+        "results": {},
+        "run_kind": context.run_kind,
+        "status": "completed",
+    }
+    if completed.validation is not None:
+        compatibility, full_document = _complete_protocol_results(completed.validation)
+        payload["results"] = {
             NANOCHAT_COMPAT_PROTOCOL_ID: compatibility.to_dict(),
             FULL_DOCUMENT_PROTOCOL_ID: full_document.to_dict(),
-        },
-    }
+        }
+    if completed.samples is not None:
+        samples = completed.samples
+        payload["samples"] = {
+            "artifact_path": _BASE_SAMPLES_RELATIVE_PATH.as_posix(),
+            "completion_reasons": {
+                "max_new_tokens": sum(
+                    sample.completion_reason == "max_new_tokens"
+                    for sample in samples.samples
+                ),
+                "stop_token": sum(
+                    sample.completion_reason == "stop_token"
+                    for sample in samples.samples
+                ),
+            },
+            "generation": samples.config.to_dict(),
+            "generation_identity": samples.generation_identity,
+            "prompt_set_identity": samples.prompt_set_identity,
+            "result": samples.to_dict(),
+            "sample_count": len(samples.samples),
+            "sampled_token_count": sum(
+                sample.sampled_token_count for sample in samples.samples
+            ),
+        }
+    if completed.core_result is not None:
+        payload["core"] = dict(completed.core_result)
+    return payload
+
+
+def _completed_metrics(completed: CompletedBaseEvaluation) -> dict[str, float]:
+    metrics: dict[str, float] = {}
+    if completed.validation is not None:
+        compatibility, full_document = _complete_protocol_results(completed.validation)
+        metrics.update(
+            {
+                NANOCHAT_COMPAT_EVAL_METRIC: compatibility.bpb,
+                FULL_DOCUMENT_EVAL_METRIC: full_document.bpb,
+                NANOCHAT_SOURCE_BYTE_RETENTION_METRIC: (
+                    compatibility.source_byte_retention
+                ),
+                FULL_DOCUMENT_SOURCE_BYTE_RETENTION_METRIC: (
+                    full_document.source_byte_retention
+                ),
+            }
+        )
+    if completed.samples is not None:
+        sampled_tokens = sum(
+            sample.sampled_token_count for sample in completed.samples.samples
+        )
+        elapsed_seconds = sum(
+            sample.elapsed_seconds for sample in completed.samples.samples
+        )
+        metrics[BASE_SAMPLE_THROUGHPUT_METRIC] = sampled_tokens / elapsed_seconds
+    return metrics
+
+
+def _require_compatible_existing_report(
+    path: Path,
+    expected: dict[str, object],
+) -> bool:
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return False
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise BaseEvaluationReportConflictError(
+            f"existing base evaluation report cannot be validated: {error}"
+        ) from error
+    if existing != expected:
+        raise BaseEvaluationReportConflictError(
+            f"{path} already contains a different completed evaluation"
+        )
+    return True
 
 
 def _complete_protocol_results(
@@ -303,6 +448,7 @@ __all__ = [
     "BASE_EVALUATION_REPORT_FORMAT_VERSION",
     "BASE_SAMPLE_THROUGHPUT_METRIC",
     "BASE_SAMPLES_ARTIFACT_NAME",
+    "BaseEvaluationReportConflictError",
     "FULL_DOCUMENT_MINIMUM_TRAIN_METRIC",
     "FULL_DOCUMENT_SOURCE_BYTE_RETENTION_METRIC",
     "NANOCHAT_MINIMUM_TRAIN_METRIC",
@@ -310,6 +456,7 @@ __all__ = [
     "TrackedBaseEvaluation",
     "TrackedBaseSamples",
     "report_base_samples",
+    "report_completed_base_evaluation",
     "report_standalone_base_evaluation",
     "track_periodic_base_validation",
 ]

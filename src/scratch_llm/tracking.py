@@ -160,7 +160,9 @@ class RunSummary:
                 f"{state['schema_version']!r}"
             )
         existing_run = self._validate_run(state["run"])
-        if existing_run != self._run:
+        if any(
+            existing_run[field] != self._run[field] for field in ("name", "output_dir")
+        ):
             raise ValueError(f"{self.path} belongs to a different run identity")
         status = state["status"]
         if not isinstance(status, str) or status not in _RUN_STATUSES:

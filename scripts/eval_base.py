@@ -6,10 +6,55 @@ import argparse
 from collections.abc import Sequence
 from pathlib import Path
 
-from scripts._common import config_parser, run_config_stub
+from scratch_llm.base_evaluation import (
+    BaseEvaluationError,
+    BaseEvaluationUnavailableError,
+    normalize_base_evaluation_modes,
+)
+from scratch_llm.base_evaluation_pipeline import evaluate_checkpoint_base_model
+from scratch_llm.base_evaluation_tracking import BaseEvaluationReportConflictError
+from scratch_llm.checkpoint import CheckpointError, load_checkpoint_metadata
+from scratch_llm.config import ProjectConfig
+from scratch_llm.run import RunConflictError
+from scratch_llm.tokenized_data import TokenizedDataError
+from scratch_llm.tracking_state import (
+    TrackingState,
+    resolve_wandb_resume_state,
+)
+from scripts._common import (
+    config_parser,
+    prepare_tracked_run,
+    resolve_config_arguments,
+)
 
 
 COMMAND = "eval_base"
+
+
+def _resolve_wandb_evaluation_state(
+    config: ProjectConfig,
+    checkpoint_path: Path,
+) -> TrackingState | None:
+    """Continue the checkpoint's remote run only for the same local run."""
+
+    wandb = config.tracking.wandb
+    if not wandb.enabled or wandb.mode == "disabled":
+        return None
+    metadata = load_checkpoint_metadata(checkpoint_path)
+    source = metadata.config.run
+    current = config.run
+    same_local_run = (
+        source.name == current.name
+        and Path(source.output_dir).resolve() == Path(current.output_dir).resolve()
+    )
+    return resolve_wandb_resume_state(
+        metadata.tracking,
+        source_run_name=source.name,
+        source_output_dir=source.output_dir,
+        current_run_name=current.name,
+        current_output_dir=current.output_dir,
+        behavior="same" if same_local_run else "fork",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -19,7 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--checkpoint",
         type=Path,
-        help="Checkpoint to evaluate once base evaluation is implemented.",
+        help="Model checkpoint to evaluate; required unless --dry-run is used.",
     )
     parser.add_argument(
         "--eval",
@@ -38,7 +83,77 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the base-model evaluation command."""
 
-    return run_config_stub(build_parser(), command=COMMAND, argv=argv)
+    parser = build_parser()
+    arguments = parser.parse_args(argv)
+    config = resolve_config_arguments(parser, arguments)
+    try:
+        modes = normalize_base_evaluation_modes(arguments.eval)
+    except (TypeError, ValueError) as error:
+        parser.error(str(error))
+    if arguments.max_per_task is not None and arguments.max_per_task <= 0:
+        parser.error("--max-per-task must be a positive integer")
+    if arguments.max_per_task is not None and "core" not in modes:
+        parser.error("--max-per-task requires --eval core")
+    if "core" in modes:
+        parser.error(
+            "CORE evaluation is unavailable until the Milestone 5 runner is registered"
+        )
+
+    if arguments.dry_run:
+        paths, tracker = prepare_tracked_run(parser, config, command=COMMAND)
+        with tracker:
+            print(f"Run directory: {paths.run_dir}")
+            print(f"Resolved config: {paths.config_path}")
+            print(f"Evaluation modes: {','.join(modes)}")
+            print("Resolved values:")
+            print(config.to_yaml(), end="")
+        return 0
+
+    if arguments.checkpoint is None:
+        parser.error("--checkpoint is required unless --dry-run is used")
+    try:
+        wandb_resume_state = _resolve_wandb_evaluation_state(
+            config,
+            arguments.checkpoint,
+        )
+    except (CheckpointError, OSError, TypeError, ValueError) as error:
+        parser.error(str(error))
+    paths, tracker = prepare_tracked_run(
+        parser,
+        config,
+        command=COMMAND,
+        wandb_resume_state=wandb_resume_state,
+    )
+    with tracker:
+        try:
+            result = evaluate_checkpoint_base_model(
+                config,
+                checkpoint_path=arguments.checkpoint,
+                modes=modes,
+                tracker=tracker,
+                run_dir=paths.run_dir,
+                max_per_task=arguments.max_per_task,
+            )
+        except (
+            BaseEvaluationError,
+            BaseEvaluationReportConflictError,
+            BaseEvaluationUnavailableError,
+            CheckpointError,
+            OSError,
+            RunConflictError,
+            RuntimeError,
+            TokenizedDataError,
+            TypeError,
+            ValueError,
+        ) as error:
+            parser.error(str(error))
+
+    print(f"Run directory: {paths.run_dir}")
+    print(f"Evaluation modes: {','.join(modes)}")
+    print(f"Report: {result.report_path}")
+    if result.sample_markdown_path is not None:
+        print(f"Samples: {result.sample_markdown_path}")
+    return 0
 
 
 if __name__ == "__main__":

@@ -624,6 +624,48 @@ def test_tracker_factory_resume_keeps_one_config_and_advances_summary(
     }
 
 
+def test_tracker_factory_advances_one_run_across_pipeline_stages(
+    tmp_path: Path,
+) -> None:
+    config = ProjectConfig(
+        run=RunConfig(
+            name="multi-stage-local",
+            device="cpu",
+            output_dir=str(tmp_path / "runs"),
+        )
+    )
+    paths = prepare_run(config)
+    pretrain = build_tracker(config, paths, stage="pretrain")
+    pretrain.log({"train/loss": 2.0}, step=1)
+    pretrain.finish()
+
+    evaluation = build_tracker(config, paths, stage="eval_base")
+    evaluation.log({"eval/val_bpb": 1.25})
+    evaluation.finish()
+
+    records = _read_jsonl(paths.metrics_dir / "metrics.jsonl")
+    assert [record["record_type"] for record in records].count("config") == 1
+    assert [record["record_type"] for record in records] == [
+        "config",
+        "metrics",
+        "metrics",
+    ]
+    assert json.loads((paths.metrics_dir / "summary.json").read_text()) == {
+        "schema_version": 1,
+        "run": {
+            "name": "multi-stage-local",
+            "output_dir": str(paths.run_dir),
+            "stage": "eval_base",
+        },
+        "status": "completed",
+        "latest_step": 1,
+        "latest_metrics": {
+            "eval/val_bpb": 1.25,
+            "train/loss": 2.0,
+        },
+    }
+
+
 def test_run_summary_resumes_atomically_without_losing_latest_scalars(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

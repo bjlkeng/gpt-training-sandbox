@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+import scripts.eval_base as eval_base_script
 import scripts.sample as sample_script
 from scratch_llm.checkpoint import save_checkpoint
 from scratch_llm.config import (
@@ -27,6 +28,7 @@ from scratch_llm.config import (
 from scratch_llm.model import GPT
 from scratch_llm.optim import build_lr_scheduler, build_optimizer
 from scratch_llm.tokenizer import VOCAB_SIZE, ByteTokenizer
+from scratch_llm.tracking_state import TrackingState
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +46,7 @@ UNIMPLEMENTED_CONFIG_COMMANDS = tuple(
     for module in CONFIG_COMMANDS
     if module
     not in {
+        "scripts.eval_base",
         "scripts.pretrain",
         "scripts.eval_tokenizer",
         "scripts.train_tokenizer",
@@ -108,6 +111,92 @@ def test_pretrain_help_and_validation_expose_legacy_resume_migration() -> None:
     assert invalid_result.returncode != 0
     assert "--allow-non-exact-resume requires --resume" in invalid_result.stderr
     assert "Traceback" not in invalid_result.stderr
+
+
+def test_eval_base_normalizes_modes_and_rejects_unknown_or_unavailable_modes(
+    tmp_path: Path,
+) -> None:
+    common = (
+        "--config",
+        str(SMOKE_CONFIG),
+        "--override",
+        f"run.output_dir={tmp_path / 'runs'}",
+        "--override",
+        "run.name=base-eval-modes",
+    )
+
+    dry_run = _run_module(
+        "scripts.eval_base",
+        *common,
+        "--eval",
+        "Sample,BPB,sample",
+        "--dry-run",
+    )
+    unknown = _run_module(
+        "scripts.eval_base",
+        *common,
+        "--eval",
+        "bpb,unknown",
+        "--dry-run",
+    )
+    unavailable = _run_module(
+        "scripts.eval_base",
+        *common,
+        "--checkpoint",
+        str(tmp_path / "missing.pt"),
+        "--eval",
+        "core",
+    )
+
+    assert dry_run.returncode == 0, dry_run.stderr
+    assert "Evaluation modes: sample,bpb" in dry_run.stdout
+    assert unknown.returncode != 0
+    assert "unknown evaluation mode 'unknown'" in unknown.stderr
+    assert unavailable.returncode != 0
+    assert "CORE evaluation is unavailable until the Milestone 5" in unavailable.stderr
+    assert "Traceback" not in unknown.stderr + unavailable.stderr
+
+
+def test_eval_base_reuses_same_run_checkpoint_wandb_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = TrackingState(backend="wandb", run_id="remote-123")
+    source = ProjectConfig(
+        run=RunConfig(name="tracked", output_dir=str(tmp_path / "runs"))
+    )
+    active = load_config(
+        SMOKE_CONFIG,
+        [
+            "run.name=tracked",
+            f"run.output_dir={tmp_path / 'runs'}",
+            "tracking.wandb.enabled=true",
+            "tracking.wandb.mode=offline",
+        ],
+    )
+    monkeypatch.setattr(
+        eval_base_script,
+        "load_checkpoint_metadata",
+        lambda path: SimpleNamespace(config=source, tracking=state),
+    )
+
+    selected = eval_base_script._resolve_wandb_evaluation_state(
+        active,
+        tmp_path / "last.pt",
+    )
+
+    assert selected == state
+    forked = ProjectConfig(
+        run=RunConfig(name="comparison-copy", output_dir=str(tmp_path / "runs")),
+        tracking=active.tracking,
+    )
+    assert (
+        eval_base_script._resolve_wandb_evaluation_state(
+            forked,
+            tmp_path / "last.pt",
+        )
+        is None
+    )
 
 
 def test_dry_run_applies_wandb_environment_then_cli_without_importing_wandb(

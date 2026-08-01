@@ -289,13 +289,14 @@ def test_standalone_evaluation_writes_exact_dual_protocol_report_and_metadata(
     }
     assert result.metrics == expected_metrics
     assert result.report_path == run_dir / "metrics" / "base_eval.json"
-    assert json.loads(result.report_path.read_text()) == {
-        "format": BASE_EVALUATION_REPORT_FORMAT,
-        "format_version": BASE_EVALUATION_REPORT_FORMAT_VERSION,
-        "results": {
-            NANOCHAT_COMPAT_PROTOCOL_ID: validation.compatibility.to_dict(),
-            FULL_DOCUMENT_PROTOCOL_ID: validation.full_document.to_dict(),  # type: ignore[union-attr]
-        },
+    payload = json.loads(result.report_path.read_text())
+    assert payload["format"] == BASE_EVALUATION_REPORT_FORMAT
+    assert payload["format_version"] == BASE_EVALUATION_REPORT_FORMAT_VERSION
+    assert payload["status"] == "completed"
+    assert payload["requested_modes"] == payload["completed_modes"] == ["bpb"]
+    assert payload["results"] == {
+        NANOCHAT_COMPAT_PROTOCOL_ID: validation.compatibility.to_dict(),
+        FULL_DOCUMENT_PROTOCOL_ID: validation.full_document.to_dict(),  # type: ignore[union-attr]
     }
     assert tracker.metrics == [(expected_metrics, None)]
     assert tracker.artifacts == [
@@ -314,7 +315,6 @@ def test_standalone_report_is_atomic_and_tracks_nothing_after_write_failure(
     run_dir = tmp_path / "run"
     report_path = run_dir / "metrics" / "base_eval.json"
     report_path.parent.mkdir(parents=True)
-    report_path.write_text('{"stable": true}\n')
     tracker = _SpyTracker()
 
     def fail_replace(source: str | Path, destination: str | Path) -> None:
@@ -328,7 +328,7 @@ def test_standalone_report_is_atomic_and_tracks_nothing_after_write_failure(
             run_dir=run_dir,
         )
 
-    assert report_path.read_text() == '{"stable": true}\n'
+    assert not report_path.exists()
     assert not tuple(report_path.parent.glob(".base_eval.json.*.tmp"))
     assert tracker.metrics == []
     assert tracker.artifacts == []
