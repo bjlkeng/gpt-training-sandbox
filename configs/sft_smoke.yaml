@@ -1,0 +1,77 @@
+run:
+  name: sft-smoke
+  seed: 1337
+  device: cpu
+  output_dir: runs
+
+tracking:
+  wandb:
+    enabled: false
+    mode: disabled
+
+data:
+  profile: tiny_text
+  base_dir: data
+
+tokenizer:
+  type: byte
+  vocab_size: 265
+  max_chars: 100000
+  doc_cap: 10000
+
+model:
+  profile: simple_gpt
+  vocab_size: 265
+  seq_len: 64
+  n_layer: 2
+  n_head: 2
+  n_embd: 128
+  mlp_ratio: 4
+  dropout: 0.0
+  bias: false
+  tie_weights: true
+
+sft:
+  base_checkpoint: null
+  train_sources:
+    - kind: jsonl
+      path: data/fixtures/chat/train.jsonl
+      repeat_weight: 1
+      shuffle: true
+  validation_sources:
+    - kind: jsonl
+      path: data/fixtures/chat/validation.jsonl
+      repeat_weight: 1
+      shuffle: false
+  packing_buffer_size: 8
+  shuffle_buffer_size: 32
+  row_batch_size: 32
+  device_batch_size: 2
+  total_batch_size_tokens: 128
+  grad_accum_steps: auto
+  max_steps: 20
+  learning_rate: 0.00002
+  min_lr: 0.0
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  warmup_steps: 0
+  warmdown_ratio: 0.0
+  final_lr_frac: 0.05
+  eval_every: 5
+  eval_batches: 2
+  save_every: 5
+  log_every: 1
+  dtype: float32
+  compile: false
+  activation_checkpointing: false
+
+generation:
+  temperature: 0.0
+  top_k: 1
+  max_new_tokens: 64
+  seed: 1337
+
+web:
+  enabled: false

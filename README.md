@@ -4,10 +4,10 @@ A from-scratch PyTorch sandbox for pretraining, supervised finetuning, evaluatin
 
 The repository is being built in small vertical slices. The byte tokenizer,
 tiny decoder-only GPT, typed configuration, run layout, and local metrics
-foundations are present. The tiny-text pretraining path and checkpoint-backed
-sampling are executable, as is bounded tokenizer evaluation; the remaining
-evaluation and chat commands have stable interfaces whose non-dry-run
-implementations land in later slices.
+foundations are present. Tiny-text and production pretraining,
+checkpoint-backed sampling, bounded tokenizer/base evaluation, and supervised
+finetuning are executable; the remaining chat commands have stable interfaces
+whose non-dry-run implementations land in later slices.
 
 ## Roadmap status
 
@@ -1149,6 +1149,46 @@ a new validation loader for each non-negative optimizer step and names the
 in-memory checkpoint as `<prefix>#step:<step>`. Publishing metrics or reports
 is intentionally outside this protocol boundary.
 
+### Base-to-chat SFT training and exact resume
+
+`configs/sft_smoke.yaml` is a bounded CPU/local-JSONL contract;
+`configs/sft_20m_3090.yaml` records the initial single-RTX-3090 mixture and
+token budget. SFT optimization is typed separately from pretraining, with a
+default learning rate of `2e-5`, zero weight decay, exact gradient-accumulation
+arithmetic, finite validation batches, and explicit source choices. Hub
+sources load only verified local parquet caches prepared earlier; training
+never performs an implicit dataset download.
+
+Inspect a complete resolved SFT run without reading a checkpoint, data source,
+W&B, or accelerator:
+
+```bash
+uv run python -m scripts.train_sft \
+  --config configs/sft_smoke.yaml \
+  --dry-run
+```
+
+Start from base weights or exactly resume a saved SFT continuation:
+
+```bash
+uv run python -m scripts.train_sft \
+  --config configs/sft_smoke.yaml \
+  --base-checkpoint runs/base/checkpoints/best.pt
+
+uv run python -m scripts.train_sft \
+  --config configs/sft_smoke.yaml \
+  --resume runs/sft-smoke/checkpoints/step_000010.pt
+```
+
+Base initialization restores only the immutable model/tokenizer contract and
+records the base file's SHA-256 identity; the SFT optimizer and schedule start
+fresh. Current exact checkpoints carry a `pretrain` or `sft` stage. Pretraining
+cannot resume an SFT checkpoint, while model-only loading accepts either stage
+in evaluation mode. Exact SFT resume restores optimizer, scheduler, packed
+loader, global RNG, assistant-BPB minimum, tracker identity, and cumulative
+time/FLOPs. Configuration changes other than run name/output directory fail
+before continuation state is installed.
+
 ### Random token batches
 
 `RandomOffsetTokenLoader` consumes a validated `TokenizedShardReader` and
@@ -1290,7 +1330,6 @@ retained as a safety stop).
 The sampling command loads the model, byte tokenizer, and generation defaults
 from a versioned checkpoint. Pass `--prompt` more than once to sample multiple
 prompts, or override checkpoint settings with `--device`, `--max-new-tokens`,
-`--temperature`, `--top-k`, and `--seed`. The remaining command skeletons fail
-explicitly until their slices land. Inspect any interface without optional
-dependencies by running, for example, `uv run python -m scripts.web_chat
---help`.
+`--temperature`, `--top-k`, and `--seed`. Command skeletons whose slices have
+not landed fail explicitly. Inspect any interface without optional dependencies
+by running, for example, `uv run python -m scripts.web_chat --help`.

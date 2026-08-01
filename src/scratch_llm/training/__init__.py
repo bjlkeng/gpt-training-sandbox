@@ -1,1 +1,1 @@
-"""Training loops, state, checkpoints, optimization, and telemetry."""
+"""Pretraining/SFT loops, state, checkpoints, optimization, and telemetry."""

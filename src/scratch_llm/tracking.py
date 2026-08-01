@@ -825,6 +825,7 @@ def build_tracker(
     *,
     stage: str,
     wandb_resume_state: TrackingState | None = None,
+    enable_remote: bool = True,
 ) -> RunTracker:
     """Build the run's always-local tracker and optional W&B fan-out.
 
@@ -845,6 +846,8 @@ def build_tracker(
         TrackingState,
     ):
         raise TypeError("wandb_resume_state must be a TrackingState or None")
+    if not isinstance(enable_remote, bool):
+        raise TypeError("enable_remote must be a boolean")
 
     local = JsonlTracker(paths.run_dir / config.tracking.jsonl.path)
     trackers: list[Tracker] = [local]
@@ -861,6 +864,11 @@ def build_tracker(
             },
         )
         local.attach_summary(summary)
+
+        if not enable_remote:
+            if wandb_resume_state is not None:
+                raise ValueError("cannot resume W&B state when remote tracking is off")
+            return RunTracker(summary, *trackers)
 
         wandb_config = config.tracking.wandb
         if not wandb_config.enabled or wandb_config.mode == "disabled":

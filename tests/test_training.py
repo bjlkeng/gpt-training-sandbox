@@ -464,6 +464,55 @@ def test_cpu_training_loop_runs_forward_backward_clip_optimizer_and_scheduler(
     assert all(parameter.device.type == "cpu" for parameter in model.parameters())
 
 
+def test_training_rejects_an_all_ignored_microbatch_before_forward(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = GPT(
+        GPTConfig(
+            vocab_size=VOCAB_SIZE,
+            seq_len=4,
+            n_layer=1,
+            n_head=1,
+            n_embd=8,
+            mlp_ratio=2,
+        )
+    )
+    train_config = TrainConfig(
+        device_batch_size=1,
+        total_batch_size_tokens=4,
+        max_steps=1,
+        learning_rate=0.01,
+        weight_decay=0.0,
+        warmup_steps=0,
+        warmdown_ratio=0.0,
+    )
+    optimizer = build_optimizer(model, train_config)
+    scheduler = build_lr_scheduler(optimizer, train_config)
+    inputs = torch.zeros((1, 4), dtype=torch.long)
+    targets = torch.full((1, 4), -1, dtype=torch.long)
+    monkeypatch.setattr(
+        model,
+        "forward",
+        lambda *_args, **_kwargs: pytest.fail("forward must not run"),
+    )
+
+    with pytest.raises(ValueError, match="all-ignored microbatch"):
+        run_training_steps(
+            model,
+            [(inputs, targets)],
+            optimizer,
+            scheduler,
+            max_steps=1,
+            grad_accum_steps=1,
+            grad_clip=1.0,
+            device="cpu",
+        )
+
+    assert scheduler.last_epoch == 0
+    assert optimizer.state == {}
+    assert all(parameter.grad is None for parameter in model.parameters())
+
+
 def test_fixed_seed_training_loss_decreases_on_the_tiny_text_fixture() -> None:
     config = _tiny_project_config()
     text = TINY_TEXT_PATH.read_text(encoding="utf-8")

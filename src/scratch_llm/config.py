@@ -44,6 +44,7 @@ TokenLoaderStrategy = Literal["flat", "packed"]
 NormType = Literal["layernorm", "rmsnorm"]
 ActivationType = Literal["gelu", "relu_squared"]
 TrainDType = Literal["float32", "float16", "bfloat16"]
+SFTSourceKind = Literal["jsonl", "hub_cache"]
 # OmegaConf does not yet support combining ``Literal`` with another type in a
 # union. Runtime validation below still restricts string values to ``"auto"``.
 GradAccumSteps = int | str
@@ -56,6 +57,12 @@ _TOKEN_LOADER_STRATEGIES: frozenset[str] = frozenset(get_args(TokenLoaderStrateg
 _NORM_TYPES: frozenset[str] = frozenset(get_args(NormType))
 _ACTIVATION_TYPES: frozenset[str] = frozenset(get_args(ActivationType))
 _TRAIN_DTYPES: frozenset[str] = frozenset(get_args(TrainDType))
+_SFT_SOURCE_KINDS: frozenset[str] = frozenset(get_args(SFTSourceKind))
+_SFT_DATASET_SPLITS = {
+    "gsm8k": frozenset({"train", "test"}),
+    "mmlu": frozenset({"auxiliary_train", "test"}),
+    "smoltalk": frozenset({"train", "test"}),
+}
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 _RUN_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 _WANDB_ENVIRONMENT_FIELDS = {
@@ -468,6 +475,275 @@ class TrainConfig(_SerializableConfig):
 
 
 @dataclass
+class SFTSourceConfig(_SerializableConfig):
+    """One strict local JSONL or verified Hub-cache conversation source."""
+
+    kind: SFTSourceKind = "jsonl"
+    path: str = "data/fixtures/chat/train.jsonl"
+    dataset: str | None = None
+    split: str | None = None
+    repeat_weight: int = 1
+    shuffle: bool = True
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self, path: str = "sft.source") -> None:
+        _require_choice(self.kind, f"{path}.kind", _SFT_SOURCE_KINDS)
+        _require_non_empty(self.path, f"{path}.path")
+        _require_positive_int(self.repeat_weight, f"{path}.repeat_weight")
+        if not isinstance(self.shuffle, bool):
+            _fail(f"{path}.shuffle", "must be a boolean")
+        if self.kind == "jsonl":
+            if Path(self.path).suffix != ".jsonl":
+                _fail(f"{path}.path", "must end in .jsonl for a JSONL source")
+            if self.dataset is not None:
+                _fail(f"{path}.dataset", "must be null for a JSONL source")
+            if self.split is not None:
+                _fail(f"{path}.split", "must be null for a JSONL source")
+            return
+
+        if self.dataset is None:
+            _fail(f"{path}.dataset", "is required for a Hub cache source")
+        if self.dataset not in _SFT_DATASET_SPLITS:
+            _fail(
+                f"{path}.dataset",
+                "must be one of gsm8k, mmlu, or smoltalk",
+            )
+        if self.split is None:
+            _fail(f"{path}.split", "is required for a Hub cache source")
+        if self.split not in _SFT_DATASET_SPLITS[self.dataset]:
+            supported = ", ".join(sorted(_SFT_DATASET_SPLITS[self.dataset]))
+            _fail(
+                f"{path}.split",
+                f"must be one of {supported} for {self.dataset}",
+            )
+
+
+def _default_sft_train_sources() -> list[SFTSourceConfig]:
+    return [
+        SFTSourceConfig(
+            kind="jsonl",
+            path="data/fixtures/chat/train.jsonl",
+            repeat_weight=1,
+            shuffle=True,
+        )
+    ]
+
+
+def _default_sft_validation_sources() -> list[SFTSourceConfig]:
+    return [
+        SFTSourceConfig(
+            kind="jsonl",
+            path="data/fixtures/chat/validation.jsonl",
+            repeat_weight=1,
+            shuffle=False,
+        )
+    ]
+
+
+@dataclass
+class SFTConfig(_SerializableConfig):
+    """SFT-only data, optimization, validation, and checkpoint settings."""
+
+    base_checkpoint: str | None = None
+    train_sources: list[SFTSourceConfig] = field(
+        default_factory=_default_sft_train_sources
+    )
+    validation_sources: list[SFTSourceConfig] = field(
+        default_factory=_default_sft_validation_sources
+    )
+    packing_buffer_size: int = 100
+    shuffle_buffer_size: int = 1024
+    row_batch_size: int = 1024
+    device_batch_size: int = 2
+    total_batch_size_tokens: int = 32_768
+    grad_accum_steps: GradAccumSteps = "auto"
+    max_steps: int = 5_000
+    learning_rate: float = 0.00002
+    min_lr: float = 0.0
+    weight_decay: float = 0.0
+    beta1: float = 0.9
+    beta2: float = 0.95
+    grad_clip: float = 1.0
+    warmup_steps: int = 0
+    warmdown_ratio: float = 0.0
+    final_lr_frac: float = 0.05
+    eval_every: int = 250
+    eval_batches: int = 8
+    save_every: int = 1_000
+    log_every: int = 10
+    mfu_peak_flops_per_second: float | None = None
+    mfu_peak_flops_basis: str | None = None
+    dtype: TrainDType = "float32"
+    compile: bool = False
+    activation_checkpointing: bool = False
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        if self.base_checkpoint is not None:
+            _require_non_empty(self.base_checkpoint, "sft.base_checkpoint")
+            if Path(self.base_checkpoint).suffix != ".pt":
+                _fail("sft.base_checkpoint", "must end in .pt")
+        for field_name in (
+            "train_sources",
+            "validation_sources",
+        ):
+            sources = getattr(self, field_name)
+            if not isinstance(sources, list) or not sources:
+                _fail(f"sft.{field_name}", "must be a non-empty list")
+            identities: set[tuple[object, ...]] = set()
+            for index, source in enumerate(sources):
+                if not isinstance(source, SFTSourceConfig):
+                    _fail(
+                        f"sft.{field_name}.{index}",
+                        "must be an SFTSourceConfig",
+                    )
+                source.validate(f"sft.{field_name}.{index}")
+                identity = (
+                    source.kind,
+                    source.path,
+                    source.dataset,
+                    source.split,
+                )
+                if identity in identities:
+                    _fail(
+                        f"sft.{field_name}.{index}",
+                        "duplicates an earlier logical source",
+                    )
+                identities.add(identity)
+                if field_name == "validation_sources":
+                    if source.repeat_weight != 1:
+                        _fail(
+                            f"sft.{field_name}.{index}.repeat_weight",
+                            "must be 1 for finite validation",
+                        )
+                    if source.shuffle:
+                        _fail(
+                            f"sft.{field_name}.{index}.shuffle",
+                            "must be false for deterministic validation",
+                        )
+
+        for field_name in (
+            "packing_buffer_size",
+            "shuffle_buffer_size",
+            "row_batch_size",
+            "device_batch_size",
+            "total_batch_size_tokens",
+            "max_steps",
+            "eval_every",
+            "eval_batches",
+            "save_every",
+            "log_every",
+        ):
+            _require_positive_int(getattr(self, field_name), f"sft.{field_name}")
+        if self.grad_accum_steps != "auto":
+            _require_positive_int(self.grad_accum_steps, "sft.grad_accum_steps")
+        _require_positive_real(self.learning_rate, "sft.learning_rate")
+        _require_non_negative_real(self.min_lr, "sft.min_lr")
+        if self.min_lr > self.learning_rate:
+            _fail("sft.min_lr", "must not exceed sft.learning_rate")
+        _require_non_negative_real(self.weight_decay, "sft.weight_decay")
+        _require_half_open_unit_interval(self.beta1, "sft.beta1")
+        _require_half_open_unit_interval(self.beta2, "sft.beta2")
+        _require_positive_real(self.grad_clip, "sft.grad_clip")
+        _require_non_negative_int(self.warmup_steps, "sft.warmup_steps")
+        _require_unit_interval(self.warmdown_ratio, "sft.warmdown_ratio")
+        _require_unit_interval(
+            self.final_lr_frac,
+            "sft.final_lr_frac",
+            include_zero=False,
+        )
+        warmdown_steps = round(self.warmdown_ratio * self.max_steps)
+        warmdown_start_step = self.max_steps - warmdown_steps
+        if self.warmup_steps > warmdown_start_step:
+            _fail(
+                "sft.warmup_steps",
+                "must not extend past the warmdown start at step "
+                f"{warmdown_start_step}",
+            )
+        if self.eval_every > self.max_steps:
+            _fail("sft.eval_every", "must not exceed sft.max_steps")
+        if self.save_every > self.max_steps:
+            _fail("sft.save_every", "must not exceed sft.max_steps")
+        has_peak_flops = self.mfu_peak_flops_per_second is not None
+        has_peak_basis = self.mfu_peak_flops_basis is not None
+        if has_peak_flops != has_peak_basis:
+            _fail(
+                "sft.mfu_peak_flops",
+                "per-second value and basis must either both be set or both be null",
+            )
+        if has_peak_flops:
+            peak_flops = _require_real(
+                self.mfu_peak_flops_per_second,
+                "sft.mfu_peak_flops_per_second",
+            )
+            if not math.isfinite(peak_flops) or peak_flops <= 0:
+                _fail(
+                    "sft.mfu_peak_flops_per_second",
+                    "must be finite and greater than zero",
+                )
+            _require_non_empty(
+                self.mfu_peak_flops_basis,
+                "sft.mfu_peak_flops_basis",
+            )
+        _require_choice(self.dtype, "sft.dtype", _TRAIN_DTYPES)
+
+    def to_train_config(self, seq_len: int) -> TrainConfig:
+        """Return the shared optimizer/scheduler view for this SFT contract."""
+
+        self.validate()
+        _require_positive_int(seq_len, "model.seq_len")
+        tokens_per_microbatch = self.device_batch_size * seq_len
+        if self.total_batch_size_tokens % tokens_per_microbatch != 0:
+            _fail(
+                "sft.total_batch_size_tokens",
+                "must be divisible by sft.device_batch_size * model.seq_len",
+            )
+        derived_grad_accum_steps = self.total_batch_size_tokens // tokens_per_microbatch
+        if (
+            self.grad_accum_steps != "auto"
+            and self.grad_accum_steps != derived_grad_accum_steps
+        ):
+            _fail(
+                "sft.grad_accum_steps",
+                "must match total_batch_size_tokens / "
+                "(device_batch_size * model.seq_len)",
+            )
+        return TrainConfig(
+            device_batch_size=self.device_batch_size,
+            total_batch_size_tokens=self.total_batch_size_tokens,
+            grad_accum_steps=(
+                derived_grad_accum_steps
+                if self.grad_accum_steps == "auto"
+                else self.grad_accum_steps
+            ),
+            max_steps=self.max_steps,
+            learning_rate=self.learning_rate,
+            min_lr=self.min_lr,
+            weight_decay=self.weight_decay,
+            beta1=self.beta1,
+            beta2=self.beta2,
+            grad_clip=self.grad_clip,
+            warmup_steps=self.warmup_steps,
+            warmdown_ratio=self.warmdown_ratio,
+            final_lr_frac=self.final_lr_frac,
+            eval_every=self.eval_every,
+            eval_tokens=(self.eval_batches * self.device_batch_size * seq_len),
+            sample_every=self.max_steps,
+            save_every=self.save_every,
+            log_every=self.log_every,
+            mfu_peak_flops_per_second=self.mfu_peak_flops_per_second,
+            mfu_peak_flops_basis=self.mfu_peak_flops_basis,
+            dtype=self.dtype,
+            compile=self.compile,
+            activation_checkpointing=self.activation_checkpointing,
+        )
+
+
+@dataclass
 class GenerationConfig(_SerializableConfig):
     """Autoregressive sampling settings."""
 
@@ -531,6 +807,7 @@ class ProjectConfig(_SerializableConfig):
     tokenizer: TokenizerConfig = field(default_factory=TokenizerConfig)
     model: GPTConfig = field(default_factory=GPTConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
+    sft: SFTConfig = field(default_factory=SFTConfig)
     generation: GenerationConfig = field(default_factory=GenerationConfig)
     web: WebConfig = field(default_factory=WebConfig)
 
@@ -546,6 +823,7 @@ class ProjectConfig(_SerializableConfig):
         self.tokenizer.validate()
         self.model.validate()
         self.train.validate()
+        self.sft.validate()
         self.generation.validate()
         self.web.validate()
 
@@ -574,6 +852,8 @@ class ProjectConfig(_SerializableConfig):
                 "must match total_batch_size_tokens / "
                 "(device_batch_size * model.seq_len)",
             )
+
+        self.sft.to_train_config(self.model.seq_len)
 
 
 # A concise alias for callers that prefer ``Config`` at integration boundaries.
@@ -690,6 +970,9 @@ __all__ = [
     "NormType",
     "ProjectConfig",
     "RunConfig",
+    "SFTConfig",
+    "SFTSourceConfig",
+    "SFTSourceKind",
     "TokenLoaderStrategy",
     "TokenizerConfig",
     "TokenizerType",

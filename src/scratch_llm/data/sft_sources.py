@@ -273,6 +273,7 @@ class SFTConversationDataset:
         *,
         shuffle_buffer_size: int = 1024,
         row_batch_size: int = 1024,
+        shuffle: bool = True,
     ) -> None:
         if not isinstance(cache, CachedHubParquetDataset):
             raise TypeError("cache must be a CachedHubParquetDataset")
@@ -287,8 +288,19 @@ class SFTConversationDataset:
             )
         except (TypeError, ValueError) as error:
             raise SFTDatasetError(str(error)) from error
+        if not isinstance(shuffle, bool):
+            raise TypeError("shuffle must be a boolean")
         self.cache = cache
-        self.source_identity = cache.source_identity
+        self.shuffle = shuffle
+        self.source_identity = _canonical_identity(
+            {
+                "cache_source_identity": cache.source_identity,
+                "format": "scratch_llm_sft_parquet_view_v1",
+                "row_batch_size": self.row_batch_size,
+                "shuffle": self.shuffle,
+                "shuffle_buffer_size": self.shuffle_buffer_size,
+            }
+        )
 
     def __len__(self) -> int:
         return self.cache.row_count
@@ -363,6 +375,9 @@ class SFTConversationDataset:
         self,
         seed: int,
     ) -> Iterator[tuple[int, Mapping[str, object]]]:
+        if not self.shuffle:
+            yield from self._iter_indexed_rows()
+            return
         rows = iter(self._iter_indexed_rows())
         buffer: list[tuple[int, Mapping[str, object]]] = []
         for _ in range(min(self.shuffle_buffer_size, len(self))):
@@ -423,6 +438,17 @@ def preview_examples_identity(examples: tuple[SFTConversationExample, ...]) -> s
         [example.identity for example in examples],
         ensure_ascii=False,
         separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _canonical_identity(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
     ).encode("utf-8")
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
