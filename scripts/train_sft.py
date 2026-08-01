@@ -148,6 +148,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if result.steps:
         print(f"Loss: {result.steps[0].loss:.6f} -> {result.steps[-1].loss:.6f}")
     print(f"Metrics: {result.metrics_path}")
+    print(f"SFT evaluation: {result.evaluation_report_path}")
+    print(f"SFT samples: {result.samples_path}")
     print(f"Checkpoint: {result.checkpoint_path}")
     return 0
 

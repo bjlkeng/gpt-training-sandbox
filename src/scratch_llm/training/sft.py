@@ -33,6 +33,16 @@ from scratch_llm.evaluation.sft_bpb import (
     advance_sft_validation_state,
     sft_validation_identity,
 )
+from scratch_llm.evaluation.sft_sampling import (
+    FixedSFTSamplingConfig,
+    FixedSFTSamplesResult,
+    generate_fixed_sft_samples,
+)
+from scratch_llm.evaluation.sft_tracking import (
+    report_completed_sft_evaluation,
+    sft_training_metrics,
+    track_periodic_sft_validation,
+)
 from scratch_llm.identity import file_identity
 from scratch_llm.diagnostics.accelerator_memory import (
     AcceleratorMemorySnapshot,
@@ -95,6 +105,9 @@ class SFTTrainingResult:
     steps: tuple[OptimizerStepResult, ...]
     validation_state: SFTValidationCheckpointState | None
     validation_results: tuple[SFTAssistantBPBResult, ...]
+    evaluation_report_path: Path
+    samples_path: Path
+    samples: FixedSFTSamplesResult
 
 
 @dataclass(frozen=True)
@@ -197,6 +210,7 @@ def run_sft_training(
     progress: Callable[[str], None] | None = None,
     allow_tracking_fork: bool = False,
     validation_runner: Callable[[int], SFTAssistantBPBResult] | None = None,
+    sample_runner: Callable[[str], FixedSFTSamplesResult] | None = None,
 ) -> SFTTrainingResult:
     """Initialize from base weights or exactly continue one SFT checkpoint."""
 
@@ -209,6 +223,7 @@ def run_sft_training(
         progress=progress,
         allow_tracking_fork=allow_tracking_fork,
         validation_runner=validation_runner,
+        sample_runner=sample_runner,
     )
     set_seed(config.run.seed)
     device = get_device(config.run.device)
@@ -340,6 +355,7 @@ def run_sft_training(
                 runtime.initial_step * train_config.total_batch_size_tokens
             ),
             peak_flops_basis=peak_flops_basis_from_config(train_config),
+            metrics_adapter=sft_training_metrics,
         )
     except torch.OutOfMemoryError as error:
         try:
@@ -360,6 +376,36 @@ def run_sft_training(
     final_step = runtime.scheduler.last_epoch
     final_result = step_results[-1]
     checkpoint_path = lifecycle.finalize(final_step, final_result)
+    checkpoint_identity = file_identity(checkpoint_path)
+    active_sample_runner: Callable[[str], FixedSFTSamplesResult]
+    if sample_runner is None:
+
+        def run_samples(identity: str) -> FixedSFTSamplesResult:
+            return _generate_fixed_samples(
+                config,
+                runtime,
+                checkpoint_identity=identity,
+                device=device,
+            )
+
+        active_sample_runner = run_samples
+    else:
+        active_sample_runner = sample_runner
+
+    samples = active_sample_runner(checkpoint_identity)
+    if not isinstance(samples, FixedSFTSamplesResult):
+        raise SFTTrainingError("SFT sample runner must return a FixedSFTSamplesResult")
+    if not lifecycle.validation_results:  # pragma: no cover - finalize validates.
+        raise SFTTrainingError("SFT completed without an assistant BPB result")
+    tracked_evaluation = report_completed_sft_evaluation(
+        lifecycle.validation_results[-1],
+        samples,
+        tracker=tracker,
+        run_dir=paths.run_dir,
+        step=final_step,
+        base_checkpoint_identity=runtime.base_checkpoint_identity,
+        checkpoint_identity=checkpoint_identity,
+    )
     return SFTTrainingResult(
         paths=paths,
         metrics_path=metrics_path,
@@ -370,6 +416,9 @@ def run_sft_training(
         steps=tuple(step_results),
         validation_state=lifecycle.validation_state,
         validation_results=lifecycle.validation_results,
+        evaluation_report_path=tracked_evaluation.report_path,
+        samples_path=tracked_evaluation.samples_path,
+        samples=samples,
     )
 
 
@@ -383,6 +432,7 @@ def _validate_request(
     progress: Callable[[str], None] | None,
     allow_tracking_fork: bool,
     validation_runner: Callable[[int], SFTAssistantBPBResult] | None,
+    sample_runner: Callable[[str], FixedSFTSamplesResult] | None,
 ) -> None:
     if not isinstance(config, ProjectConfig):
         raise TypeError(f"config must be a ProjectConfig, got {type(config).__name__}")
@@ -397,6 +447,10 @@ def _validate_request(
         raise TypeError("allow_tracking_fork must be a boolean")
     if validation_runner is not None and not callable(validation_runner):
         raise TypeError("validation_runner must be callable or None")
+    if sample_runner is not None and not callable(sample_runner):
+        raise TypeError("sample_runner must be callable or None")
+    if sample_runner is None:
+        _fixed_sampling_config(config)
     if base_checkpoint is not None and resume_from is not None:
         raise SFTTrainingError(
             "base checkpoint initialization and SFT resume are mutually exclusive"
@@ -433,6 +487,42 @@ def _resolve_base_checkpoint(
             "or --base-checkpoint"
         )
     return selected
+
+
+def _generate_fixed_samples(
+    config: ProjectConfig,
+    runtime: _SFTRuntime,
+    *,
+    checkpoint_identity: str,
+    device: torch.device,
+) -> FixedSFTSamplesResult:
+    return generate_fixed_sft_samples(
+        runtime.model,
+        runtime.tokenizer,
+        checkpoint_identity=checkpoint_identity,
+        config=_fixed_sampling_config(config),
+        device=device,
+    )
+
+
+def _fixed_sampling_config(config: ProjectConfig) -> FixedSFTSamplingConfig:
+    if config.generation.top_p is not None:
+        raise SFTTrainingError(
+            "top_p sampling is not implemented for fixed SFT samples"
+        )
+    try:
+        return FixedSFTSamplingConfig(
+            max_new_tokens=config.generation.max_new_tokens,
+            temperature=config.generation.temperature,
+            top_k=config.generation.top_k,
+            seed=(
+                config.run.seed
+                if config.generation.seed is None
+                else config.generation.seed
+            ),
+        )
+    except (TypeError, ValueError) as error:
+        raise SFTTrainingError(f"invalid fixed SFT sampling config: {error}") from error
 
 
 def _initialize_runtime(
@@ -602,8 +692,8 @@ def _last_metric_step(path: Path) -> int | None:
             step = record.get("step")
             if not isinstance(step, int) or isinstance(step, bool):
                 raise ValueError("metric step must be an integer")
-            if last_step is not None and step <= last_step:
-                raise ValueError("metric steps must be strictly increasing")
+            if last_step is not None and step < last_step:
+                raise ValueError("metric steps must be monotonically non-decreasing")
             last_step = step
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
         raise SFTTrainingError(f"invalid metrics file {path}: {error}") from error
@@ -618,9 +708,17 @@ def _validate_existing_outputs(
     is_resume: bool,
 ) -> None:
     checkpoints = sorted(paths.checkpoints_dir.glob("*.pt"))
+    evaluation_outputs = tuple(
+        path
+        for path in (
+            paths.metrics_dir / "sft_eval.json",
+            paths.metrics_dir / "sft_samples.md",
+        )
+        if path.exists()
+    )
     last_metric_step = _last_metric_step(metrics_path)
     if not is_resume:
-        if checkpoints or last_metric_step is not None:
+        if checkpoints or evaluation_outputs or last_metric_step is not None:
             raise SFTTrainingError(
                 f"{paths.run_dir} already contains training outputs; "
                 "use --resume or choose a new run.name"
@@ -816,6 +914,11 @@ class _SFTCheckpointLifecycle:
             )
         self._validation_state = decision.state
         self._validation_results.append(validation)
+        track_periodic_sft_validation(
+            validation,
+            tracker=self._tracker,
+            step=step,
+        )
         if self._progress is not None:
             self._progress(
                 f"SFT validation step {step}: assistant BPB={validation.bpb:.6f}"
