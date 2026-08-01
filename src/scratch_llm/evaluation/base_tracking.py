@@ -1,4 +1,4 @@
-"""Tracking adapters for completed base BPB and fixed-sampling results."""
+"""Tracking adapters for completed base BPB, sampling, and CORE results."""
 
 from __future__ import annotations
 
@@ -29,6 +29,11 @@ from scratch_llm.evaluation.core.reporting import (
     CORE_COMPARISON_FILENAME,
     render_core_comparison_markdown,
     write_core_comparison_markdown,
+)
+from scratch_llm.evaluation.core.tracking import (
+    CORE_COMPARISON_ARTIFACT_NAME,
+    CoreMetricValue,
+    core_evaluation_metrics,
 )
 from scratch_llm.evaluation.full_document_bpb import (
     FULL_DOCUMENT_EVAL_METRIC,
@@ -67,7 +72,7 @@ _CORE_COMPARISON_RELATIVE_PATH = Path("metrics") / CORE_COMPARISON_FILENAME
 class TrackedBaseEvaluation:
     """Completed standalone metrics and canonical artifact paths."""
 
-    metrics: Mapping[str, float]
+    metrics: Mapping[str, CoreMetricValue]
     report_path: Path
     sample_markdown_path: Path | None = None
     core_comparison_path: Path | None = None
@@ -188,6 +193,7 @@ def report_completed_base_evaluation(
     _require_tracker(tracker)
     resolved_run_dir = _run_directory(run_dir)
     payload = _base_evaluation_payload(completed)
+    metrics = _completed_metrics(completed)
     report_path = resolved_run_dir / _BASE_EVALUATION_RELATIVE_PATH
     report_exists = _require_compatible_existing_report(report_path, payload)
 
@@ -220,7 +226,6 @@ def report_completed_base_evaluation(
             core_comparison_path.unlink(missing_ok=True)
         raise
 
-    metrics = _completed_metrics(completed)
     event_prefix = f"base-evaluation:{_payload_identity(payload)}"
     if metrics:
         _log_metrics_once(
@@ -240,6 +245,13 @@ def report_completed_base_evaluation(
             _BASE_SAMPLES_RELATIVE_PATH.as_posix(),
             name=BASE_SAMPLES_ARTIFACT_NAME,
             event_id=f"{event_prefix}:artifact:base_samples.md",
+        )
+    if core_comparison_path is not None:
+        _log_artifact_once(
+            tracker,
+            _CORE_COMPARISON_RELATIVE_PATH.as_posix(),
+            name=CORE_COMPARISON_ARTIFACT_NAME,
+            event_id=f"{event_prefix}:artifact:{CORE_COMPARISON_FILENAME}",
         )
     return TrackedBaseEvaluation(
         metrics=MappingProxyType(metrics),
@@ -352,8 +364,10 @@ def _base_evaluation_payload(
     return payload
 
 
-def _completed_metrics(completed: CompletedBaseEvaluation) -> dict[str, float]:
-    metrics: dict[str, float] = {}
+def _completed_metrics(
+    completed: CompletedBaseEvaluation,
+) -> dict[str, CoreMetricValue]:
+    metrics: dict[str, CoreMetricValue] = {}
     if completed.validation is not None:
         compatibility, full_document = _complete_protocol_results(completed.validation)
         metrics.update(
@@ -376,6 +390,8 @@ def _completed_metrics(completed: CompletedBaseEvaluation) -> dict[str, float]:
             sample.elapsed_seconds for sample in completed.samples.samples
         )
         metrics[BASE_SAMPLE_THROUGHPUT_METRIC] = sampled_tokens / elapsed_seconds
+    if completed.core_result is not None:
+        metrics.update(core_evaluation_metrics(completed.core_result))
     return metrics
 
 
