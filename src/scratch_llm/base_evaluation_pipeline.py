@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -14,7 +14,6 @@ from scratch_llm.base_evaluation import (
     BaseEvaluationCoreRunner,
     BaseEvaluationError,
     BaseEvaluationMode,
-    BaseEvaluationUnavailableError,
     execute_base_evaluation_modes,
 )
 from scratch_llm.base_evaluation_tracking import (
@@ -29,6 +28,9 @@ from scratch_llm.base_sampling import (
 from scratch_llm.best_checkpoint import PeriodicValidationResult
 from scratch_llm.checkpoint import load_model_checkpoint
 from scratch_llm.config import ProjectConfig
+from scratch_llm.core_bundle import CoreBundle, load_core_bundle
+from scratch_llm.core_evaluation import CoreTaskResult
+from scratch_llm.core_evaluation_pipeline import evaluate_core_bundle
 from scratch_llm.full_document_bpb import (
     FullDocumentProtocolConfig,
     evaluate_full_document_bpb,
@@ -55,7 +57,9 @@ def evaluate_checkpoint_base_model(
     tracker: Tracker,
     run_dir: str | Path,
     max_per_task: int | None = None,
+    core_bundle_path: str | Path | None = None,
     core_runner: BaseEvaluationCoreRunner | None = None,
+    core_progress: Callable[[CoreTaskResult], None] | None = None,
 ) -> TrackedBaseEvaluation:
     """Run requested modes against one loaded checkpoint and publish on success."""
 
@@ -63,12 +67,21 @@ def evaluate_checkpoint_base_model(
         raise TypeError(f"config must be a ProjectConfig, got {type(config).__name__}")
     config.validate()
     requested_modes = tuple(modes)
-    if "core" in requested_modes and core_runner is None:
-        raise BaseEvaluationUnavailableError(
-            "CORE evaluation is unavailable until the Milestone 5 runner is registered"
-        )
     if max_per_task is not None and "core" not in requested_modes:
         raise BaseEvaluationError("max_per_task requires the core evaluation mode")
+    if core_bundle_path is not None and "core" not in requested_modes:
+        raise BaseEvaluationError("core_bundle_path requires the core evaluation mode")
+    if core_runner is not None and core_bundle_path is not None:
+        raise BaseEvaluationError(
+            "core_runner and core_bundle_path are mutually exclusive"
+        )
+    core_bundle: CoreBundle | None = None
+    if "core" in requested_modes and core_runner is None:
+        if core_bundle_path is None:
+            raise BaseEvaluationError(
+                "core_bundle_path is required for the core evaluation mode"
+            )
+        core_bundle = load_core_bundle(core_bundle_path)
 
     resolved_checkpoint_path = Path(checkpoint_path)
     checkpoint_identity = file_identity(resolved_checkpoint_path)
@@ -165,12 +178,28 @@ def evaluate_checkpoint_base_model(
                 device=config.run.device,
             )
 
+        effective_core_runner = core_runner
+        if core_bundle is not None:
+
+            def run_core(limit: int | None):
+                return evaluate_core_bundle(
+                    checkpoint.model,
+                    tokenizer,
+                    core_bundle,
+                    checkpoint_identity=checkpoint_identity,
+                    max_per_task=limit,
+                    device=config.run.device,
+                    progress=core_progress,
+                )
+
+            effective_core_runner = run_core
+
         completed = execute_base_evaluation_modes(
             requested_modes,
             context=context,
             bpb_runner=run_bpb if "bpb" in requested_modes else None,
             sample_runner=run_samples if "sample" in requested_modes else None,
-            core_runner=core_runner,
+            core_runner=effective_core_runner,
         )
 
     return report_completed_base_evaluation(

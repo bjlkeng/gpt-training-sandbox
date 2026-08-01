@@ -180,7 +180,7 @@ def test_data_preparation_dry_run_does_not_require_tokenizer_artifacts(
     assert not (tmp_path / "runs" / "data-prep-dry-run" / "artifacts").exists()
 
 
-def test_eval_base_normalizes_modes_and_rejects_unknown_or_unavailable_modes(
+def test_eval_base_normalizes_modes_and_requires_core_bundle_only_for_core(
     tmp_path: Path,
 ) -> None:
     common = (
@@ -206,7 +206,7 @@ def test_eval_base_normalizes_modes_and_rejects_unknown_or_unavailable_modes(
         "bpb,unknown",
         "--dry-run",
     )
-    unavailable = _run_module(
+    missing_bundle = _run_module(
         "scripts.eval_base",
         *common,
         "--checkpoint",
@@ -214,14 +214,41 @@ def test_eval_base_normalizes_modes_and_rejects_unknown_or_unavailable_modes(
         "--eval",
         "core",
     )
+    unexpected_bundle = _run_module(
+        "scripts.eval_base",
+        *common,
+        "--eval",
+        "sample",
+        "--core-bundle",
+        str(tmp_path / "eval_bundle.zip"),
+        "--dry-run",
+    )
+    core_dry_run = _run_module(
+        "scripts.eval_base",
+        *common,
+        "--eval",
+        "Core",
+        "--core-bundle",
+        str(tmp_path / "eval_bundle.zip"),
+        "--max-per-task",
+        "100",
+        "--dry-run",
+    )
 
     assert dry_run.returncode == 0, dry_run.stderr
     assert "Evaluation modes: sample,bpb" in dry_run.stdout
     assert unknown.returncode != 0
     assert "unknown evaluation mode 'unknown'" in unknown.stderr
-    assert unavailable.returncode != 0
-    assert "CORE evaluation is unavailable until the Milestone 5" in unavailable.stderr
-    assert "Traceback" not in unknown.stderr + unavailable.stderr
+    assert missing_bundle.returncode != 0
+    assert "--core-bundle is required for --eval core" in missing_bundle.stderr
+    assert unexpected_bundle.returncode != 0
+    assert "--core-bundle requires --eval core" in unexpected_bundle.stderr
+    assert core_dry_run.returncode == 0, core_dry_run.stderr
+    assert "Evaluation modes: core" in core_dry_run.stdout
+    assert f"CORE bundle: {tmp_path / 'eval_bundle.zip'}" in core_dry_run.stdout
+    assert "Traceback" not in (
+        unknown.stderr + missing_bundle.stderr + unexpected_bundle.stderr
+    )
 
 
 def test_eval_base_reuses_same_run_checkpoint_wandb_identity(

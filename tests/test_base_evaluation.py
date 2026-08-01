@@ -32,6 +32,12 @@ from scratch_llm.base_sampling import (
     FIXED_BASE_PROMPT_SET_IDENTITY,
     FixedBaseSamplingConfig,
 )
+from scratch_llm.core_evaluation import (
+    CORE_PROTOCOL_ID,
+    CoreEvaluationResult,
+    CoreReferenceComparison,
+    CoreTaskResult,
+)
 from scratch_llm.best_checkpoint import PeriodicValidationResult
 from scratch_llm.bpb import BPBAccumulation, BaseValidationResult
 from scratch_llm.full_document_bpb import (
@@ -164,6 +170,33 @@ def _context() -> BaseEvaluationContext:
     )
 
 
+def _core_result() -> CoreEvaluationResult:
+    return CoreEvaluationResult(
+        checkpoint_identity=_CHECKPOINT_IDENTITY,
+        tokenizer_identity=_TOKENIZER_IDENTITY,
+        bundle_identity="sha256:" + "6" * 64,
+        config_identity="sha256:" + "7" * 64,
+        metadata_identity="sha256:" + "8" * 64,
+        run_kind="bounded",
+        max_per_task=2,
+        tasks=(
+            CoreTaskResult(
+                label="fixture",
+                task_type="language_modeling",
+                num_fewshot=0,
+                random_baseline_percent=0.0,
+                correct_examples=1,
+                evaluated_examples=2,
+                available_examples=4,
+                elapsed_seconds=1.0,
+                data_identity="sha256:" + "9" * 64,
+            ),
+        ),
+        references=(CoreReferenceComparison("reference", 0.25),),
+        elapsed_seconds=1.0,
+    )
+
+
 def test_modes_are_case_normalized_deduplicated_and_order_preserving() -> None:
     assert normalize_base_evaluation_modes(" Sample, BPB,sample ") == (
         "sample",
@@ -209,6 +242,80 @@ def test_execution_runs_requested_modes_once_and_preserves_domain_results() -> N
     assert completed.validation is validation
     assert completed.samples is samples
     assert completed.core_result is None
+
+
+def test_execution_runs_core_bpb_and_samples_in_requested_order(
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[str, Any]] = []
+    core = _core_result()
+    completed = execute_base_evaluation_modes(
+        ("core", "bpb", "sample"),
+        context=BaseEvaluationContext(
+            checkpoint_identity=_CHECKPOINT_IDENTITY,
+            checkpoint_step=12,
+            config_identity="sha256:" + "5" * 64,
+            tokenizer_identity=_TOKENIZER_IDENTITY,
+            validation_manifest_identity=_MANIFEST_IDENTITY,
+            run_kind="bounded",
+            max_per_task=2,
+        ),
+        bpb_runner=lambda: calls.append(("bpb", None)) or _validation(),
+        sample_runner=lambda: calls.append(("sample", None)) or _samples(),
+        core_runner=lambda limit: calls.append(("core", limit)) or core,
+    )
+
+    assert calls == [("core", 2), ("bpb", None), ("sample", None)]
+    assert completed.core_result is core
+
+    reported = report_completed_base_evaluation(
+        completed,
+        tracker=_SpyTracker(),
+        run_dir=tmp_path,
+    )
+    payload = json.loads(reported.report_path.read_text(encoding="utf-8"))
+    assert payload["core"]["protocol_id"] == CORE_PROTOCOL_ID
+    assert payload["requested_modes"] == ["core", "bpb", "sample"]
+    assert reported.core_comparison_path == tmp_path / "metrics/core_comparison.md"
+    assert reported.core_comparison_path.is_file()
+
+
+def test_core_report_marker_failure_removes_new_comparison_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    completed = execute_base_evaluation_modes(
+        ("core",),
+        context=BaseEvaluationContext(
+            checkpoint_identity=_CHECKPOINT_IDENTITY,
+            checkpoint_step=12,
+            config_identity="sha256:" + "5" * 64,
+            tokenizer_identity=_TOKENIZER_IDENTITY,
+            validation_manifest_identity=None,
+            run_kind="bounded",
+            max_per_task=2,
+        ),
+        bpb_runner=None,
+        sample_runner=None,
+        core_runner=lambda _limit: _core_result(),
+    )
+
+    def fail_save(*_args: object, **_kwargs: object) -> Path:
+        raise OSError("cannot install completion marker")
+
+    monkeypatch.setattr(
+        "scratch_llm.base_evaluation_tracking.save_json",
+        fail_save,
+    )
+    with pytest.raises(OSError, match="completion marker"):
+        report_completed_base_evaluation(
+            completed,
+            tracker=_SpyTracker(),
+            run_dir=tmp_path,
+        )
+
+    assert not (tmp_path / "metrics/base_eval.json").exists()
+    assert not (tmp_path / "metrics/core_comparison.md").exists()
 
 
 def test_completed_execution_is_published_once_with_explicit_scope_and_modes(

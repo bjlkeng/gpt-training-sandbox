@@ -917,6 +917,40 @@ uv run python -m scripts.eval_base \
   --no-wandb
 ```
 
+CORE uses nanochat's pinned 22-task evaluation bundle, but the evaluator never
+downloads or extracts data implicitly. Fetch the archive once and verify its
+protocol identity before evaluating:
+
+```bash
+mkdir -p data/eval
+curl -fL \
+  https://karpathy-public.s3.us-west-2.amazonaws.com/eval_bundle.zip \
+  --output data/eval/eval_bundle.zip
+echo '90a7c19e28ee7a52b4f6e1f87658deb9fde7f63deba2379045bdb1fe9ea5d200  data/eval/eval_bundle.zip' \
+  | sha256sum --check -
+```
+
+Start with a bounded diagnostic on one immutable checkpoint. The limit must be
+at least 11 because the pinned bundle contains 10-shot tasks:
+
+```bash
+uv run python -m scripts.eval_base \
+  --config configs/tiny_20m_3090.yaml \
+  --override run.name=tiny-20m-3090 \
+  --checkpoint runs/tiny-20m-3090/checkpoints/best.pt \
+  --eval core \
+  --core-bundle data/eval/eval_bundle.zip \
+  --max-per-task 100 \
+  --no-wandb
+```
+
+Pass `--eval core,bpb,sample` to run all three modes against the same loaded
+checkpoint. Omit `--max-per-task` only for a full CORE run. Bounded results are
+recorded as estimates and deliberately receive no delta or ranking against the
+full GPT-2-family references bundled by nanochat. Both scopes atomically write
+the typed CORE record into `metrics/base_eval.json` and a human-readable rough
+comparison to `metrics/core_comparison.md`.
+
 The bounded throughput protocol executes production batches through the same
 optimizer-step telemetry boundary as training. Warmup steps run first but are
 excluded from the aggregate. The timed intervals include batch retrieval,
@@ -980,6 +1014,7 @@ runs/<training-run>/metrics/metrics.jsonl
 runs/<training-run>/metrics/summary.json
 runs/<training-run>/metrics/base_eval.json
 runs/<training-run>/metrics/base_samples.md
+runs/<training-run>/metrics/core_comparison.md
 runs/<training-run>/checkpoints/last.pt
 runs/<training-run>/checkpoints/best.pt
 runs/<benchmark-run>/metrics/throughput_benchmark.json

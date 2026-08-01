@@ -15,6 +15,7 @@ from scratch_llm.base_evaluation_pipeline import evaluate_checkpoint_base_model
 from scratch_llm.base_evaluation_tracking import BaseEvaluationReportConflictError
 from scratch_llm.checkpoint import CheckpointError, load_checkpoint_metadata
 from scratch_llm.config import ProjectConfig
+from scratch_llm.core_evaluation import CoreEvaluationError, CoreTaskResult
 from scratch_llm.run import RunConflictError
 from scratch_llm.tokenized_data import TokenizedDataError
 from scratch_llm.tracking_state import (
@@ -77,7 +78,23 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         help="Optional maximum examples per CORE task.",
     )
+    parser.add_argument(
+        "--core-bundle",
+        type=Path,
+        help="Pinned local eval_bundle.zip; required for CORE evaluation.",
+    )
     return parser
+
+
+def _print_core_progress(result: CoreTaskResult) -> None:
+    """Print one compact progress line after a CORE task completes."""
+
+    print(
+        f"CORE {result.label}: accuracy={result.accuracy:.4f}, "
+        f"centered={result.centered_score:.4f}, "
+        f"examples={result.evaluated_examples}, "
+        f"elapsed={result.elapsed_seconds:.1f}s"
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -94,10 +111,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--max-per-task must be a positive integer")
     if arguments.max_per_task is not None and "core" not in modes:
         parser.error("--max-per-task requires --eval core")
-    if "core" in modes:
-        parser.error(
-            "CORE evaluation is unavailable until the Milestone 5 runner is registered"
-        )
+    if "core" in modes and arguments.core_bundle is None:
+        parser.error("--core-bundle is required for --eval core")
+    if "core" not in modes and arguments.core_bundle is not None:
+        parser.error("--core-bundle requires --eval core")
 
     if arguments.dry_run:
         paths, tracker = prepare_tracked_run(parser, config, command=COMMAND)
@@ -105,6 +122,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Run directory: {paths.run_dir}")
             print(f"Resolved config: {paths.config_path}")
             print(f"Evaluation modes: {','.join(modes)}")
+            if arguments.core_bundle is not None:
+                print(f"CORE bundle: {arguments.core_bundle}")
             print("Resolved values:")
             print(config.to_yaml(), end="")
         return 0
@@ -133,12 +152,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 tracker=tracker,
                 run_dir=paths.run_dir,
                 max_per_task=arguments.max_per_task,
+                core_bundle_path=arguments.core_bundle,
+                core_progress=_print_core_progress,
             )
         except (
             BaseEvaluationError,
             BaseEvaluationReportConflictError,
             BaseEvaluationUnavailableError,
             CheckpointError,
+            CoreEvaluationError,
             OSError,
             RunConflictError,
             RuntimeError,
@@ -153,6 +175,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"Report: {result.report_path}")
     if result.sample_markdown_path is not None:
         print(f"Samples: {result.sample_markdown_path}")
+    if result.core_comparison_path is not None:
+        print(f"CORE comparison: {result.core_comparison_path}")
     return 0
 
 

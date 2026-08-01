@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-import json
-from types import MappingProxyType
-from typing import Any, Literal, TypeAlias
+from typing import Literal, TypeAlias
 
 from scratch_llm._validation import (
     require_non_empty_string,
@@ -15,16 +13,16 @@ from scratch_llm._validation import (
 )
 from scratch_llm.base_sampling import BaseSamplesResult
 from scratch_llm.best_checkpoint import PeriodicValidationResult
+from scratch_llm.core_evaluation import CoreEvaluationResult
 
 
 BaseEvaluationMode: TypeAlias = Literal["bpb", "sample", "core"]
 BaseEvaluationRunKind: TypeAlias = Literal["bounded", "full"]
-BaseEvaluationCoreResult: TypeAlias = Mapping[str, Any]
 BaseEvaluationBpbRunner: TypeAlias = Callable[[], PeriodicValidationResult]
 BaseEvaluationSampleRunner: TypeAlias = Callable[[], BaseSamplesResult]
 BaseEvaluationCoreRunner: TypeAlias = Callable[
     [int | None],
-    BaseEvaluationCoreResult,
+    CoreEvaluationResult,
 ]
 
 _SUPPORTED_MODES = frozenset({"bpb", "sample", "core"})
@@ -78,7 +76,7 @@ class CompletedBaseEvaluation:
     completed_modes: tuple[BaseEvaluationMode, ...]
     validation: PeriodicValidationResult | None
     samples: BaseSamplesResult | None
-    core_result: BaseEvaluationCoreResult | None
+    core_result: CoreEvaluationResult | None
 
     def __post_init__(self) -> None:
         if not isinstance(self.context, BaseEvaluationContext):
@@ -157,25 +155,24 @@ class CompletedBaseEvaluation:
             return
         if self.core_result is None:
             raise BaseEvaluationError("core completion requires a result object")
-        if not isinstance(self.core_result, Mapping):
-            raise TypeError("core_result must be a mapping")
-        try:
-            canonical = json.loads(
-                json.dumps(
-                    dict(self.core_result),
-                    allow_nan=False,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                    sort_keys=True,
-                )
-            )
-        except (TypeError, ValueError) as error:
+        if not isinstance(self.core_result, CoreEvaluationResult):
+            raise TypeError("core_result must be a CoreEvaluationResult")
+        if self.core_result.checkpoint_identity != self.context.checkpoint_identity:
             raise BaseEvaluationError(
-                f"core_result must contain only finite JSON values: {error}"
-            ) from error
-        if not isinstance(canonical, dict):  # pragma: no cover - guarded above.
-            raise TypeError("core_result must encode a JSON object")
-        object.__setattr__(self, "core_result", MappingProxyType(canonical))
+                "CORE checkpoint identity does not match the evaluation context"
+            )
+        if self.core_result.tokenizer_identity != self.context.tokenizer_identity:
+            raise BaseEvaluationError(
+                "CORE tokenizer identity does not match the evaluation context"
+            )
+        if self.core_result.run_kind != self.context.run_kind:
+            raise BaseEvaluationError(
+                "CORE run kind does not match the evaluation context"
+            )
+        if self.core_result.max_per_task != self.context.max_per_task:
+            raise BaseEvaluationError(
+                "CORE max_per_task does not match the evaluation context"
+            )
 
 
 def normalize_base_evaluation_modes(value: str) -> tuple[BaseEvaluationMode, ...]:
@@ -237,7 +234,7 @@ def execute_base_evaluation_modes(
 
     validation: PeriodicValidationResult | None = None
     samples: BaseSamplesResult | None = None
-    core_result: BaseEvaluationCoreResult | None = None
+    core_result: CoreEvaluationResult | None = None
     completed: list[BaseEvaluationMode] = []
     for mode in requested_modes:
         if mode == "bpb":
@@ -253,8 +250,8 @@ def execute_base_evaluation_modes(
         else:
             assert core_runner is not None
             core_result = core_runner(context.max_per_task)
-            if not isinstance(core_result, Mapping):
-                raise TypeError("core_runner must return a mapping")
+            if not isinstance(core_result, CoreEvaluationResult):
+                raise TypeError("core_runner must return a CoreEvaluationResult")
         completed.append(mode)
 
     return CompletedBaseEvaluation(
@@ -281,7 +278,6 @@ def _validate_modes(modes: tuple[BaseEvaluationMode, ...]) -> None:
 
 __all__ = [
     "BaseEvaluationContext",
-    "BaseEvaluationCoreResult",
     "BaseEvaluationCoreRunner",
     "BaseEvaluationError",
     "BaseEvaluationMode",
