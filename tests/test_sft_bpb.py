@@ -34,8 +34,11 @@ from scratch_llm.evaluation.sft_bpb import (
     SFT_ASSISTANT_BPB_PROTOCOL_VERSION,
     SFTAssistantBPBCallback,
     SFTAssistantBPBResult,
+    SFTValidationCheckpointState,
     SFTValidationError,
+    advance_sft_validation_state,
     evaluate_sft_assistant_bpb,
+    sft_validation_identity,
 )
 from scratch_llm.tokenization.artifacts import build_token_byte_lengths
 from scratch_llm.tokenization.tokenizer import ByteTokenizer
@@ -334,6 +337,58 @@ def test_result_is_immutable_strictly_consistent_and_canonical_json() -> None:
     assert json.loads(result.to_json()) == result.to_dict()
     assert result.to_json().endswith("\n")
     assert "NaN" not in result.to_json()
+
+
+def test_validation_identity_and_strictly_lower_checkpoint_ranking() -> None:
+    first = _evaluate(
+        _LossFromInputsModel(),
+        _FiniteSFTLoader([(torch.tensor([[1.0, 2.0]]), torch.tensor([[0, 0]]))]),
+        torch.tensor([1]),
+    )
+    identity = sft_validation_identity(
+        tokenizer_identity=first.tokenizer_identity,
+        renderer_identity=first.renderer_identity,
+        validation_mixture_identity=first.validation_mixture_identity,
+        batch_budget=first.batch_budget,
+    )
+
+    initial = advance_sft_validation_state(None, first, validation_step=2)
+
+    assert initial.improved is True
+    assert initial.state == SFTValidationCheckpointState(
+        ranking_protocol_id=SFT_ASSISTANT_BPB_PROTOCOL_ID,
+        validation_identity=identity,
+        validation_step=2,
+        current_bpb=first.bpb,
+        minimum_bpb=first.bpb,
+    )
+    assert (
+        SFTValidationCheckpointState.from_dict(initial.state.to_dict()) == initial.state
+    )
+
+    equal = advance_sft_validation_state(initial.state, first, validation_step=3)
+    assert equal.improved is False
+    assert equal.state.minimum_bpb == first.bpb
+
+    better = replace(first, total_nats=first.total_nats / 2, bpb=first.bpb / 2)
+    improved = advance_sft_validation_state(equal.state, better, validation_step=4)
+    assert improved.improved is True
+    assert improved.state.minimum_bpb == better.bpb
+
+
+def test_validation_ranking_rejects_changed_protocol_identity_or_step() -> None:
+    result = _evaluate(
+        _LossFromInputsModel(),
+        _FiniteSFTLoader([(torch.tensor([[1.0]]), torch.tensor([[0]]))]),
+        torch.tensor([1]),
+    )
+    initial = advance_sft_validation_state(None, result, validation_step=1).state
+
+    with pytest.raises(SFTValidationError, match="must advance"):
+        advance_sft_validation_state(initial, result, validation_step=1)
+    changed = replace(result, validation_mixture_identity="mixture:changed")
+    with pytest.raises(SFTValidationError, match="identity changed"):
+        advance_sft_validation_state(initial, changed, validation_step=2)
 
 
 class _FailingRandomModel(_LossFromInputsModel):

@@ -94,6 +94,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.resume is not None and wandb_active:
         try:
             metadata = load_checkpoint_metadata(arguments.resume)
+            if metadata.training_stage != "pretrain":
+                raise CheckpointError("pretraining cannot resume an SFT checkpoint")
             wandb_resume_state = resolve_wandb_resume_state(
                 metadata.tracking,
                 source_run_name=metadata.config.run.name,

@@ -395,12 +395,17 @@ def run_training_steps(
                         "training input sequence length must match the FLOPs "
                         f"estimate ({flops_estimate.sequence_length})"
                     )
+                batch_supervised_targets = int(targets.ne(-1).sum().item())
+                if batch_supervised_targets == 0:
+                    raise ValueError(
+                        "training received an all-ignored microbatch before forward"
+                    )
                 loss = model(
                     inputs.to(resolved_device),
                     targets.to(resolved_device),
                 )
                 processed_model_tokens += inputs.numel()
-                supervised_target_tokens += int(targets.ne(-1).sum().item())
+                supervised_target_tokens += batch_supervised_targets
                 yield loss
 
         result = run_optimizer_step(

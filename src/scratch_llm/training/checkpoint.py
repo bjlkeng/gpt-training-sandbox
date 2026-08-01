@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, TypeAlias
 
 import torch
 from omegaconf import OmegaConf
@@ -16,6 +17,7 @@ from torch.optim.lr_scheduler import LRScheduler
 
 from scratch_llm._validation import (
     require_finite_non_negative_real,
+    require_non_empty_string,
     require_non_negative_integer,
     require_real,
 )
@@ -23,7 +25,11 @@ from scratch_llm.training.best_checkpoint import (
     BestCheckpointError,
     ValidationCheckpointState,
 )
-from scratch_llm.config import ProjectConfig
+from scratch_llm.config import ProjectConfig, TrainConfig
+from scratch_llm.evaluation.sft_bpb import (
+    SFTValidationCheckpointState,
+    SFTValidationError,
+)
 from scratch_llm.tokenization.bpe import RegexBPETokenizer
 from scratch_llm.model import GPT
 from scratch_llm.training.optim import (
@@ -49,7 +55,13 @@ from scratch_llm.tracking_state import (
 from scratch_llm.utils import get_device
 
 
-CHECKPOINT_FORMAT_VERSION = 5
+TrainingStage = Literal["pretrain", "sft"]
+ValidationCheckpointMetadata: TypeAlias = (
+    ValidationCheckpointState | SFTValidationCheckpointState
+)
+
+CHECKPOINT_FORMAT_VERSION = 6
+_TRACKING_CHECKPOINT_FORMAT_VERSION = 5
 _VALIDATION_CHECKPOINT_FORMAT_VERSION = 4
 _EXACT_CHECKPOINT_FORMAT_VERSION = 3
 _LEGACY_CHECKPOINT_FORMAT_VERSION = 2
@@ -59,6 +71,7 @@ _SUPPORTED_CHECKPOINT_FORMAT_VERSIONS = frozenset(
         _LEGACY_CHECKPOINT_FORMAT_VERSION,
         _EXACT_CHECKPOINT_FORMAT_VERSION,
         _VALIDATION_CHECKPOINT_FORMAT_VERSION,
+        _TRACKING_CHECKPOINT_FORMAT_VERSION,
         CHECKPOINT_FORMAT_VERSION,
     }
 )
@@ -75,7 +88,11 @@ _BASE_CHECKPOINT_KEYS = frozenset(
 )
 _EXACT_CHECKPOINT_KEYS = _BASE_CHECKPOINT_KEYS | {"continuation"}
 _VALIDATION_CHECKPOINT_KEYS = _EXACT_CHECKPOINT_KEYS | {"validation"}
-_CURRENT_CHECKPOINT_KEYS = _VALIDATION_CHECKPOINT_KEYS | {"tracking"}
+_TRACKING_CHECKPOINT_KEYS = _VALIDATION_CHECKPOINT_KEYS | {"tracking"}
+_CURRENT_CHECKPOINT_KEYS = _TRACKING_CHECKPOINT_KEYS | {
+    "base_checkpoint_identity",
+    "training_stage",
+}
 _CONTINUATION_KEYS = frozenset(
     {
         "loader_format",
@@ -100,8 +117,10 @@ class ModelCheckpoint:
     tokenizer: Tokenizer
     config: ProjectConfig
     step: int
-    validation: ValidationCheckpointState | None
+    validation: ValidationCheckpointMetadata | None
     tracking: TrackingState | None
+    training_stage: TrainingStage
+    base_checkpoint_identity: str | None
 
 
 @dataclass(frozen=True)
@@ -119,8 +138,10 @@ class CheckpointMetadata:
 
     config: ProjectConfig
     step: int
-    validation: ValidationCheckpointState | None
+    validation: ValidationCheckpointMetadata | None
     tracking: TrackingState | None
+    training_stage: TrainingStage
+    base_checkpoint_identity: str | None
 
 
 @dataclass(frozen=True)
@@ -244,8 +265,48 @@ class _DecodedCheckpoint:
     step: int
     device: torch.device
     continuation: ExactTrainingState | None
-    validation: ValidationCheckpointState | None
+    validation: ValidationCheckpointMetadata | None
     tracking: TrackingState | None
+    training_stage: TrainingStage
+    base_checkpoint_identity: str | None
+
+
+def _validate_training_stage(value: object) -> TrainingStage:
+    if value not in {"pretrain", "sft"}:
+        raise ValueError("training_stage must be 'pretrain' or 'sft'")
+    return value  # type: ignore[return-value]
+
+
+def _validate_stage_provenance(
+    training_stage: TrainingStage,
+    base_checkpoint_identity: object,
+) -> str | None:
+    if training_stage == "pretrain":
+        if base_checkpoint_identity is not None:
+            raise ValueError(
+                "pretrain checkpoints must not record base_checkpoint_identity"
+            )
+        return None
+    if base_checkpoint_identity is None:
+        raise ValueError("SFT checkpoint requires base_checkpoint_identity")
+    identity = require_non_empty_string(
+        base_checkpoint_identity,
+        name="base_checkpoint_identity",
+    )
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", identity) is None:
+        raise ValueError(
+            "base_checkpoint_identity must be a lowercase SHA-256 identity"
+        )
+    return identity
+
+
+def _training_config_for_stage(
+    config: ProjectConfig,
+    training_stage: TrainingStage,
+) -> TrainConfig:
+    if training_stage == "pretrain":
+        return config.train
+    return config.sft.to_train_config(config.model.seq_len)
 
 
 def _validate_save_state(
@@ -256,6 +317,7 @@ def _validate_save_state(
     config: ProjectConfig,
     step: int,
     tokenizer: Tokenizer,
+    training_stage: TrainingStage,
 ) -> None:
     if not isinstance(model, GPT):
         raise TypeError(f"model must be a GPT, got {type(model).__name__}")
@@ -275,17 +337,42 @@ def _validate_save_state(
         )
 
     config.validate()
+    active_train = _training_config_for_stage(config, training_stage)
     if model.config != config.model:
         raise ValueError("model configuration does not match the resolved config")
     if scheduler.optimizer is not optimizer:
         raise ValueError("scheduler must be attached to the saved optimizer")
+    if any(
+        float(base_lr) != float(active_train.learning_rate)
+        for base_lr in scheduler.base_lrs
+    ):
+        raise ValueError(
+            f"optimizer learning rate does not match {training_stage} config"
+        )
+    if any(
+        group.get("betas") != (active_train.beta1, active_train.beta2)
+        or float(group.get("weight_decay", -1.0)) != active_train.weight_decay
+        for group in optimizer.param_groups
+    ):
+        raise ValueError(
+            f"optimizer hyperparameters do not match {training_stage} config"
+        )
+    if (
+        scheduler.max_steps != active_train.max_steps
+        or scheduler.warmup_steps != active_train.warmup_steps
+        or scheduler.warmdown_ratio != active_train.warmdown_ratio
+        or scheduler.final_lr_frac != active_train.final_lr_frac
+    ):
+        raise ValueError(
+            f"scheduler hyperparameters do not match {training_stage} config"
+        )
     if scheduler.last_epoch != step:
         raise ValueError(
             f"step {step} does not match scheduler step {scheduler.last_epoch}"
         )
-    if step > config.train.max_steps:
+    if step > active_train.max_steps:
         raise ValueError(
-            f"step {step} exceeds configured max_steps {config.train.max_steps}"
+            f"step {step} exceeds configured max_steps {active_train.max_steps}"
         )
     if config.tokenizer.vocab_size != tokenizer.get_vocab_size():
         raise ValueError(
@@ -416,11 +503,18 @@ def save_checkpoint(
     step: int,
     tokenizer: Tokenizer,
     continuation: ExactTrainingState | None = None,
-    validation: ValidationCheckpointState | None = None,
+    validation: ValidationCheckpointMetadata | None = None,
     tracking: TrackingState | None = None,
+    training_stage: TrainingStage = "pretrain",
+    base_checkpoint_identity: str | None = None,
 ) -> Path:
     """Atomically save legacy state or an exact current continuation."""
 
+    training_stage = _validate_training_stage(training_stage)
+    base_checkpoint_identity = _validate_stage_provenance(
+        training_stage,
+        base_checkpoint_identity,
+    )
     _validate_save_state(
         model=model,
         optimizer=optimizer,
@@ -428,6 +522,7 @@ def save_checkpoint(
         config=config,
         step=step,
         tokenizer=tokenizer,
+        training_stage=training_stage,
     )
     if continuation is not None and not isinstance(continuation, ExactTrainingState):
         raise TypeError(
@@ -439,13 +534,18 @@ def save_checkpoint(
             f"continuation tracker_step {continuation.tracker_step} "
             f"does not match checkpoint step {step}"
         )
-    if validation is not None and not isinstance(
-        validation,
-        ValidationCheckpointState,
-    ):
+    expected_validation_type: type[
+        ValidationCheckpointState | SFTValidationCheckpointState
+    ] = (
+        ValidationCheckpointState
+        if training_stage == "pretrain"
+        else SFTValidationCheckpointState
+    )
+    if validation is not None and not isinstance(validation, expected_validation_type):
+        label = "pretraining" if training_stage == "pretrain" else "SFT"
         raise TypeError(
-            "validation must be a ValidationCheckpointState or None, got "
-            f"{type(validation).__name__}"
+            f"{label} validation must be a {expected_validation_type.__name__} "
+            f"or None, got {type(validation).__name__}"
         )
     if validation is not None and continuation is None:
         raise ValueError("validation metadata requires an exact continuation")
@@ -460,6 +560,8 @@ def save_checkpoint(
         )
     if tracking is not None and continuation is None:
         raise ValueError("tracking metadata requires an exact continuation")
+    if training_stage == "sft" and continuation is None:
+        raise ValueError("SFT checkpoints require an exact continuation")
     format_version = (
         CHECKPOINT_FORMAT_VERSION
         if continuation is not None
@@ -478,6 +580,8 @@ def save_checkpoint(
         payload["continuation"] = continuation.to_dict()
         payload["validation"] = None if validation is None else validation.to_dict()
         payload["tracking"] = None if tracking is None else tracking.to_dict()
+        payload["training_stage"] = training_stage
+        payload["base_checkpoint_identity"] = base_checkpoint_identity
     return _atomic_torch_save(payload, Path(path))
 
 
@@ -663,6 +767,8 @@ def _load_checkpoint(
         )
     if format_version == CHECKPOINT_FORMAT_VERSION:
         expected_keys = _CURRENT_CHECKPOINT_KEYS
+    elif format_version == _TRACKING_CHECKPOINT_FORMAT_VERSION:
+        expected_keys = _TRACKING_CHECKPOINT_KEYS
     elif format_version == _VALIDATION_CHECKPOINT_FORMAT_VERSION:
         expected_keys = _VALIDATION_CHECKPOINT_KEYS
     elif format_version == _EXACT_CHECKPOINT_FORMAT_VERSION:
@@ -677,16 +783,36 @@ def _load_checkpoint(
             f"{format_version}; missing={missing}, unexpected={unexpected}"
         )
 
+    try:
+        training_stage = (
+            _validate_training_stage(payload["training_stage"])
+            if format_version == CHECKPOINT_FORMAT_VERSION
+            else "pretrain"
+        )
+        base_checkpoint_identity = _validate_stage_provenance(
+            training_stage,
+            (
+                payload["base_checkpoint_identity"]
+                if format_version == CHECKPOINT_FORMAT_VERSION
+                else None
+            ),
+        )
+    except (TypeError, ValueError) as error:
+        raise CheckpointError(
+            f"checkpoint contains invalid stage metadata: {error}"
+        ) from error
+
     step = payload["step"]
     if not isinstance(step, int) or isinstance(step, bool) or step < 0:
         raise CheckpointError(
             f"checkpoint step must be a non-negative integer, got {step!r}"
         )
     config = _restore_config(payload["config"])
-    if step > config.train.max_steps:
+    active_train = _training_config_for_stage(config, training_stage)
+    if step > active_train.max_steps:
         raise CheckpointError(
             f"checkpoint step {step} exceeds configured max_steps "
-            f"{config.train.max_steps}"
+            f"{active_train.max_steps}"
         )
     tokenizer = _restore_tokenizer(
         payload["tokenizer"],
@@ -699,6 +825,7 @@ def _load_checkpoint(
         in {
             _EXACT_CHECKPOINT_FORMAT_VERSION,
             _VALIDATION_CHECKPOINT_FORMAT_VERSION,
+            _TRACKING_CHECKPOINT_FORMAT_VERSION,
             CHECKPOINT_FORMAT_VERSION,
         }
         else None
@@ -708,24 +835,29 @@ def _load_checkpoint(
             "checkpoint continuation tracker_step does not match checkpoint step"
         )
     try:
-        validation = (
-            None
-            if format_version
-            not in {
-                _VALIDATION_CHECKPOINT_FORMAT_VERSION,
-                CHECKPOINT_FORMAT_VERSION,
-            }
-            or payload["validation"] is None
-            else ValidationCheckpointState.from_dict(payload["validation"])
-        )
-    except BestCheckpointError as error:
+        has_validation = format_version in {
+            _VALIDATION_CHECKPOINT_FORMAT_VERSION,
+            _TRACKING_CHECKPOINT_FORMAT_VERSION,
+            CHECKPOINT_FORMAT_VERSION,
+        }
+        if not has_validation or payload["validation"] is None:
+            validation: ValidationCheckpointMetadata | None = None
+        elif training_stage == "sft":
+            validation = SFTValidationCheckpointState.from_dict(payload["validation"])
+        else:
+            validation = ValidationCheckpointState.from_dict(payload["validation"])
+    except (BestCheckpointError, SFTValidationError) as error:
         raise CheckpointError(str(error)) from error
     if validation is not None and validation.validation_step > step:
         raise CheckpointError("checkpoint validation_step exceeds checkpoint step")
     try:
         tracking = (
             None
-            if format_version != CHECKPOINT_FORMAT_VERSION
+            if format_version
+            not in {
+                _TRACKING_CHECKPOINT_FORMAT_VERSION,
+                CHECKPOINT_FORMAT_VERSION,
+            }
             or payload["tracking"] is None
             else TrackingState.from_dict(payload["tracking"])
         )
@@ -740,6 +872,8 @@ def _load_checkpoint(
         continuation=continuation,
         validation=validation,
         tracking=tracking,
+        training_stage=training_stage,
+        base_checkpoint_identity=base_checkpoint_identity,
     )
 
 
@@ -770,6 +904,8 @@ def load_model_checkpoint(
             step=checkpoint.step,
             validation=checkpoint.validation,
             tracking=checkpoint.tracking,
+            training_stage=checkpoint.training_stage,
+            base_checkpoint_identity=checkpoint.base_checkpoint_identity,
         )
 
 
@@ -778,12 +914,20 @@ def load_training_checkpoint(
     *,
     device: str | torch.device = "cpu",
     allow_non_exact_resume: bool = False,
+    expected_stage: TrainingStage | None = None,
 ) -> TrainingCheckpoint:
     """Reconstruct train-mode model, optimizer, and scheduler state for resume."""
 
     if not isinstance(allow_non_exact_resume, bool):
         raise TypeError("allow_non_exact_resume must be a boolean")
+    if expected_stage is not None:
+        expected_stage = _validate_training_stage(expected_stage)
     checkpoint = _load_checkpoint(path, device=device)
+    if expected_stage is not None and checkpoint.training_stage != expected_stage:
+        raise CheckpointError(
+            "checkpoint training stage does not match requested resume: "
+            f"expected {expected_stage!r}, got {checkpoint.training_stage!r}"
+        )
     if checkpoint.continuation is None and not allow_non_exact_resume:
         raise CheckpointError(
             "exact training resume requires checkpoint format version 3 or newer; "
@@ -792,8 +936,12 @@ def load_training_checkpoint(
         )
     with preserve_global_rng_state(device):
         model = _restore_model(checkpoint)
-        optimizer = build_optimizer(model, checkpoint.config.train)
-        scheduler = build_lr_scheduler(optimizer, checkpoint.config.train)
+        active_train = _training_config_for_stage(
+            checkpoint.config,
+            checkpoint.training_stage,
+        )
+        optimizer = build_optimizer(model, active_train)
+        scheduler = build_lr_scheduler(optimizer, active_train)
         try:
             optimizer.load_state_dict(checkpoint.payload["optimizer"])
             scheduler.load_state_dict(checkpoint.payload["scheduler"])
@@ -817,6 +965,8 @@ def load_training_checkpoint(
             optimizer=optimizer,
             scheduler=scheduler,
             continuation=checkpoint.continuation,
+            training_stage=checkpoint.training_stage,
+            base_checkpoint_identity=checkpoint.base_checkpoint_identity,
         )
 
 
@@ -831,6 +981,8 @@ def load_checkpoint_metadata(
         step=checkpoint.step,
         validation=checkpoint.validation,
         tracking=checkpoint.tracking,
+        training_stage=checkpoint.training_stage,
+        base_checkpoint_identity=checkpoint.base_checkpoint_identity,
     )
 
 
@@ -862,6 +1014,8 @@ __all__ = [
     "ExactTrainingState",
     "ModelCheckpoint",
     "TrainingCheckpoint",
+    "TrainingStage",
+    "ValidationCheckpointMetadata",
     "load_checkpoint_metadata",
     "load_model_checkpoint",
     "load_training_checkpoint",

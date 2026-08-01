@@ -24,6 +24,7 @@ from scratch_llm.training.best_checkpoint import PeriodicValidationResult
 from scratch_llm.evaluation.bpb import BPBAccumulation, BaseValidationResult
 from scratch_llm.tokenization.bpe import RegexBPETokenizer, train_reference_bpe
 from scratch_llm.training.checkpoint import (
+    CHECKPOINT_FORMAT_VERSION,
     CheckpointError,
     load_model_checkpoint,
     load_training_checkpoint,
@@ -418,7 +419,7 @@ def test_periodic_validation_installs_best_before_independent_step_and_last(
             map_location="cpu",
             weights_only=True,
         )
-        assert payload["format_version"] == 5
+        assert payload["format_version"] == CHECKPOINT_FORMAT_VERSION
         assert payload["validation"] == result.validation_state.to_dict()
         assert payload["tracking"] == {
             "backend": "wandb",
@@ -759,7 +760,7 @@ def test_scripts_pretrain_runs_offline_regex_bpe_to_sample(
         assert "train/peak_memory_mib" not in metrics
 
     payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-    assert payload["format_version"] == 5
+    assert payload["format_version"] == CHECKPOINT_FORMAT_VERSION
     assert payload["validation"] is None
     assert payload["continuation"]["loader_format"] == (
         "scratch_llm_document_packing_loader_state"
@@ -910,8 +911,8 @@ def test_exact_resume_matches_uninterrupted_batches_losses_and_state(
         map_location="cpu",
         weights_only=True,
     )
-    assert uninterrupted_payload["format_version"] == 5
-    assert resumed_payload["format_version"] == 5
+    assert uninterrupted_payload["format_version"] == CHECKPOINT_FORMAT_VERSION
+    assert resumed_payload["format_version"] == CHECKPOINT_FORMAT_VERSION
     assert uninterrupted_payload["validation"] is None
     assert resumed_payload["validation"] is None
     for field in ("model", "optimizer", "scheduler"):

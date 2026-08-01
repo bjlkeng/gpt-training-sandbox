@@ -333,7 +333,7 @@ def test_malformed_exact_state_fails_before_model_or_rng_mutation(
     torch.testing.assert_close(torch.get_rng_state(), torch_state, rtol=0, atol=0)
 
 
-def test_format_five_round_trips_validation_and_tracking_with_exact_state(
+def test_current_format_round_trips_stage_validation_tracking_and_exact_state(
     tmp_path: Path,
 ) -> None:
     config, tokenizer, model, optimizer, scheduler, _ = _checkpoint_state()
@@ -357,7 +357,7 @@ def test_format_five_round_trips_validation_and_tracking_with_exact_state(
     tracking = TrackingState(backend="wandb", run_id="run-id")
 
     checkpoint_path = save_checkpoint(
-        tmp_path / "format-five.pt",
+        tmp_path / "current.pt",
         model=model,
         optimizer=optimizer,
         scheduler=scheduler,
@@ -370,7 +370,9 @@ def test_format_five_round_trips_validation_and_tracking_with_exact_state(
     )
 
     payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-    assert payload["format_version"] == 5
+    assert payload["format_version"] == checkpoint.CHECKPOINT_FORMAT_VERSION
+    assert payload["training_stage"] == "pretrain"
+    assert payload["base_checkpoint_identity"] is None
     assert payload["validation"] == validation.to_dict()
     assert payload["tracking"] == tracking.to_dict()
     model_only = load_model_checkpoint(checkpoint_path)
@@ -383,6 +385,16 @@ def test_format_five_round_trips_validation_and_tracking_with_exact_state(
     assert resumed.validation == validation
     assert resumed.tracking == tracking
     assert resumed.continuation == continuation
+
+    payload["format_version"] = 5
+    del payload["training_stage"]
+    del payload["base_checkpoint_identity"]
+    format_five = tmp_path / "format-five.pt"
+    torch.save(payload, format_five)
+    legacy = load_training_checkpoint(format_five, expected_stage="pretrain")
+    assert legacy.validation == validation
+    assert legacy.tracking == tracking
+    assert legacy.training_stage == "pretrain"
 
 
 def test_format_four_checkpoint_remains_exact_without_tracking_state(
@@ -410,6 +422,8 @@ def test_format_four_checkpoint_remains_exact_without_tracking_state(
     payload = torch.load(current, map_location="cpu", weights_only=True)
     payload["format_version"] = 4
     del payload["tracking"]
+    del payload["training_stage"]
+    del payload["base_checkpoint_identity"]
     previous = tmp_path / "format-four.pt"
     torch.save(payload, previous)
 
@@ -445,6 +459,8 @@ def test_format_three_exact_checkpoint_remains_resumable_without_validation(
     payload["format_version"] = 3
     del payload["validation"]
     del payload["tracking"]
+    del payload["training_stage"]
+    del payload["base_checkpoint_identity"]
     previous = tmp_path / "format-three.pt"
     torch.save(payload, previous)
 

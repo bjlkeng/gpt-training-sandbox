@@ -916,6 +916,7 @@ def _initialize_training_runtime(
         resume_from,
         device=device,
         allow_non_exact_resume=allow_non_exact_resume,
+        expected_stage="pretrain",
     )
     checkpoint_tracking_state = tracking_state or checkpoint.tracking
     if (
@@ -934,6 +935,13 @@ def _initialize_training_runtime(
             "the configured training artifacts"
         )
     validation_state = checkpoint.validation
+    if validation_state is not None and not isinstance(
+        validation_state,
+        ValidationCheckpointState,
+    ):
+        raise PretrainingError(
+            "pretraining resume requires base-validation checkpoint state"
+        )
     if (
         validation_state is not None
         and validation_state.ranking_protocol_id != BEST_CHECKPOINT_RANKING_PROTOCOL_ID

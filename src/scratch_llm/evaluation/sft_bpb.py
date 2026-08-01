@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
+import hashlib
 import json
 import math
 from typing import Final, Protocol
@@ -29,10 +30,117 @@ from scratch_llm.evaluation.bpb import (
 
 SFT_ASSISTANT_BPB_PROTOCOL_ID: Final = "sft_assistant_bpb_v1"
 SFT_ASSISTANT_BPB_PROTOCOL_VERSION: Final = 1
+SFT_VALIDATION_IDENTITY_FORMAT: Final = "scratch_llm_sft_validation_identity_v1"
+_SFT_VALIDATION_STATE_FIELDS: Final = frozenset(
+    {
+        "current_bpb",
+        "minimum_bpb",
+        "ranking_protocol_id",
+        "validation_identity",
+        "validation_step",
+    }
+)
 
 
 class SFTValidationError(ValueError):
     """SFT validation data or protocol settings cannot produce a valid result."""
+
+
+@dataclass(frozen=True, slots=True)
+class SFTValidationCheckpointState:
+    """Current and minimum assistant BPB persisted in an SFT checkpoint."""
+
+    ranking_protocol_id: str
+    validation_identity: str
+    validation_step: int
+    current_bpb: float
+    minimum_bpb: float
+
+    def __post_init__(self) -> None:
+        if self.ranking_protocol_id != SFT_ASSISTANT_BPB_PROTOCOL_ID:
+            raise ValueError(
+                f"ranking_protocol_id must equal {SFT_ASSISTANT_BPB_PROTOCOL_ID!r}"
+            )
+        require_non_empty_string(
+            self.validation_identity,
+            name="validation_identity",
+        )
+        require_non_negative_integer(
+            self.validation_step,
+            name="validation_step",
+        )
+        current_bpb = require_finite_non_negative_real(
+            self.current_bpb,
+            name="current_bpb",
+        )
+        minimum_bpb = require_finite_non_negative_real(
+            self.minimum_bpb,
+            name="minimum_bpb",
+        )
+        if minimum_bpb > current_bpb:
+            raise ValueError("minimum_bpb cannot exceed current_bpb")
+        object.__setattr__(self, "current_bpb", current_bpb)
+        object.__setattr__(self, "minimum_bpb", minimum_bpb)
+
+    def to_dict(self) -> dict[str, str | int | float]:
+        """Return the exact checkpoint payload."""
+
+        return {
+            "current_bpb": self.current_bpb,
+            "minimum_bpb": self.minimum_bpb,
+            "ranking_protocol_id": self.ranking_protocol_id,
+            "validation_identity": self.validation_identity,
+            "validation_step": self.validation_step,
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> SFTValidationCheckpointState:
+        """Validate one serialized SFT ranking state."""
+
+        if not isinstance(value, dict) or set(value) != _SFT_VALIDATION_STATE_FIELDS:
+            raise SFTValidationError(
+                "checkpoint SFT validation state fields do not match the current format"
+            )
+        try:
+            ranking_protocol_id = require_non_empty_string(
+                value["ranking_protocol_id"],
+                name="ranking_protocol_id",
+            )
+            validation_identity = require_non_empty_string(
+                value["validation_identity"],
+                name="validation_identity",
+            )
+            validation_step = require_non_negative_integer(
+                value["validation_step"],
+                name="validation_step",
+            )
+            return cls(
+                ranking_protocol_id=ranking_protocol_id,
+                validation_identity=validation_identity,
+                validation_step=validation_step,
+                current_bpb=require_finite_non_negative_real(
+                    value["current_bpb"],
+                    name="current_bpb",
+                ),
+                minimum_bpb=require_finite_non_negative_real(
+                    value["minimum_bpb"],
+                    name="minimum_bpb",
+                ),
+            )
+        except SFTValidationError:
+            raise
+        except (TypeError, ValueError) as error:
+            raise SFTValidationError(
+                f"checkpoint contains invalid SFT validation state: {error}"
+            ) from error
+
+
+@dataclass(frozen=True, slots=True)
+class SFTValidationDecision:
+    """Candidate ranking state plus whether assistant BPB strictly improved."""
+
+    state: SFTValidationCheckpointState
+    improved: bool
 
 
 class SFTValidationLoader(Protocol):
@@ -223,6 +331,102 @@ class SFTAssistantBPBResult:
         )
 
 
+def sft_validation_identity(
+    *,
+    tokenizer_identity: str,
+    renderer_identity: str,
+    validation_mixture_identity: str,
+    batch_budget: int | None,
+) -> str:
+    """Hash every stable SFT evaluator choice while excluding model values."""
+
+    for name, value in (
+        ("tokenizer_identity", tokenizer_identity),
+        ("renderer_identity", renderer_identity),
+        ("validation_mixture_identity", validation_mixture_identity),
+    ):
+        require_non_empty_string(value, name=name)
+    batch_budget = require_optional_positive_integer(
+        batch_budget,
+        name="batch_budget",
+    )
+    payload = {
+        "batch_budget": batch_budget,
+        "format": SFT_VALIDATION_IDENTITY_FORMAT,
+        "protocol_id": SFT_ASSISTANT_BPB_PROTOCOL_ID,
+        "protocol_version": SFT_ASSISTANT_BPB_PROTOCOL_VERSION,
+        "renderer_identity": renderer_identity,
+        "tokenizer_identity": tokenizer_identity,
+        "validation_mixture_identity": validation_mixture_identity,
+    }
+    encoded = json.dumps(
+        payload,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def advance_sft_validation_state(
+    previous: SFTValidationCheckpointState | None,
+    validation: SFTAssistantBPBResult,
+    *,
+    validation_step: int,
+) -> SFTValidationDecision:
+    """Advance an SFT best-checkpoint state under strict BPB improvement."""
+
+    if previous is not None and not isinstance(
+        previous,
+        SFTValidationCheckpointState,
+    ):
+        raise TypeError(
+            "previous must be an SFTValidationCheckpointState or None, "
+            f"got {type(previous).__name__}"
+        )
+    if not isinstance(validation, SFTAssistantBPBResult):
+        raise TypeError(
+            "validation must be an SFTAssistantBPBResult, "
+            f"got {type(validation).__name__}"
+        )
+    validation_step = require_non_negative_integer(
+        validation_step,
+        name="validation_step",
+    )
+    identity = sft_validation_identity(
+        tokenizer_identity=validation.tokenizer_identity,
+        renderer_identity=validation.renderer_identity,
+        validation_mixture_identity=validation.validation_mixture_identity,
+        batch_budget=validation.batch_budget,
+    )
+    if previous is not None:
+        if previous.validation_identity != identity:
+            raise SFTValidationError(
+                "checkpoint SFT validation identity changed: "
+                f"{previous.validation_identity!r} != {identity!r}"
+            )
+        if validation_step <= previous.validation_step:
+            raise SFTValidationError(
+                "validation_step must advance beyond the checkpoint state"
+            )
+    improved = previous is None or validation.bpb < previous.minimum_bpb
+    return SFTValidationDecision(
+        state=SFTValidationCheckpointState(
+            ranking_protocol_id=SFT_ASSISTANT_BPB_PROTOCOL_ID,
+            validation_identity=identity,
+            validation_step=validation_step,
+            current_bpb=validation.bpb,
+            minimum_bpb=(
+                validation.bpb
+                if previous is None
+                else min(validation.bpb, previous.minimum_bpb)
+            ),
+        ),
+        improved=improved,
+    )
+
+
 class _BudgetedSFTBatches:
     """Expose complete loader batches while recording actual conversation coverage."""
 
@@ -396,7 +600,12 @@ __all__ = [
     "SFT_ASSISTANT_BPB_PROTOCOL_VERSION",
     "SFTAssistantBPBCallback",
     "SFTAssistantBPBResult",
+    "SFTValidationCheckpointState",
+    "SFTValidationDecision",
     "SFTValidationError",
     "SFTValidationLoader",
+    "SFT_VALIDATION_IDENTITY_FORMAT",
+    "advance_sft_validation_state",
     "evaluate_sft_assistant_bpb",
+    "sft_validation_identity",
 ]

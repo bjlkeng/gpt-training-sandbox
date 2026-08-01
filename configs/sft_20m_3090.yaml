@@ -1,0 +1,106 @@
+run:
+  name: sft-20m-3090
+  seed: 1337
+  device: cuda
+  output_dir: runs
+
+tracking:
+  wandb:
+    enabled: false
+    mode: disabled
+
+data:
+  profile: nanochat_climbmix
+  base_dir: data
+
+tokenizer:
+  type: regex_byte_bpe
+  vocab_size: 32768
+  artifact_dir: runs/tokenizer-32k/artifacts/tokenizer
+
+model:
+  profile: simple_gpt
+  vocab_size: 32768
+  seq_len: 1024
+  n_layer: 6
+  n_head: 6
+  n_embd: 384
+  mlp_ratio: 4
+  dropout: 0.0
+  bias: false
+  tie_weights: true
+
+sft:
+  base_checkpoint: null
+  train_sources:
+    - kind: hub_cache
+      path: data/parquet/sft
+      dataset: smoltalk
+      split: train
+      repeat_weight: 1
+      shuffle: true
+    - kind: hub_cache
+      path: data/parquet/sft
+      dataset: mmlu
+      split: auxiliary_train
+      repeat_weight: 1
+      shuffle: true
+    - kind: hub_cache
+      path: data/parquet/sft
+      dataset: gsm8k
+      split: train
+      repeat_weight: 1
+      shuffle: true
+  validation_sources:
+    - kind: hub_cache
+      path: data/parquet/sft
+      dataset: smoltalk
+      split: test
+      repeat_weight: 1
+      shuffle: false
+    - kind: hub_cache
+      path: data/parquet/sft
+      dataset: mmlu
+      split: test
+      repeat_weight: 1
+      shuffle: false
+    - kind: hub_cache
+      path: data/parquet/sft
+      dataset: gsm8k
+      split: test
+      repeat_weight: 1
+      shuffle: false
+  packing_buffer_size: 100
+  shuffle_buffer_size: 1024
+  row_batch_size: 1024
+  device_batch_size: 2
+  total_batch_size_tokens: 32768
+  grad_accum_steps: auto
+  max_steps: 5000
+  learning_rate: 0.00002
+  min_lr: 0.0
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  warmup_steps: 0
+  warmdown_ratio: 0.0
+  final_lr_frac: 0.05
+  eval_every: 250
+  eval_batches: 8
+  save_every: 250
+  log_every: 10
+  mfu_peak_flops_per_second: 35580000000000
+  mfu_peak_flops_basis: NVIDIA GeForce RTX 3090 advertised FP32 peak (35.58 TFLOP/s)
+  dtype: float32
+  compile: false
+  activation_checkpointing: false
+
+generation:
+  temperature: 0.8
+  top_k: 50
+  max_new_tokens: 256
+  seed: null
+
+web:
+  enabled: false

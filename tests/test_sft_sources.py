@@ -318,6 +318,26 @@ def test_parquet_source_has_stable_identity_count_seeded_order_and_slices(
     assert sorted(example.source_row for example in first) == list(range(12))
 
 
+def test_unshuffled_parquet_view_keeps_source_order_and_distinct_identity(
+    tmp_path: Path,
+) -> None:
+    parquet = tmp_path / "smoltalk.parquet"
+    _write_rows(parquet, _smoltalk_rows(5))
+    spec = get_sft_dataset_spec("smoltalk", "train")
+    cache = publish_local_parquet_cache(spec, tmp_path / "cache", (parquet,))
+    ordered = SFTConversationDataset(cache, shuffle=False)
+    shuffled = SFTConversationDataset(cache, shuffle=True)
+
+    first = tuple(ordered.iter_examples(seed=1))
+    other_seed = tuple(ordered.iter_examples(seed=999))
+
+    assert [example.source_row for example in first] == list(range(5))
+    assert [example.identity for example in other_seed] == [
+        example.identity for example in first
+    ]
+    assert ordered.source_identity != shuffled.source_identity
+
+
 def test_parquet_source_stops_without_materializing_all_rows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

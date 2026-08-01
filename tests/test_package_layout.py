@@ -113,6 +113,7 @@ EXPECTED_DOMAIN_MODULES = {
         "optim",
         "pretraining",
         "rng_state",
+        "sft",
         "telemetry",
     },
 }
