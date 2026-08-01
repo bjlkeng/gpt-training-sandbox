@@ -58,6 +58,7 @@ EXPECTED_CORE_EVALUATION_MODULES = {
     "reporting",
     "results",
     "scoring",
+    "tracking",
 }
 OBSOLETE_TOP_LEVEL_EVALUATION_MODULES = {
     "base_evaluation",

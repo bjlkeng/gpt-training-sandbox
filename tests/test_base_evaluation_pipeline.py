@@ -15,6 +15,10 @@ from torch import nn
 import scratch_llm.evaluation.base_pipeline as pipeline
 from scratch_llm.evaluation.base import BaseEvaluationError
 from scratch_llm.evaluation.base_pipeline import evaluate_checkpoint_base_model
+from scratch_llm.evaluation.base_tracking import (
+    BASE_EVALUATION_ARTIFACT_NAME,
+    BASE_EVALUATION_ARTIFACT_TYPE,
+)
 from scratch_llm.evaluation.bpb import BPBAccumulation, BaseValidationResult
 from scratch_llm.config import (
     GPTConfig,
@@ -29,6 +33,12 @@ from scratch_llm.evaluation.core.results import (
     CoreEvaluationResult,
     CoreReferenceComparison,
     CoreTaskResult,
+)
+from scratch_llm.evaluation.core.tracking import (
+    CORE_COMPARISON_ARTIFACT_NAME,
+    CORE_EVAL_METRIC,
+    CORE_MAX_PER_TASK_METRIC,
+    CORE_RUN_KIND_METRIC,
 )
 from scratch_llm.evaluation.full_document_bpb import (
     FULL_DOCUMENT_PROTOCOL_ID,
@@ -271,7 +281,23 @@ def test_core_mode_loads_the_explicit_bundle_without_validation_data(
     assert payload["core"]["scope"]["bounded"] is True
     assert result.core_comparison_path == tmp_path / "run/metrics/core_comparison.md"
     assert result.core_comparison_path.is_file()
-    assert tracker.metrics == []
+    assert tracker.metrics == [(dict(result.metrics), None)]
+    assert result.metrics[CORE_EVAL_METRIC] == 1.0
+    assert result.metrics[CORE_RUN_KIND_METRIC] == "bounded"
+    assert result.metrics[CORE_MAX_PER_TASK_METRIC] == 1
+    assert result.metrics["eval/core/fixture"] == 1.0
+    assert tracker.artifacts == [
+        (
+            "metrics/base_eval.json",
+            BASE_EVALUATION_ARTIFACT_NAME,
+            BASE_EVALUATION_ARTIFACT_TYPE,
+        ),
+        (
+            "metrics/core_comparison.md",
+            CORE_COMPARISON_ARTIFACT_NAME,
+            BASE_EVALUATION_ARTIFACT_TYPE,
+        ),
+    ]
 
 
 def test_bpb_mode_runs_both_protocols_with_one_frozen_identity_set(

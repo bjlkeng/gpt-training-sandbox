@@ -15,17 +15,20 @@ import pytest
 import torch
 from torch import nn
 
+from scratch_llm.evaluation.base import BaseEvaluationContext, CompletedBaseEvaluation
 from scratch_llm.evaluation.base_tracking import (
     BASE_EVALUATION_ARTIFACT_NAME,
     BASE_EVALUATION_ARTIFACT_TYPE,
     BASE_EVALUATION_REPORT_FORMAT,
     BASE_EVALUATION_REPORT_FORMAT_VERSION,
     BASE_SAMPLES_ARTIFACT_NAME,
+    BaseEvaluationReportConflictError,
     FULL_DOCUMENT_MINIMUM_TRAIN_METRIC,
     FULL_DOCUMENT_SOURCE_BYTE_RETENTION_METRIC,
     NANOCHAT_MINIMUM_TRAIN_METRIC,
     NANOCHAT_SOURCE_BYTE_RETENTION_METRIC,
     report_base_samples,
+    report_completed_base_evaluation,
     report_standalone_base_evaluation,
     track_periodic_base_validation,
 )
@@ -44,6 +47,18 @@ from scratch_llm.config import (
     RunConfig,
     TrackingConfig,
     WandbConfig,
+)
+from scratch_llm.evaluation.core.results import (
+    CoreEvaluationResult,
+    CoreReferenceComparison,
+    CoreTaskResult,
+)
+from scratch_llm.evaluation.core.tracking import (
+    CORE_COMPARISON_ARTIFACT_NAME,
+    CORE_EVAL_METRIC,
+    CORE_MAX_PER_TASK_METRIC,
+    CORE_RUN_KIND_METRIC,
+    CORE_TASK_COUNT_METRIC,
 )
 from scratch_llm.data import write_tokenized_parquet_shards
 from scratch_llm.evaluation.full_document_bpb import (
@@ -221,6 +236,69 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
+def _core_result(
+    *,
+    run_kind: str = "bounded",
+    labels: tuple[str, str] = ("ARC Easy/v2", "BoolQ"),
+) -> CoreEvaluationResult:
+    bounded = run_kind == "bounded"
+    evaluated = 4 if bounded else 8
+    return CoreEvaluationResult(
+        checkpoint_identity="checkpoint:fixture",
+        tokenizer_identity="tokenizer:fixture",
+        bundle_identity="sha256:" + "1" * 64,
+        config_identity="sha256:" + "2" * 64,
+        metadata_identity="sha256:" + "3" * 64,
+        run_kind=run_kind,  # type: ignore[arg-type]
+        max_per_task=4 if bounded else None,
+        tasks=(
+            CoreTaskResult(
+                label=labels[0],
+                task_type="multiple_choice",
+                num_fewshot=1,
+                random_baseline_percent=25.0,
+                correct_examples=3 if bounded else 6,
+                evaluated_examples=evaluated,
+                available_examples=8,
+                elapsed_seconds=1.0,
+                data_identity="sha256:" + "4" * 64,
+            ),
+            CoreTaskResult(
+                label=labels[1],
+                task_type="multiple_choice",
+                num_fewshot=0,
+                random_baseline_percent=50.0,
+                correct_examples=1 if bounded else 4,
+                evaluated_examples=evaluated,
+                available_examples=8,
+                elapsed_seconds=2.0,
+                data_identity="sha256:" + "5" * 64,
+            ),
+        ),
+        references=(CoreReferenceComparison("reference", 0.25),),
+        elapsed_seconds=3.0,
+    )
+
+
+def _completed_core(result: CoreEvaluationResult) -> CompletedBaseEvaluation:
+    return CompletedBaseEvaluation(
+        context=BaseEvaluationContext(
+            checkpoint_identity=result.checkpoint_identity,
+            checkpoint_step=12,
+            config_identity="config:fixture",
+            tokenizer_identity=result.tokenizer_identity,
+            validation_manifest_identity=None,
+            run_kind=result.run_kind,
+            max_per_task=result.max_per_task,
+        ),
+        requested_modes=("core",),
+        completed_modes=("core",),
+        validation=None,
+        samples=None,
+        core_result=result,
+    )
+
+
 def test_periodic_validation_logs_both_current_and_minimum_protocol_values() -> None:
     validation = _validation()
     state = _state(validation, step=7)
@@ -241,6 +319,75 @@ def test_periodic_validation_logs_both_current_and_minimum_protocol_values() -> 
     }
     assert tracker.metrics == [(metrics, 7)]
     assert tracker.artifacts == []
+
+
+def test_core_reporting_logs_normalized_centered_and_raw_task_metrics(
+    tmp_path: Path,
+) -> None:
+    tracker = _SpyTracker()
+    result = _core_result()
+
+    reported = report_completed_base_evaluation(
+        _completed_core(result),
+        tracker=tracker,
+        run_dir=tmp_path / "run",
+    )
+
+    expected = {
+        CORE_EVAL_METRIC: result.core_metric,
+        CORE_RUN_KIND_METRIC: "bounded",
+        CORE_MAX_PER_TASK_METRIC: 4,
+        CORE_TASK_COUNT_METRIC: 2,
+        "eval/core/arc_easy_v2": result.tasks[0].centered_score,
+        "eval/core/boolq": result.tasks[1].centered_score,
+        "eval/core_accuracy/arc_easy_v2": 0.75,
+        "eval/core_accuracy/boolq": 0.25,
+        "eval/core_random_baseline_percent/arc_easy_v2": 25.0,
+        "eval/core_random_baseline_percent/boolq": 50.0,
+        "eval/core_correct_examples/arc_easy_v2": 3,
+        "eval/core_correct_examples/boolq": 1,
+        "eval/core_evaluated_examples/arc_easy_v2": 4,
+        "eval/core_evaluated_examples/boolq": 4,
+        "eval/core_available_examples/arc_easy_v2": 8,
+        "eval/core_available_examples/boolq": 8,
+    }
+    assert reported.metrics == expected
+    assert tracker.metrics == [(expected, None)]
+    assert tracker.artifacts == [
+        (
+            "metrics/base_eval.json",
+            BASE_EVALUATION_ARTIFACT_NAME,
+            BASE_EVALUATION_ARTIFACT_TYPE,
+        ),
+        (
+            "metrics/core_comparison.md",
+            CORE_COMPARISON_ARTIFACT_NAME,
+            BASE_EVALUATION_ARTIFACT_TYPE,
+        ),
+    ]
+    payload = json.loads(reported.report_path.read_text(encoding="utf-8"))
+    assert payload["core"]["core_metric"] == result.core_metric
+    assert payload["core"]["tasks"]["ARC Easy/v2"] == result.tasks[0].to_dict()
+    assert payload["core"]["tasks"]["BoolQ"] == result.tasks[1].to_dict()
+
+
+def test_core_metric_normalization_rejects_collisions_before_publication(
+    tmp_path: Path,
+) -> None:
+    tracker = _SpyTracker()
+    completed = _completed_core(_core_result(labels=("ARC Easy", "arc-easy")))
+
+    with pytest.raises(ValueError, match="collide after normalization"):
+        report_completed_base_evaluation(
+            completed,
+            tracker=tracker,
+            run_dir=tmp_path / "run",
+        )
+
+    assert tracker.metrics == []
+    assert tracker.artifacts == []
+    assert not (tmp_path / "run/metrics/base_eval.json").exists()
+    assert not (tmp_path / "run/metrics/core_comparison.md").exists()
 
 
 def test_periodic_validation_rejects_state_from_a_different_step_or_result() -> None:
@@ -512,6 +659,110 @@ def test_oversized_results_preserve_distinct_values_in_jsonl_and_wandb(
     ]
 
 
+def test_core_metrics_summary_and_artifacts_have_jsonl_wandb_parity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _FakeWandbRun()
+    fake_wandb = ModuleType("wandb")
+    setattr(fake_wandb, "init", lambda **kwargs: run)
+    setattr(fake_wandb, "Artifact", _FakeWandbArtifact)
+    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+    config = ProjectConfig(
+        run=RunConfig(
+            name="core-eval-fan-out",
+            device="cpu",
+            output_dir=str(tmp_path / "runs"),
+        ),
+        tracking=TrackingConfig(
+            wandb=WandbConfig(
+                enabled=True,
+                mode="offline",
+                dir=str(tmp_path / "wandb"),
+            )
+        ),
+    )
+    paths = prepare_run(config)
+
+    with build_tracker(config, paths, stage="eval_base") as tracker:
+        reported = report_completed_base_evaluation(
+            _completed_core(_core_result()),
+            tracker=tracker,
+            run_dir=paths.run_dir,
+        )
+
+    records = _read_jsonl(paths.metrics_dir / "metrics.jsonl")
+    metric_records = [
+        record for record in records if record["record_type"] == "metrics"
+    ]
+    artifact_records = [
+        record for record in records if record["record_type"] == "artifact"
+    ]
+    summary = json.loads((paths.metrics_dir / "summary.json").read_text())
+    assert [record["metrics"] for record in metric_records] == [reported.metrics]
+    assert run.logs == [(reported.metrics, {})]
+    assert summary["latest_metrics"] == reported.metrics
+    assert summary["latest_metrics"][CORE_RUN_KIND_METRIC] == "bounded"
+    assert summary["latest_metrics"][CORE_MAX_PER_TASK_METRIC] == 4
+    assert [record["name"] for record in artifact_records] == [
+        BASE_EVALUATION_ARTIFACT_NAME,
+        CORE_COMPARISON_ARTIFACT_NAME,
+    ]
+    assert [
+        (artifact.name, artifact.type, artifact.paths) for artifact in run.artifacts
+    ] == [
+        (
+            BASE_EVALUATION_ARTIFACT_NAME,
+            BASE_EVALUATION_ARTIFACT_TYPE,
+            [str(reported.report_path)],
+        ),
+        (
+            CORE_COMPARISON_ARTIFACT_NAME,
+            BASE_EVALUATION_ARTIFACT_TYPE,
+            [str(reported.core_comparison_path)],
+        ),
+    ]
+
+
+def test_bounded_core_cannot_overwrite_a_full_core_summary(
+    tmp_path: Path,
+) -> None:
+    config = ProjectConfig(
+        run=RunConfig(
+            name="core-scope-conflict",
+            device="cpu",
+            output_dir=str(tmp_path / "runs"),
+        )
+    )
+    paths = prepare_run(config)
+    full = _core_result(run_kind="full")
+
+    with build_tracker(config, paths, stage="eval_base") as tracker:
+        report_completed_base_evaluation(
+            _completed_core(full),
+            tracker=tracker,
+            run_dir=paths.run_dir,
+        )
+        before = json.loads((paths.metrics_dir / "summary.json").read_text())
+
+        with pytest.raises(
+            BaseEvaluationReportConflictError,
+            match="different completed evaluation",
+        ):
+            report_completed_base_evaluation(
+                _completed_core(_core_result()),
+                tracker=tracker,
+                run_dir=paths.run_dir,
+            )
+
+        after = json.loads((paths.metrics_dir / "summary.json").read_text())
+
+    assert before["latest_metrics"] == after["latest_metrics"]
+    assert after["latest_metrics"][CORE_RUN_KIND_METRIC] == "full"
+    assert after["latest_metrics"][CORE_MAX_PER_TASK_METRIC] is None
+    assert after["latest_metrics"][CORE_EVAL_METRIC] == full.core_metric
+
+
 def test_disabled_wandb_reporting_never_imports_optional_dependency(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -549,3 +800,47 @@ def test_disabled_wandb_reporting_never_imports_optional_dependency(
         )
 
     assert (paths.metrics_dir / "base_eval.json").is_file()
+
+
+def test_core_reporting_works_with_wandb_disabled_and_absent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delitem(sys.modules, "wandb", raising=False)
+    real_import = __import__
+
+    def reject_wandb(
+        name: str,
+        globals: dict[str, Any] | None = None,
+        locals: dict[str, Any] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> Any:
+        if name == "wandb" or name.startswith("wandb."):
+            raise AssertionError("disabled CORE reporting imported wandb")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr("builtins.__import__", reject_wandb)
+    config = ProjectConfig(
+        run=RunConfig(
+            name="core-eval-local",
+            device="cpu",
+            output_dir=str(tmp_path / "runs"),
+        ),
+        tracking=TrackingConfig(wandb=WandbConfig(enabled=True, mode="disabled")),
+    )
+    paths = prepare_run(config)
+
+    with build_tracker(config, paths, stage="eval_base") as tracker:
+        reported = report_completed_base_evaluation(
+            _completed_core(_core_result()),
+            tracker=tracker,
+            run_dir=paths.run_dir,
+        )
+
+    records = _read_jsonl(paths.metrics_dir / "metrics.jsonl")
+    assert [
+        record["metrics"] for record in records if record["record_type"] == "metrics"
+    ] == [reported.metrics]
+    assert reported.core_comparison_path is not None
+    assert reported.core_comparison_path.is_file()

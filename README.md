@@ -951,6 +951,14 @@ full GPT-2-family references bundled by nanochat. Both scopes atomically write
 the typed CORE record into `metrics/base_eval.json` and a human-readable rough
 comparison to `metrics/core_comparison.md`.
 
+The same completed result is published to always-on local JSONL and optional
+W&B with `eval/core_metric`, normalized per-task centered values under
+`eval/core/<task>`, and separate raw accuracy, random-baseline, and count
+namespaces. Scope fields retain `bounded` versus `full` and `max_per_task` in
+`metrics/summary.json`; a conflicting scope cannot replace an existing
+completed report. Both `base_eval.json` and `core_comparison.md` are registered
+as evaluation artifacts.
+
 The bounded throughput protocol executes production batches through the same
 optimizer-step telemetry boundary as training. Warmup steps run first but are
 excluded from the aggregate. The timed intervals include batch retrieval,
