@@ -147,10 +147,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"Completed step {result.final_step}")
     if result.steps:
         print(f"Loss: {result.steps[0].loss:.6f} -> {result.steps[-1].loss:.6f}")
+    print(f"Base checkpoint identity: {result.base_checkpoint_identity}")
+    if result.validation_state is not None:
+        print(
+            "Assistant validation BPB: "
+            f"{result.validation_state.current_bpb:.6f} "
+            f"(minimum {result.validation_state.minimum_bpb:.6f})"
+        )
     print(f"Metrics: {result.metrics_path}")
     print(f"SFT evaluation: {result.evaluation_report_path}")
     print(f"SFT samples: {result.samples_path}")
-    print(f"Checkpoint: {result.checkpoint_path}")
+    best_checkpoint = result.paths.checkpoints_dir / "best.pt"
+    if best_checkpoint.is_file():
+        print(f"Best checkpoint: {best_checkpoint}")
+    print(f"Last checkpoint: {result.checkpoint_path}")
     return 0
 
 

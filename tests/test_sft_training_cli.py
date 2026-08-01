@@ -173,6 +173,10 @@ def test_command_executes_a_bounded_local_base_initialization(
     checkpoint_path = tmp_path / "runs" / "sft-cli" / "checkpoints" / "last.pt"
     assert exit_code == 0
     assert "Completed step 1" in output
+    assert "Base checkpoint identity: sha256:" in output
+    assert "Assistant validation BPB:" in output
+    assert "Best checkpoint:" in output
+    assert "Last checkpoint:" in output
     assert checkpoint_path.is_file()
     assert load_model_checkpoint(checkpoint_path).training_stage == "sft"
     assert (checkpoint_path.parent.parent / "metrics/sft_eval.json").is_file()
