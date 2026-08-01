@@ -10,6 +10,12 @@ tracking:
     project: gpt-training-sandbox
     entity: null
     mode: online
+    log_code: false
+    log_model_artifacts: false
+    log_dataset_artifacts: false
+    log_tokenizer_artifacts: false
+    log_prompts: false
+    log_responses: false
 
 data:
   profile: tiny_text

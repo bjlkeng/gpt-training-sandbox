@@ -74,6 +74,12 @@ def test_base_preset_loads_with_production_artifacts_and_exact_token_budget(
     assert config.tracking.wandb.project == WANDB_PROJECT
     assert config.tracking.wandb.entity is None
     assert config.tracking.wandb.mode == "online"
+    assert config.tracking.wandb.log_code is False
+    assert config.tracking.wandb.log_model_artifacts is False
+    assert config.tracking.wandb.log_dataset_artifacts is False
+    assert config.tracking.wandb.log_tokenizer_artifacts is False
+    assert config.tracking.wandb.log_prompts is False
+    assert config.tracking.wandb.log_responses is False
     assert config.data.profile == "nanochat_climbmix"
     assert config.data.loader_strategy == "packed"
     assert config.data.tokenized_dir == TOKENIZED_DATA

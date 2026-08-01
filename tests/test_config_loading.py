@@ -222,6 +222,12 @@ def test_smoke_config_is_a_cpu_safe_tiny_byte_gpt() -> None:
     assert config.tracking.wandb.project == "gpt-training-sandbox"
     assert config.tracking.wandb.entity is None
     assert config.tracking.wandb.mode == "online"
+    assert config.tracking.wandb.log_code is False
+    assert config.tracking.wandb.log_model_artifacts is False
+    assert config.tracking.wandb.log_dataset_artifacts is False
+    assert config.tracking.wandb.log_tokenizer_artifacts is False
+    assert config.tracking.wandb.log_prompts is False
+    assert config.tracking.wandb.log_responses is False
     assert config.data.profile == "tiny_text"
     assert config.data.base_dir == "data"
     assert config.tokenizer.type == "byte"
