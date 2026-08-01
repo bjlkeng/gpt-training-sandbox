@@ -6,8 +6,8 @@ import argparse
 from collections.abc import Sequence
 from pathlib import Path
 
-from scratch_llm.bpe import RegexBPETokenizer
-from scratch_llm.tokenizer import ByteTokenizer, Tokenizer
+from scratch_llm.tokenization.bpe import RegexBPETokenizer
+from scratch_llm.tokenization.tokenizer import ByteTokenizer, Tokenizer
 from scratch_llm.evaluation.tokenizer import (
     collect_evaluation_corpora,
     evaluate_tokenizer,

@@ -10,7 +10,7 @@ import torch
 from scratch_llm.config import GPTConfig
 from scratch_llm.generation import GenerationBatchResult, generate
 from scratch_llm.model import GPT
-from scratch_llm.tokenizer import VOCAB_SIZE, ByteTokenizer
+from scratch_llm.tokenization.tokenizer import VOCAB_SIZE, ByteTokenizer
 
 
 def _model_config(**overrides: object) -> GPTConfig:

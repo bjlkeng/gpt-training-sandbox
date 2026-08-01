@@ -10,9 +10,9 @@ from typing import Any
 
 import pytest
 
-import scratch_llm.climbmix as climbmix
+import scratch_llm.data.climbmix as climbmix
 from scripts.download_climbmix import main as download_main
-from scratch_llm.climbmix import (
+from scratch_llm.data.climbmix import (
     CLIMBMIX_BASE_URL,
     CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX,
     ClimbMixDownloadError,

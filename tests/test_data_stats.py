@@ -13,7 +13,7 @@ import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import pytest
 
-from scratch_llm.data_stats import (
+from scratch_llm.data.statistics import (
     compute_raw_data_statistics,
     write_raw_data_statistics,
 )

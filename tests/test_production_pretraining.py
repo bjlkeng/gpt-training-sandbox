@@ -15,15 +15,15 @@ import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import torch
 
-from scratch_llm import pretraining
+from scratch_llm.training import pretraining
 from scratch_llm.evaluation.base_tracking import (
     FULL_DOCUMENT_MINIMUM_TRAIN_METRIC,
     NANOCHAT_MINIMUM_TRAIN_METRIC,
 )
-from scratch_llm.best_checkpoint import PeriodicValidationResult
+from scratch_llm.training.best_checkpoint import PeriodicValidationResult
 from scratch_llm.evaluation.bpb import BPBAccumulation, BaseValidationResult
-from scratch_llm.bpe import RegexBPETokenizer, train_reference_bpe
-from scratch_llm.checkpoint import (
+from scratch_llm.tokenization.bpe import RegexBPETokenizer, train_reference_bpe
+from scratch_llm.training.checkpoint import (
     CheckpointError,
     load_model_checkpoint,
     load_training_checkpoint,
@@ -37,7 +37,7 @@ from scratch_llm.config import (
     TrainConfig,
     dump_config,
 )
-from scratch_llm.data import write_tokenized_parquet_shards
+from scratch_llm.data.loaders import write_tokenized_parquet_shards
 from scratch_llm.generation import generate
 from scratch_llm.evaluation.full_document_bpb import (
     FULL_DOCUMENT_PROTOCOL_ID,
@@ -50,12 +50,12 @@ from scratch_llm.evaluation.nanochat_bpb import (
     NANOCHAT_COMPAT_TRAIN_METRIC,
     NANOCHAT_REFERENCE_COMMIT,
 )
-from scratch_llm.pretraining import prepare_pretraining_batch, run_pretraining
+from scratch_llm.training.pretraining import prepare_pretraining_batch, run_pretraining
 from scratch_llm.run import prepare_run
-from scratch_llm.tokenized_data import TokenizedDataError, TokenizedShardReader
+from scratch_llm.data.tokenized import TokenizedDataError, TokenizedShardReader
 from scratch_llm.tracking import NullTracker
 from scratch_llm.tracking_state import TrackingState
-from scratch_llm.training_telemetry import estimate_gpt_training_flops
+from scratch_llm.training.telemetry import estimate_gpt_training_flops
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

@@ -10,14 +10,14 @@ from typing import Any
 import pytest
 import torch
 
-import scratch_llm.pretraining as pretraining
+import scratch_llm.training.pretraining as pretraining
 import scripts.pretrain as pretrain_script
-from scratch_llm.accelerator_memory import (
+from scratch_llm.diagnostics.accelerator_memory import (
     AcceleratorMemorySnapshot,
     collect_accelerator_memory,
 )
 from scratch_llm.config import dump_config, load_config
-from scratch_llm.oom_diagnostics import (
+from scratch_llm.diagnostics.oom import (
     PretrainingOOMError,
     diagnose_out_of_memory,
 )

@@ -14,7 +14,7 @@ import torch
 
 import scripts.eval_base as eval_base_script
 import scripts.sample as sample_script
-from scratch_llm.checkpoint import save_checkpoint
+from scratch_llm.training.checkpoint import save_checkpoint
 from scratch_llm.config import (
     GPTConfig,
     GenerationConfig,
@@ -26,8 +26,8 @@ from scratch_llm.config import (
     load_config,
 )
 from scratch_llm.model import GPT
-from scratch_llm.optim import build_lr_scheduler, build_optimizer
-from scratch_llm.tokenizer import VOCAB_SIZE, ByteTokenizer
+from scratch_llm.training.optim import build_lr_scheduler, build_optimizer
+from scratch_llm.tokenization.tokenizer import VOCAB_SIZE, ByteTokenizer
 from scratch_llm.tracking_state import TrackingState
 
 

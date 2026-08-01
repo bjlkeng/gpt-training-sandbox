@@ -10,7 +10,7 @@ import pytest
 
 from scratch_llm.config import ProjectConfig, load_config
 from scratch_llm.model import GPT
-from scratch_llm.training import derive_grad_accum_steps
+from scratch_llm.training.loop import derive_grad_accum_steps
 from scratch_llm.utils import count_parameters
 
 

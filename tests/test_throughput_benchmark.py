@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from scratch_llm.accelerator_memory import AcceleratorMemorySnapshot
+from scratch_llm.diagnostics.accelerator_memory import AcceleratorMemorySnapshot
 from scratch_llm.config import (
     GPTConfig,
     ProjectConfig,
@@ -16,7 +16,7 @@ from scratch_llm.config import (
     TokenizerConfig,
     TrainConfig,
 )
-from scratch_llm.throughput_benchmark import (
+from scratch_llm.diagnostics.throughput import (
     THROUGHPUT_BENCHMARK_FORMAT,
     THROUGHPUT_BENCHMARK_FORMAT_VERSION,
     BenchmarkExecution,
@@ -24,8 +24,8 @@ from scratch_llm.throughput_benchmark import (
     build_throughput_benchmark,
     report_throughput_benchmark,
 )
-from scratch_llm.training import OptimizerStepResult
-from scratch_llm.training_telemetry import (
+from scratch_llm.training.loop import OptimizerStepResult
+from scratch_llm.training.telemetry import (
     PeakFlopsBasis,
     TrainingStepTelemetry,
     estimate_gpt_training_flops,

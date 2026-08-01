@@ -9,13 +9,13 @@ import pytest
 import torch
 from torch import Tensor
 
-from scratch_llm.accelerator_memory import AcceleratorMemorySnapshot
+from scratch_llm.diagnostics.accelerator_memory import AcceleratorMemorySnapshot
 from scratch_llm.config import GPTConfig, TrainConfig
 from scratch_llm.model import GPT
-from scratch_llm.optim import build_lr_scheduler, build_optimizer
+from scratch_llm.training.optim import build_lr_scheduler, build_optimizer
 from scratch_llm.tracking import Tracker
-from scratch_llm.training import run_training_steps
-from scratch_llm.training_telemetry import (
+from scratch_llm.training.loop import run_training_steps
+from scratch_llm.training.telemetry import (
     TRAINING_FLOPS_FORMULA_ID,
     PeakFlopsBasis,
     base_training_metrics,

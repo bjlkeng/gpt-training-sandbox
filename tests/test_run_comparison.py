@@ -11,7 +11,7 @@ import sys
 import pytest
 
 from scratch_llm.config import ProjectConfig, RunConfig, TrainConfig, dump_config
-from scratch_llm.run_comparison import (
+from scratch_llm.comparison.pipeline import (
     RUN_COMPARISON_FORMAT,
     RUN_COMPARISON_FORMAT_VERSION,
     RunComparisonError,

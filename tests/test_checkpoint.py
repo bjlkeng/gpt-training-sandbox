@@ -14,9 +14,9 @@ from torch.optim import SGD
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
 
-from scratch_llm import checkpoint
-from scratch_llm.best_checkpoint import ValidationCheckpointState
-from scratch_llm.checkpoint import (
+from scratch_llm.training import checkpoint
+from scratch_llm.training.best_checkpoint import ValidationCheckpointState
+from scratch_llm.training.checkpoint import (
     CheckpointError,
     ExactTrainingState,
     load_model_checkpoint,
@@ -31,11 +31,11 @@ from scratch_llm.config import (
     TokenizerConfig,
     TrainConfig,
 )
-from scratch_llm.data import NextTokenDataset
+from scratch_llm.data.loaders import NextTokenDataset
 from scratch_llm.model import GPT
-from scratch_llm.optim import build_lr_scheduler, build_optimizer
-from scratch_llm.rng_state import capture_training_rng_state
-from scratch_llm.tokenizer import (
+from scratch_llm.training.optim import build_lr_scheduler, build_optimizer
+from scratch_llm.training.rng_state import capture_training_rng_state
+from scratch_llm.tokenization.tokenizer import (
     BYTE_VOCAB_SIZE,
     SPECIAL_TOKENS,
     VOCAB_SIZE,
@@ -43,7 +43,7 @@ from scratch_llm.tokenizer import (
     Tokenizer,
 )
 from scratch_llm.tracking import NullTracker
-from scratch_llm.training import run_training_steps
+from scratch_llm.training.loop import run_training_steps
 from scratch_llm.tracking_state import TrackingState
 
 

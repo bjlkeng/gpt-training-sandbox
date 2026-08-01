@@ -13,14 +13,14 @@ import sys
 import pytest
 import torch
 
-import scratch_llm.resource_estimation as resource_estimation
-from scratch_llm.accelerator_memory import (
+import scratch_llm.diagnostics.resource_estimation as resource_estimation
+from scratch_llm.diagnostics.accelerator_memory import (
     AcceleratorMemorySnapshot,
     collect_accelerator_memory,
 )
 from scratch_llm.config import GPTConfig, load_config
 from scratch_llm.model import GPT
-from scratch_llm.resource_estimation import (
+from scratch_llm.diagnostics.resource_estimation import (
     RESOURCE_ESTIMATE_FORMAT,
     RESOURCE_ESTIMATE_FORMAT_VERSION,
     compare_memory_estimate,

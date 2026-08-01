@@ -6,14 +6,14 @@ from collections.abc import Sequence
 import os
 from pathlib import Path
 
-from scratch_llm._run_comparison_loading import load_run_snapshots
-from scratch_llm._run_comparison_model import (
+from scratch_llm.comparison.loading import load_run_snapshots
+from scratch_llm.comparison.model import (
     RUN_COMPARISON_FORMAT,
     RUN_COMPARISON_FORMAT_VERSION,
     RunComparisonArtifacts,
     RunComparisonError,
 )
-from scratch_llm._run_comparison_reporting import (
+from scratch_llm.comparison.reporting import (
     build_comparison_payload,
     render_comparison_markdown,
 )

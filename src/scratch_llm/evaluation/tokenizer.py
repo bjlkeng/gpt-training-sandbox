@@ -13,13 +13,13 @@ from scratch_llm._validation import (
     require_non_negative_integer,
     require_positive_integer,
 )
-from scratch_llm.climbmix import CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX
-from scratch_llm.data import (
+from scratch_llm.data.climbmix import CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX
+from scratch_llm.data.loaders import (
     list_parquet_files,
     parquets_iter_batched,
     select_parquet_files,
 )
-from scratch_llm.tokenizer import Tokenizer
+from scratch_llm.tokenization.tokenizer import Tokenizer
 from scratch_llm.utils import atomic_write
 
 

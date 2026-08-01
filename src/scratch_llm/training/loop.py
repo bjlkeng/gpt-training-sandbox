@@ -20,18 +20,22 @@ from scratch_llm._validation import (
     require_positive_integer,
     require_positive_real,
 )
-from scratch_llm.accelerator_memory import (
+from scratch_llm.diagnostics.accelerator_memory import (
     AcceleratorMemorySnapshot,
     collect_accelerator_memory,
     reset_accelerator_memory_peak,
 )
 from scratch_llm.config import ProjectConfig
-from scratch_llm.data import NextTokenDataset
+from scratch_llm.data.loaders import NextTokenDataset
 from scratch_llm.model import GPT
-from scratch_llm.optim import build_lr_scheduler, build_optimizer
-from scratch_llm.tokenizer import NANOCHAT_SPECIAL_TOKENS, ByteTokenizer, Tokenizer
+from scratch_llm.training.optim import build_lr_scheduler, build_optimizer
+from scratch_llm.tokenization.tokenizer import (
+    NANOCHAT_SPECIAL_TOKENS,
+    ByteTokenizer,
+    Tokenizer,
+)
 from scratch_llm.tracking import NullTracker, Tracker
-from scratch_llm.training_telemetry import (
+from scratch_llm.training.telemetry import (
     PeakFlopsBasis,
     TrainingStepTelemetry,
     base_training_metrics,

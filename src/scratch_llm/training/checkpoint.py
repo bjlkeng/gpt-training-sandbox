@@ -19,24 +19,24 @@ from scratch_llm._validation import (
     require_non_negative_integer,
     require_real,
 )
-from scratch_llm.best_checkpoint import (
+from scratch_llm.training.best_checkpoint import (
     BestCheckpointError,
     ValidationCheckpointState,
 )
 from scratch_llm.config import ProjectConfig
-from scratch_llm.bpe import RegexBPETokenizer
+from scratch_llm.tokenization.bpe import RegexBPETokenizer
 from scratch_llm.model import GPT
-from scratch_llm.optim import (
+from scratch_llm.training.optim import (
     WarmupConstantWarmdownLR,
     build_lr_scheduler,
     build_optimizer,
 )
-from scratch_llm.rng_state import (
+from scratch_llm.training.rng_state import (
     RNGStateError,
     TrainingRNGState,
     preserve_global_rng_state,
 )
-from scratch_llm.tokenizer import (
+from scratch_llm.tokenization.tokenizer import (
     BYTE_VOCAB_SIZE,
     NANOCHAT_SPECIAL_TOKENS,
     ByteTokenizer,

@@ -8,8 +8,8 @@ import pytest
 import torch
 from torch.utils.data import DataLoader
 
-from scratch_llm.data import NextTokenDataset
-from scratch_llm.tokenizer import ByteTokenizer, VOCAB_SIZE
+from scratch_llm.data.loaders import NextTokenDataset
+from scratch_llm.tokenization.tokenizer import ByteTokenizer, VOCAB_SIZE
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

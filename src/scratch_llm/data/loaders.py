@@ -24,11 +24,11 @@ from scratch_llm._validation import (
     require_non_negative_integer,
     require_positive_integer,
 )
-from scratch_llm.climbmix import (
+from scratch_llm.data.climbmix import (
     CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX,
     DEFAULT_CLIMBMIX_DATA_DIR,
 )
-from scratch_llm.tokenized_data import (
+from scratch_llm.data.tokenized import (
     TOKENIZED_MANIFEST_NAME,
     TOKENIZED_SHARD_FORMAT,
     TOKENIZED_SHARD_FORMAT_VERSION,
@@ -42,7 +42,7 @@ from scratch_llm.tokenized_data import (
     tokenized_manifest_identity,
     write_tokenized_shards,
 )
-from scratch_llm.tokenizer import VOCAB_SIZE, Tokenizer
+from scratch_llm.tokenization.tokenizer import VOCAB_SIZE, Tokenizer
 
 
 _PARQUET_SHARD_NAME = re.compile(r"^shard_([0-9]+)\.parquet$")

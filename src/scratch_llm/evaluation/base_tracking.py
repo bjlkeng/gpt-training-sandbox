@@ -19,7 +19,7 @@ from scratch_llm.evaluation.sampling import (
     BaseSamplesResult,
     write_base_samples_markdown,
 )
-from scratch_llm.best_checkpoint import (
+from scratch_llm.training.best_checkpoint import (
     BEST_CHECKPOINT_RANKING_PROTOCOL_ID,
     PeriodicValidationResult,
     ValidationCheckpointState,

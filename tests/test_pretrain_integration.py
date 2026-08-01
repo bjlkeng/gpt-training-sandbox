@@ -11,7 +11,7 @@ from typing import Any
 
 import torch
 
-from scratch_llm.checkpoint import load_model_checkpoint
+from scratch_llm.training.checkpoint import load_model_checkpoint
 from scratch_llm.config import ProjectConfig, dump_config, load_config
 
 

@@ -8,7 +8,7 @@ import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import pytest
 
-from scratch_llm.data import (
+from scratch_llm.data.loaders import (
     CLIMBMIX_FINAL_VALIDATION_SHARD_INDEX,
     list_parquet_files,
     parquets_iter_batched,

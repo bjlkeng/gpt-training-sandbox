@@ -21,7 +21,7 @@ from scratch_llm._validation import (
     require_integer,
     require_positive_integer,
 )
-from scratch_llm.tokenizer import Tokenizer
+from scratch_llm.tokenization.tokenizer import Tokenizer
 from scratch_llm.utils import save_json
 
 

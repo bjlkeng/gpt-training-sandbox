@@ -31,7 +31,7 @@ from scratch_llm._validation import (
     _require_real,
     _require_unit_interval,
 )
-from scratch_llm.tokenizer import (
+from scratch_llm.tokenization.tokenizer import (
     NANOCHAT_SPECIAL_TOKENS,
     VOCAB_SIZE as BYTE_TOKENIZER_VOCAB_SIZE,
 )

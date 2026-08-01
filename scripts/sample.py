@@ -7,7 +7,7 @@ from collections.abc import Sequence
 
 import torch
 
-from scratch_llm.checkpoint import CheckpointError, load_model_checkpoint
+from scratch_llm.training.checkpoint import CheckpointError, load_model_checkpoint
 from scratch_llm.generation import generate_sequences
 from scripts._common import checkpoint_parser
 

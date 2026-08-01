@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 import torch
 
-from scratch_llm.accelerator_memory import (
+from scratch_llm.diagnostics.accelerator_memory import (
     AcceleratorMemoryError,
     AcceleratorMemorySnapshot,
     collect_accelerator_memory,

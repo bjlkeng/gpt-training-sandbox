@@ -26,7 +26,7 @@ from scratch_llm.generation import (
     CompletionReason,
     generate_sequences,
 )
-from scratch_llm.tokenizer import Tokenizer
+from scratch_llm.tokenization.tokenizer import Tokenizer
 from scratch_llm.utils import atomic_write, get_device
 
 

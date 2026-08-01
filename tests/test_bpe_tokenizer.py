@@ -9,15 +9,15 @@ from typing import Any
 
 import pytest
 
-import scratch_llm.bpe as bpe
-from scratch_llm.bpe import (
+import scratch_llm.tokenization.bpe as bpe
+from scratch_llm.tokenization.bpe import (
     BPEMerge,
     ReferenceBPETrainingResult,
     RegexBPETokenizer,
     train_reference_bpe,
 )
-from scratch_llm.regex_chunking import bpe_encoding_chunks
-from scratch_llm.tokenizer import (
+from scratch_llm.tokenization.regex_chunking import bpe_encoding_chunks
+from scratch_llm.tokenization.tokenizer import (
     BYTE_VOCAB_SIZE,
     NANOCHAT_SPECIAL_TOKENS,
     ByteTokenizer,

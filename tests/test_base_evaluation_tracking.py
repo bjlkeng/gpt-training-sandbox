@@ -36,7 +36,7 @@ from scratch_llm.evaluation.sampling import (
     FixedBaseSamplingConfig,
     generate_fixed_base_samples,
 )
-from scratch_llm.best_checkpoint import (
+from scratch_llm.training.best_checkpoint import (
     PeriodicValidationResult,
     ValidationCheckpointState,
     advance_validation_state,
@@ -60,7 +60,7 @@ from scratch_llm.evaluation.core.tracking import (
     CORE_RUN_KIND_METRIC,
     CORE_TASK_COUNT_METRIC,
 )
-from scratch_llm.data import write_tokenized_parquet_shards
+from scratch_llm.data.loaders import write_tokenized_parquet_shards
 from scratch_llm.evaluation.full_document_bpb import (
     FULL_DOCUMENT_EVAL_METRIC,
     FULL_DOCUMENT_PROTOCOL_ID,
@@ -79,9 +79,9 @@ from scratch_llm.evaluation.nanochat_bpb import (
     evaluate_nanochat_compatible_bpb,
 )
 from scratch_llm.run import prepare_run
-from scratch_llm.tokenized_data import TokenizedShardReader
-from scratch_llm.tokenizer import ByteTokenizer
-from scratch_llm.tokenizer_artifacts import build_token_byte_lengths
+from scratch_llm.data.tokenized import TokenizedShardReader
+from scratch_llm.tokenization.tokenizer import ByteTokenizer
+from scratch_llm.tokenization.artifacts import build_token_byte_lengths
 from scratch_llm.tracking import Tracker, build_tracker
 from tests.fixtures.bpb_conformance import BPB_CONFORMANCE_FIXTURE
 

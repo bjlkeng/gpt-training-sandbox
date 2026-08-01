@@ -78,6 +78,61 @@ OBSOLETE_TOP_LEVEL_EVALUATION_MODULES = {
     "tokenizer_evaluation",
     "tokenizer_tracking",
 }
+EXPECTED_DOMAIN_MODULES = {
+    "comparison": {"loading", "model", "pipeline", "reporting"},
+    "data": {"climbmix", "loaders", "preparation", "statistics", "tokenized"},
+    "diagnostics": {
+        "accelerator_memory",
+        "oom",
+        "resource_estimation",
+        "throughput",
+        "throughput_runtime",
+    },
+    "tokenization": {
+        "artifacts",
+        "bpe",
+        "optimized_bpe",
+        "regex_chunking",
+        "tokenizer",
+        "training",
+    },
+    "training": {
+        "best_checkpoint",
+        "checkpoint",
+        "loop",
+        "optim",
+        "pretraining",
+        "rng_state",
+        "telemetry",
+    },
+}
+OBSOLETE_TOP_LEVEL_DOMAIN_MODULES = {
+    "_run_comparison_loading",
+    "_run_comparison_model",
+    "_run_comparison_reporting",
+    "accelerator_memory",
+    "best_checkpoint",
+    "bpe",
+    "bpe_optimized",
+    "checkpoint",
+    "climbmix",
+    "data_preparation",
+    "data_stats",
+    "oom_diagnostics",
+    "optim",
+    "pretraining",
+    "regex_chunking",
+    "resource_estimation",
+    "rng_state",
+    "run_comparison",
+    "throughput_benchmark",
+    "throughput_benchmark_runtime",
+    "tokenized_data",
+    "tokenizer",
+    "tokenizer_artifacts",
+    "tokenizer_training",
+    "training_telemetry",
+}
 REQUIREMENT_NAME = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)")
 EXTRA_MARKER = re.compile(r"extra\s*==\s*['\"]([^'\"]+)['\"]")
 
@@ -113,11 +168,42 @@ def test_evaluation_modules_are_grouped_by_scope() -> None:
         assert find_spec(f"scratch_llm.{module_name}") is None
 
 
+def test_domain_modules_are_grouped_by_responsibility() -> None:
+    source_directory = PROJECT_ROOT / "src" / "scratch_llm"
+
+    for package_name, module_names in EXPECTED_DOMAIN_MODULES.items():
+        package_directory = source_directory / package_name
+        package_spec = find_spec(f"scratch_llm.{package_name}")
+        assert package_spec is not None
+        assert package_spec.submodule_search_locations is not None
+        assert Path(package_spec.origin or "").resolve().parent == package_directory
+        for module_name in module_names:
+            spec = find_spec(f"scratch_llm.{package_name}.{module_name}")
+            assert spec is not None
+            assert Path(spec.origin or "").resolve().parent == package_directory
+
+    for module_name in OBSOLETE_TOP_LEVEL_DOMAIN_MODULES:
+        assert find_spec(f"scratch_llm.{module_name}") is None
+
+
 def test_editable_install_exposes_packages_outside_the_repository(
     tmp_path: Path,
 ) -> None:
     result = subprocess.run(
-        [sys.executable, "-I", "-c", "import scratch_llm, scripts"],
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            (
+                "import scratch_llm, scripts; "
+                "import scratch_llm.comparison.pipeline; "
+                "import scratch_llm.data.loaders; "
+                "import scratch_llm.diagnostics.throughput; "
+                "import scratch_llm.evaluation.core.pipeline; "
+                "import scratch_llm.tokenization.tokenizer; "
+                "import scratch_llm.training.pretraining"
+            ),
+        ],
         cwd=tmp_path,
         check=False,
         capture_output=True,

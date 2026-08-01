@@ -16,13 +16,16 @@ from scratch_llm._validation import (
     require_optional_non_negative_integer,
     require_positive_integer,
 )
-from scratch_llm.regex_chunking import bpe_encoding_chunks, iter_bpe_training_chunks
-from scratch_llm.tokenizer import (
+from scratch_llm.tokenization.regex_chunking import (
+    bpe_encoding_chunks,
+    iter_bpe_training_chunks,
+)
+from scratch_llm.tokenization.tokenizer import (
     BYTE_VOCAB_SIZE,
     NANOCHAT_SPECIAL_TOKENS,
     Tokenizer,
 )
-from scratch_llm.tokenizer_artifacts import regex_bpe_identity
+from scratch_llm.tokenization.artifacts import regex_bpe_identity
 
 
 PAIR_TIE_BREAK: Final = (
@@ -235,7 +238,7 @@ class RegexBPETokenizer(Tokenizer):
     def save(self, path: str | PathLike[str]) -> None:
         """Persist one complete versioned tokenizer artifact directory."""
 
-        from scratch_llm.tokenizer_artifacts import save_regex_bpe_artifacts
+        from scratch_llm.tokenization.artifacts import save_regex_bpe_artifacts
 
         save_regex_bpe_artifacts(self, self._training_result, path)
 
@@ -243,7 +246,7 @@ class RegexBPETokenizer(Tokenizer):
     def load(cls, path: str | PathLike[str]) -> RegexBPETokenizer:
         """Load and validate a complete versioned tokenizer artifact directory."""
 
-        from scratch_llm.tokenizer_artifacts import load_regex_bpe_training_result
+        from scratch_llm.tokenization.artifacts import load_regex_bpe_training_result
 
         return cls(load_regex_bpe_training_result(path))
 
@@ -468,7 +471,7 @@ def train_bpe(
             max_characters=max_characters,
         )
     if algorithm == "optimized":
-        from scratch_llm.bpe_optimized import train_optimized_bpe
+        from scratch_llm.tokenization.optimized_bpe import train_optimized_bpe
 
         return train_optimized_bpe(
             texts,

@@ -19,7 +19,7 @@ from scratch_llm._validation import (
     require_non_negative_real,
     require_optional_non_negative_integer,
 )
-from scratch_llm.bpe import (
+from scratch_llm.tokenization.bpe import (
     BPEMerge,
     BPETrainingError,
     ReferenceBPETrainingResult,
@@ -31,8 +31,8 @@ from scratch_llm.bpe import (
     _validate_special_tokens,
     _validate_vocab_size,
 )
-from scratch_llm.tokenizer import BYTE_VOCAB_SIZE, NANOCHAT_SPECIAL_TOKENS
-from scratch_llm.tokenizer_artifacts import regex_bpe_identity
+from scratch_llm.tokenization.tokenizer import BYTE_VOCAB_SIZE, NANOCHAT_SPECIAL_TOKENS
+from scratch_llm.tokenization.artifacts import regex_bpe_identity
 from scratch_llm.utils import save_json
 
 
@@ -501,7 +501,7 @@ def _train_for_benchmark(
     max_characters: int | None,
 ) -> ReferenceBPETrainingResult:
     if algorithm == "reference":
-        from scratch_llm.bpe import train_reference_bpe
+        from scratch_llm.tokenization.bpe import train_reference_bpe
 
         return train_reference_bpe(
             texts,

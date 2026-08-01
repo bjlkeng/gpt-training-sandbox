@@ -19,7 +19,7 @@ from scratch_llm.evaluation.core.scoring import (
     prepare_core_evaluation_cases,
     score_core_token_batch,
 )
-from scratch_llm.tokenizer import ByteTokenizer
+from scratch_llm.tokenization.tokenizer import ByteTokenizer
 
 
 class _PreferredTokenModel(nn.Module):

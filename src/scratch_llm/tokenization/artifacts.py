@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Final
 import torch
 
 from scratch_llm._validation import JsonValueValidator, require_non_negative_integer
-from scratch_llm.tokenizer import (
+from scratch_llm.tokenization.tokenizer import (
     BYTE_VOCAB_SIZE,
     NANOCHAT_SPECIAL_TOKENS,
     Tokenizer,
@@ -25,7 +25,7 @@ from scratch_llm.tokenizer import (
 from scratch_llm.utils import atomic_write, save_json
 
 if TYPE_CHECKING:
-    from scratch_llm.bpe import ReferenceBPETrainingResult
+    from scratch_llm.tokenization.bpe import ReferenceBPETrainingResult
 
 
 TOKENIZER_ARTIFACT_FORMAT: Final = "scratch_llm_regex_byte_bpe"
@@ -237,7 +237,7 @@ def load_regex_bpe_training_result(
 def _parse_tokenizer_document(
     document: dict[str, object],
 ) -> ReferenceBPETrainingResult:
-    from scratch_llm.bpe import BPEMerge, ReferenceBPETrainingResult
+    from scratch_llm.tokenization.bpe import BPEMerge, ReferenceBPETrainingResult
 
     _validate_common_document(document, artifact_type="tokenizer")
     _JSON_VALUES.require_object(

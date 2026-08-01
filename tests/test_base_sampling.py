@@ -18,7 +18,7 @@ from scratch_llm.evaluation.sampling import (
     generate_fixed_base_samples,
     write_base_samples_markdown,
 )
-from scratch_llm.tokenizer import ByteTokenizer
+from scratch_llm.tokenization.tokenizer import ByteTokenizer
 
 
 EXPECTED_PROMPTS = (

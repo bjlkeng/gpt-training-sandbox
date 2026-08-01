@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from scratch_llm.bpe import RegexBPETokenizer, train_reference_bpe
+from scratch_llm.tokenization.bpe import RegexBPETokenizer, train_reference_bpe
 from scratch_llm.config import (
     ProjectConfig,
     RunConfig,
@@ -29,7 +29,7 @@ from scratch_llm.evaluation.tokenizer_tracking import (
     track_tokenizer_evaluation,
     track_tokenizer_training,
 )
-from scratch_llm.tokenizer_training import TokenizerTrainingRunResult
+from scratch_llm.tokenization.training import TokenizerTrainingRunResult
 from scratch_llm.tracking import Tracker, build_tracker
 from scratch_llm.utils import save_json
 

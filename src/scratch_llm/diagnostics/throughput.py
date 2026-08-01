@@ -16,16 +16,16 @@ from scratch_llm._validation import (
     require_non_empty_string,
     require_positive_integer,
 )
-from scratch_llm.accelerator_memory import AcceleratorMemorySnapshot
+from scratch_llm.diagnostics.accelerator_memory import AcceleratorMemorySnapshot
 from scratch_llm.config import ProjectConfig
 from scratch_llm.identity import project_config_identity
-from scratch_llm.resource_estimation import (
+from scratch_llm.diagnostics.resource_estimation import (
     compare_memory_estimate,
     estimate_training_resources,
 )
 from scratch_llm.tracking import RunTracker, Tracker
-from scratch_llm.training import OptimizerStepResult
-from scratch_llm.training_telemetry import TrainingStepTelemetry
+from scratch_llm.training.loop import OptimizerStepResult
+from scratch_llm.training.telemetry import TrainingStepTelemetry
 from scratch_llm.utils import load_json, save_json
 
 

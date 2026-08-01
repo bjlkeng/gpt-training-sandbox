@@ -25,7 +25,7 @@ from scratch_llm.evaluation.core.scoring import (
     prepare_core_evaluation_cases,
     score_core_token_batch,
 )
-from scratch_llm.tokenizer import Tokenizer
+from scratch_llm.tokenization.tokenizer import Tokenizer
 from scratch_llm.utils import get_device
 
 

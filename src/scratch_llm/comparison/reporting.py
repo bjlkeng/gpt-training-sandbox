@@ -6,7 +6,7 @@ from collections.abc import Mapping
 import json
 from typing import Any, TypeGuard
 
-from scratch_llm._run_comparison_model import (
+from scratch_llm.comparison.model import (
     IDENTITY_FIELDS,
     RUN_COMPARISON_FORMAT,
     RUN_COMPARISON_FORMAT_VERSION,
@@ -26,7 +26,7 @@ from scratch_llm.evaluation.nanochat_bpb import (
     NANOCHAT_COMPAT_PROTOCOL_ID,
     NANOCHAT_COMPAT_TRAIN_METRIC,
 )
-from scratch_llm.resource_estimation import estimate_gpt_model_size
+from scratch_llm.diagnostics.resource_estimation import estimate_gpt_model_size
 
 
 def build_comparison_payload(

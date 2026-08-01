@@ -13,8 +13,8 @@ import numpy as np
 import pytest
 import torch
 
-from scratch_llm import data
-from scratch_llm.data import (
+from scratch_llm.data import loaders as data
+from scratch_llm.data.loaders import (
     NextTokenDataset,
     RandomOffsetTokenLoader,
     RandomOffsetTokenLoaderStateError,
@@ -23,7 +23,7 @@ from scratch_llm.data import (
     TokenizedDataError,
     write_tokenized_shards,
 )
-from scratch_llm.tokenizer import ByteTokenizer, VOCAB_SIZE
+from scratch_llm.tokenization.tokenizer import ByteTokenizer, VOCAB_SIZE
 from scratch_llm.utils import save_json
 
 
@@ -300,8 +300,8 @@ def test_json_state_resumes_the_exact_next_batch_in_a_fresh_process(
 import json
 from pathlib import Path
 import sys
-from scratch_llm.data import RandomOffsetTokenLoader, TokenizedShardReader
-from scratch_llm.tokenizer import ByteTokenizer
+from scratch_llm.data.loaders import RandomOffsetTokenLoader, TokenizedShardReader
+from scratch_llm.tokenization.tokenizer import ByteTokenizer
 
 dataset_dir = Path(sys.argv[1])
 state = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
