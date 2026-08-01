@@ -251,7 +251,7 @@ def evaluate_bpb_batches(
     torch_rng_state = torch.random.get_rng_state().clone()
     cuda_rng_states = (
         tuple(state.clone() for state in torch.cuda.get_rng_state_all())
-        if resolved_device.type == "cuda"
+        if torch.cuda.is_initialized()
         else None
     )
 
