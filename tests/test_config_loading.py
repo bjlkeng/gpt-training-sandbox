@@ -219,7 +219,9 @@ def test_smoke_config_is_a_cpu_safe_tiny_byte_gpt() -> None:
 
     assert config.run.device == "cpu"
     assert config.tracking.wandb.enabled is False
-    assert config.tracking.wandb.mode == "disabled"
+    assert config.tracking.wandb.project == "gpt-training-sandbox"
+    assert config.tracking.wandb.entity is None
+    assert config.tracking.wandb.mode == "online"
     assert config.data.profile == "tiny_text"
     assert config.data.base_dir == "data"
     assert config.tokenizer.type == "byte"

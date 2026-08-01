@@ -18,6 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = PROJECT_ROOT / "configs"
 TOKENIZER_ARTIFACTS = "runs/tokenizer-32k/artifacts/tokenizer"
 TOKENIZED_DATA = "data/tokenized"
+WANDB_PROJECT = "gpt-training-sandbox"
 
 PRESETS = {
     "base_smoke.yaml": {
@@ -69,6 +70,10 @@ def test_base_preset_loads_with_production_artifacts_and_exact_token_budget(
     assert isinstance(config, ProjectConfig)
     assert config.run.name == expected["run_name"]
     assert config.run.device == "cuda"
+    assert config.tracking.wandb.enabled is False
+    assert config.tracking.wandb.project == WANDB_PROJECT
+    assert config.tracking.wandb.entity is None
+    assert config.tracking.wandb.mode == "online"
     assert config.data.profile == "nanochat_climbmix"
     assert config.data.loader_strategy == "packed"
     assert config.data.tokenized_dir == TOKENIZED_DATA

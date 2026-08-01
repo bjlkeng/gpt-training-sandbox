@@ -7,7 +7,9 @@ run:
 tracking:
   wandb:
     enabled: false
-    mode: disabled
+    project: gpt-training-sandbox
+    entity: null
+    mode: online
 
 data:
   profile: nanochat_climbmix
