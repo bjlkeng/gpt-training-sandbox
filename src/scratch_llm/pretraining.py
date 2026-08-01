@@ -468,7 +468,7 @@ def prepare_pretraining_batch(
     return inputs, masked_targets
 
 
-class _PreparedBatchIterator(Iterator[tuple[Tensor, Tensor]]):
+class PreparedPretrainingBatchIterator(Iterator[tuple[Tensor, Tensor]]):
     """Adapt one infinite token loader to the shared two-tensor loop."""
 
     def __init__(
@@ -480,7 +480,7 @@ class _PreparedBatchIterator(Iterator[tuple[Tensor, Tensor]]):
         self._batches = batches
         self._strategy = strategy
 
-    def __iter__(self) -> _PreparedBatchIterator:
+    def __iter__(self) -> PreparedPretrainingBatchIterator:
         return self
 
     def __next__(self) -> tuple[Tensor, Tensor]:
@@ -520,7 +520,7 @@ def _validate_tiny_text_config(config: ProjectConfig) -> None:
     _validate_training_runtime_config(config)
 
 
-def _validate_production_config(config: ProjectConfig) -> None:
+def validate_production_pretraining_config(config: ProjectConfig) -> None:
     config.validate()
     if config.data.profile != "nanochat_climbmix":
         raise PretrainingError(
@@ -535,7 +535,7 @@ def _validate_production_config(config: ProjectConfig) -> None:
     _validate_training_runtime_config(config)
 
 
-def _load_production_tokenizer(config: ProjectConfig) -> RegexBPETokenizer:
+def load_production_tokenizer(config: ProjectConfig) -> RegexBPETokenizer:
     artifact_dir = config.tokenizer.artifact_dir
     if artifact_dir is None:  # pragma: no cover - validated by the caller.
         raise PretrainingError("production pretraining requires tokenizer.artifact_dir")
@@ -818,7 +818,7 @@ def _validate_pretraining_request(
     if config.data.profile == "tiny_text":
         _validate_tiny_text_config(config)
     elif config.data.profile == "nanochat_climbmix":
-        _validate_production_config(config)
+        validate_production_pretraining_config(config)
     else:
         raise PretrainingError(
             "pretraining data.profile must be 'tiny_text' or "
@@ -847,7 +847,7 @@ def _prepare_training_data(
             training_tokens_per_epoch=None,
         )
 
-    production_tokenizer = _load_production_tokenizer(config)
+    production_tokenizer = load_production_tokenizer(config)
     reader = resources.enter_context(
         TokenizedShardReader(
             config.data.tokenized_dir,
@@ -865,7 +865,7 @@ def _prepare_training_data(
     )
     return _PreparedTrainingData(
         tokenizer=production_tokenizer,
-        batches=_PreparedBatchIterator(
+        batches=PreparedPretrainingBatchIterator(
             iter(production_loader),  # type: ignore[arg-type]
             strategy=config.data.loader_strategy,
         ),
@@ -1389,7 +1389,10 @@ __all__ = [
     "PretrainingError",
     "PretrainingOOMError",
     "PretrainingResult",
+    "PreparedPretrainingBatchIterator",
+    "load_production_tokenizer",
     "prepare_pretraining_batch",
     "run_pretraining",
     "run_tiny_pretraining",
+    "validate_production_pretraining_config",
 ]
