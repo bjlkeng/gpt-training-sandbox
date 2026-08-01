@@ -79,7 +79,7 @@ OBSOLETE_TOP_LEVEL_EVALUATION_MODULES = {
     "tokenizer_tracking",
 }
 EXPECTED_DOMAIN_MODULES = {
-    "chat": {"conversation", "rendering"},
+    "chat": {"conversation", "datasets", "hub", "rendering"},
     "comparison": {"loading", "model", "pipeline", "reporting"},
     "data": {"climbmix", "loaders", "preparation", "statistics", "tokenized"},
     "diagnostics": {
