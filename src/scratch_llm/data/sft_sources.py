@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-import hashlib
 from itertools import islice
-import json
 import random
 from typing import Final
 
@@ -31,6 +29,7 @@ from scratch_llm.chat.conversation import (
     parse_conversation,
 )
 from scratch_llm.data.hub import CachedHubParquetDataset, HubDatasetSpec
+from scratch_llm.identity import canonical_json_identity
 
 
 _SHARED_SEED_MAX: Final = 2**32 - 1
@@ -292,7 +291,7 @@ class SFTConversationDataset:
             raise TypeError("shuffle must be a boolean")
         self.cache = cache
         self.shuffle = shuffle
-        self.source_identity = _canonical_identity(
+        self.source_identity = canonical_json_identity(
             {
                 "cache_source_identity": cache.source_identity,
                 "format": "scratch_llm_sft_parquet_view_v1",
@@ -434,23 +433,7 @@ def preview_examples_identity(examples: tuple[SFTConversationExample, ...]) -> s
         isinstance(example, SFTConversationExample) for example in examples
     ):
         raise TypeError("examples must be a tuple of SFTConversationExample values")
-    encoded = json.dumps(
-        [example.identity for example in examples],
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
-
-
-def _canonical_identity(value: object) -> str:
-    encoded = json.dumps(
-        value,
-        allow_nan=False,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+    return canonical_json_identity([example.identity for example in examples])
 
 
 def _normalize_row(
@@ -478,14 +461,7 @@ def _example_identity(
         "source_identity": source_identity,
         "source_row": source_row,
     }
-    encoded = json.dumps(
-        payload,
-        allow_nan=False,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+    return canonical_json_identity(payload)
 
 
 def _conversation_record(conversation: Conversation) -> dict[str, object]:

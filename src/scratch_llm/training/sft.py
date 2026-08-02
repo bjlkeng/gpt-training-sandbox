@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-import hashlib
 import json
 from pathlib import Path
 from typing import Literal
@@ -33,7 +32,7 @@ from scratch_llm.evaluation.sft_bpb import (
     advance_sft_validation_state,
     sft_validation_identity,
 )
-from scratch_llm.identity import file_identity
+from scratch_llm.identity import canonical_json_identity, file_identity
 from scratch_llm.diagnostics.accelerator_memory import (
     AcceleratorMemorySnapshot,
     collect_accelerator_memory,
@@ -177,14 +176,7 @@ def sft_mixture_identity(
         "seed": seed,
         "source_identities": [source.source_identity for source in sources],
     }
-    encoded = json.dumps(
-        payload,
-        allow_nan=False,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+    return canonical_json_identity(payload)
 
 
 def run_sft_training(

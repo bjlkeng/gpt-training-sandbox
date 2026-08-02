@@ -6,7 +6,6 @@ from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
-import json
 import math
 from os import PathLike
 from pathlib import Path
@@ -40,7 +39,7 @@ from scratch_llm.chat.rendering import (
 )
 from scratch_llm.data.sft_sources import SFTConversationExample
 from scratch_llm.tokenization.tokenizer import Tokenizer
-from scratch_llm.identity import file_identity
+from scratch_llm.identity import canonical_json_identity, file_identity
 
 
 SFT_LOADER_STATE_FORMAT: Final = "scratch_llm_sft_conversation_loader_state"
@@ -149,7 +148,7 @@ class InMemorySFTSource:
             parse_conversation(conversation) for conversation in conversations
         )
         if source_identity is None:
-            source_identity = _canonical_identity(
+            source_identity = canonical_json_identity(
                 {
                     "conversations": [
                         _conversation_payload(conversation)
@@ -178,7 +177,7 @@ class InMemorySFTSource:
                 conversation=conversation,
                 source_identity=self.source_identity,
                 source_row=source_row,
-                identity=_canonical_identity(
+                identity=canonical_json_identity(
                     {
                         "conversation": _conversation_payload(conversation),
                         "source_identity": self.source_identity,
@@ -801,7 +800,7 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
             )
         if not any(rendered.loss_mask[1:]):
             return None, cropped
-        item_identity = _canonical_identity(
+        item_identity = canonical_json_identity(
             {
                 "example_identity": example.identity,
                 "source_index": source_index,
@@ -970,7 +969,7 @@ def load_jsonl_conversation_source(
     conversations = read_conversations(path)
     return InMemorySFTSource(
         conversations,
-        source_identity=_canonical_identity(
+        source_identity=canonical_json_identity(
             {
                 "file_identity": file_identity(Path(path)),
                 "format": "scratch_llm_jsonl_conversation_source_v1",
@@ -1102,17 +1101,6 @@ def _conversation_payload(conversation: Conversation) -> dict[str, object]:
         "messages": messages,
         "schema_version": conversation.schema_version,
     }
-
-
-def _canonical_identity(value: object) -> str:
-    encoded = json.dumps(
-        value,
-        allow_nan=False,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 def _largest_fitting_index(
