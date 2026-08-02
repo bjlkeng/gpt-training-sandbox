@@ -396,13 +396,87 @@ def test_json_safe_state_resumes_exact_batches_and_buffer_identities() -> None:
     assert resumed.state_dict() == uninterrupted.state_dict()
 
 
+def test_state_keeps_only_independent_mixture_progress_and_buffer_references() -> None:
+    source = _source(tuple(_conversation(chr(65 + index), 8) for index in range(6)))
+    loader = _loader(
+        source,
+        max_seq_len=7,
+        buffer_size=4,
+        seed=11,
+        repeat=True,
+    )
+
+    loader.next_batch()
+    state = loader.state_dict()
+
+    assert "mixture_order" not in state
+    assert "source_cursors" not in state
+    assert state["buffer"]
+    assert all(
+        set(item) == {"item_identity", "source_index", "source_offset"}
+        for item in state["buffer"]
+    )
+
+
+def test_compact_state_resumes_a_weighted_multi_source_mixture_exactly() -> None:
+    first = _source(
+        tuple(_conversation(chr(65 + index), 8) for index in range(4)),
+        identity="first",
+        shuffle=True,
+    )
+    second = _source(
+        tuple(_conversation(chr(75 + index), 8) for index in range(3)),
+        identity="second",
+        shuffle=True,
+    )
+
+    def build() -> SFTConversationLoader:
+        return SFTConversationLoader(
+            (
+                WeightedConversationSource(first, repeat_weight=2),
+                WeightedConversationSource(second),
+            ),
+            tokenizer=ByteTokenizer(),
+            batch_size=1,
+            max_seq_len=7,
+            packing_buffer_size=3,
+            seed=37,
+            repeat=True,
+        )
+
+    uninterrupted = build()
+    uninterrupted.next_batch()
+    uninterrupted.next_batch()
+    state = json.loads(json.dumps(uninterrupted.state_dict()))
+    expected = []
+    for _ in range(8):
+        expected.append(uninterrupted.next_batch())
+
+    resumed = build()
+    resumed.load_state_dict(state)
+    actual = [resumed.next_batch() for _ in range(8)]
+
+    assert all(
+        torch.equal(actual_x, expected_x) and torch.equal(actual_y, expected_y)
+        for (actual_x, actual_y), (expected_x, expected_y) in zip(
+            actual,
+            expected,
+            strict=True,
+        )
+    )
+    assert resumed.state_dict() == uninterrupted.state_dict()
+
+
 @pytest.mark.parametrize(
     ("mutation", "match"),
     [
         (lambda state: state.update(format_version=999), "format version"),
         (lambda state: state.update(unexpected=True), "fields"),
-        (lambda state: state["mixture_order"].__setitem__(0, 99), "permutation"),
-        (lambda state: state["source_cursors"].__setitem__(0, 999), "cursor"),
+        (lambda state: state.update(mixture_cursor=999), "mixture cursor"),
+        (
+            lambda state: state["buffer"][0].update(source_offset=999),
+            "buffer.*locator",
+        ),
         (lambda state: state.update(rng_state=["bad"]), "rng_state"),
         (
             lambda state: state["buffer"][0].update(item_identity="sha256:" + "0" * 64),

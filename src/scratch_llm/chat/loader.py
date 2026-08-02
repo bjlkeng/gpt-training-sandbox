@@ -64,12 +64,10 @@ _STATE_FIELDS: Final = frozenset(
         "global_step",
         "max_seq_len",
         "mixture_cursor",
-        "mixture_order",
         "packing_buffer_size",
         "repeat",
         "repeat_weights",
         "rng_state",
-        "source_cursors",
         "source_order",
         "stats",
         "tokenizer_identity",
@@ -78,13 +76,9 @@ _STATE_FIELDS: Final = frozenset(
 )
 _BUFFER_FIELDS: Final = frozenset(
     {
-        "cropped",
-        "cycle",
-        "example_identity",
         "item_identity",
         "source_index",
-        "source_position",
-        "token_count",
+        "source_offset",
     }
 )
 _STATS_FIELDS: Final = frozenset(
@@ -224,22 +218,15 @@ class SFTBatchInfo:
 @dataclass(frozen=True, slots=True)
 class _BufferedConversation:
     source_index: int
-    cycle: int
-    source_position: int
-    example_identity: str
+    source_offset: int
     item_identity: str
     rendered: RenderedConversation
-    cropped: bool
 
     def state_dict(self) -> dict[str, object]:
         return {
-            "cropped": self.cropped,
-            "cycle": self.cycle,
-            "example_identity": self.example_identity,
             "item_identity": self.item_identity,
             "source_index": self.source_index,
-            "source_position": self.source_position,
-            "token_count": len(self.rendered.token_ids),
+            "source_offset": self.source_offset,
         }
 
 
@@ -249,6 +236,206 @@ class _PackedRow:
     loss_mask: tuple[bool, ...]
     item_identities: tuple[str, ...]
     content_length: int
+
+
+@dataclass(frozen=True, slots=True)
+class _LocatedConversation:
+    source_index: int
+    source_offset: int
+    example: SFTConversationExample
+
+
+@dataclass(frozen=True, slots=True)
+class _LoaderProgress:
+    rng: random.Random
+    epoch: int
+    epoch_seed: int
+    epoch_step: int
+    global_step: int
+    epoch_exhausted: bool
+    epoch_packed_conversations: int
+    mixture_cursor: int
+    stats: SFTLoaderStats
+
+
+@dataclass(frozen=True, slots=True)
+class _RestoredLoaderState:
+    progress: _LoaderProgress
+    mixture: _ConversationMixture
+    buffer: list[_BufferedConversation]
+
+
+class _ConversationMixture:
+    """Deterministic weighted source schedule and its live source iterators."""
+
+    def __init__(
+        self,
+        sources: tuple[WeightedConversationSource, ...],
+        *,
+        source_lengths: tuple[int, ...],
+        source_identities: tuple[str, ...],
+        repeat_weights: tuple[int, ...],
+        epoch_seed: int,
+        cursor: int = 0,
+    ) -> None:
+        self._sources = sources
+        self._source_lengths = source_lengths
+        self._source_identities = source_identities
+        self._repeat_weights = repeat_weights
+        self.epoch_seed = epoch_seed
+        self._order = self._build_order()
+        if not 0 <= cursor <= len(self._order):
+            raise SFTLoaderStateError("loader state mixture cursor is out of range")
+        self.cursor = cursor
+        consumed_counts = Counter(self._order[:cursor])
+        self._source_cursors = [
+            consumed_counts[source_index] for source_index in range(len(sources))
+        ]
+        self._source_iterators = self._build_source_iterators()
+
+    @property
+    def exhausted(self) -> bool:
+        return self.cursor == len(self._order)
+
+    def source_cursor(self, source_index: int) -> int:
+        return self._source_cursors[source_index]
+
+    def pull(self) -> _LocatedConversation | None:
+        if self.exhausted:
+            return None
+        source_index = self._order[self.cursor]
+        source_offset = self._source_cursors[source_index]
+        source_length = self._source_lengths[source_index]
+        iterator = self._source_iterators[source_index]
+        if iterator is None:
+            raise SFTLoaderError(
+                f"source {source_index} iterator ended before mixture order"
+            )
+        try:
+            example = next(iterator)
+        except StopIteration as error:
+            raise SFTLoaderError(
+                f"source {source_index} yielded fewer than {source_length} "
+                "examples in one cycle"
+            ) from error
+        example = self._validate_example(example, source_index)
+
+        self.cursor += 1
+        self._source_cursors[source_index] += 1
+        self._advance_source_cycle_if_needed(source_index, iterator)
+        return _LocatedConversation(source_index, source_offset, example)
+
+    def fetch(self, source_index: int, source_offset: int) -> SFTConversationExample:
+        source_length = self._source_lengths[source_index]
+        cycle, source_position = divmod(source_offset, source_length)
+        iterator = self._sources[source_index].source.iter_examples(
+            seed=_source_cycle_seed(self.epoch_seed, source_index, cycle)
+        )
+        for position in range(source_position + 1):
+            try:
+                example = next(iterator)
+            except StopIteration as error:
+                raise SFTLoaderStateError(
+                    f"source {source_index} ended before buffered position "
+                    f"{source_position}"
+                ) from error
+            example = self._validate_example(example, source_index)
+            if position == source_position:
+                return example
+        raise AssertionError("source position loop must return")
+
+    def _build_order(self) -> list[int]:
+        order: list[int] = []
+        for source_index, (source_length, repeat_weight) in enumerate(
+            zip(self._source_lengths, self._repeat_weights, strict=True)
+        ):
+            order.extend([source_index] * (source_length * repeat_weight))
+        random.Random(self.epoch_seed).shuffle(order)
+        return order
+
+    def _build_source_iterators(
+        self,
+    ) -> list[Iterator[SFTConversationExample] | None]:
+        iterators: list[Iterator[SFTConversationExample] | None] = []
+        for source_index, cursor in enumerate(self._source_cursors):
+            source_length = self._source_lengths[source_index]
+            source_total = source_length * self._repeat_weights[source_index]
+            if cursor == source_total:
+                iterators.append(None)
+                continue
+            cycle, position = divmod(cursor, source_length)
+            iterator = self._sources[source_index].source.iter_examples(
+                seed=_source_cycle_seed(self.epoch_seed, source_index, cycle)
+            )
+            for skipped_position in range(position):
+                try:
+                    skipped = next(iterator)
+                except StopIteration as error:
+                    raise SFTLoaderError(
+                        f"source {source_index} ended before declared length while "
+                        f"restoring position {skipped_position}"
+                    ) from error
+                self._validate_example(skipped, source_index)
+            iterators.append(iterator)
+        return iterators
+
+    def _advance_source_cycle_if_needed(
+        self,
+        source_index: int,
+        iterator: Iterator[SFTConversationExample],
+    ) -> None:
+        cursor = self._source_cursors[source_index]
+        source_length = self._source_lengths[source_index]
+        if cursor % source_length:
+            return
+        try:
+            extra = next(iterator)
+        except StopIteration:
+            extra = None
+        if extra is not None:
+            raise SFTLoaderError(
+                f"source {source_index} yielded more than its declared "
+                f"length {source_length}"
+            )
+        source_total = source_length * self._repeat_weights[source_index]
+        if cursor == source_total:
+            self._source_iterators[source_index] = None
+            return
+        cycle = cursor // source_length
+        self._source_iterators[source_index] = self._sources[
+            source_index
+        ].source.iter_examples(
+            seed=_source_cycle_seed(self.epoch_seed, source_index, cycle)
+        )
+
+    def _validate_example(
+        self,
+        example: object,
+        source_index: int,
+    ) -> SFTConversationExample:
+        if not isinstance(example, SFTConversationExample):
+            raise SFTLoaderError(
+                f"source {source_index} must yield SFTConversationExample values"
+            )
+        if example.source_identity != self._source_identities[source_index]:
+            raise SFTLoaderError(
+                f"source {source_index} yielded a conflicting source identity"
+            )
+        if (
+            not isinstance(example.identity, str)
+            or not example.identity.strip()
+            or not isinstance(example.source_row, int)
+            or isinstance(example.source_row, bool)
+            or example.source_row < 0
+        ):
+            raise SFTLoaderError(
+                f"source {source_index} yielded invalid example metadata"
+            )
+        if not isinstance(example.conversation, Conversation):
+            raise SFTLoaderError(
+                f"source {source_index} yielded an invalid conversation"
+            )
+        return example
 
 
 class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
@@ -265,74 +452,21 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
         seed: int = 42,
         repeat: bool = True,
     ) -> None:
-        normalized_sources = tuple(sources)
-        if not normalized_sources or not all(
-            isinstance(source, WeightedConversationSource)
-            for source in normalized_sources
-        ):
-            raise SFTLoaderError(
-                "sources must be a non-empty sequence of WeightedConversationSource"
+        normalized_sources, source_lengths, source_identities = (
+            _validate_source_contract(sources)
+        )
+        batch_size, max_seq_len, packing_buffer_size, seed, repeat = (
+            _validate_loader_settings(
+                batch_size=batch_size,
+                max_seq_len=max_seq_len,
+                packing_buffer_size=packing_buffer_size,
+                seed=seed,
+                repeat=repeat,
             )
-        if not isinstance(tokenizer, Tokenizer):
-            raise TypeError("tokenizer must implement Tokenizer")
-        try:
-            batch_size = require_positive_integer(batch_size, name="batch_size")
-            max_seq_len = require_positive_integer(
-                max_seq_len,
-                name="max_seq_len",
-            )
-            packing_buffer_size = require_positive_integer(
-                packing_buffer_size,
-                name="packing_buffer_size",
-            )
-            seed = require_integer(seed, name="seed")
-        except (TypeError, ValueError) as error:
-            raise SFTLoaderError(str(error)) from error
-        if not 0 <= seed <= _MAX_SEED:
-            raise SFTLoaderError(f"seed must be in range [0, {_MAX_SEED}], got {seed}")
-        if not isinstance(repeat, bool):
-            raise TypeError("repeat must be a boolean")
-
-        source_lengths: list[int] = []
-        source_identities: list[str] = []
-        for index, weighted in enumerate(normalized_sources):
-            identity = getattr(weighted.source, "source_identity", None)
-            if not isinstance(identity, str) or not identity.strip():
-                raise SFTLoaderError(f"source {index} has an invalid source_identity")
-            try:
-                source_length = len(weighted.source)
-            except (TypeError, ValueError) as error:
-                raise SFTLoaderError(
-                    f"source {index} did not return a valid length: {error}"
-                ) from error
-            if (
-                not isinstance(source_length, int)
-                or isinstance(source_length, bool)
-                or source_length <= 0
-            ):
-                raise SFTLoaderError(
-                    f"source {index} is empty or has an invalid length: "
-                    f"{source_length!r}"
-                )
-            source_lengths.append(source_length)
-            source_identities.append(identity)
-        if len(set(source_identities)) != len(source_identities):
-            raise SFTLoaderError("weighted sources require unique source identities")
-
-        vocab_size = tokenizer.get_vocab_size()
-        if (
-            not isinstance(vocab_size, int)
-            or isinstance(vocab_size, bool)
-            or vocab_size <= 0
-        ):
-            raise SFTLoaderError("tokenizer vocabulary size must be positive")
-        bos_token_id = tokenizer.get_bos_token_id()
-        if (
-            not isinstance(bos_token_id, int)
-            or isinstance(bos_token_id, bool)
-            or not 0 <= bos_token_id < vocab_size
-        ):
-            raise SFTLoaderError("tokenizer BOS token ID is invalid")
+        )
+        vocab_size, bos_token_id, tokenizer_identity = _validate_tokenizer_contract(
+            tokenizer
+        )
 
         self.sources = normalized_sources
         self.tokenizer = tokenizer
@@ -342,16 +476,13 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
         self.packing_buffer_size = packing_buffer_size
         self.base_seed = seed
         self.repeat = repeat
-        self._source_lengths = tuple(source_lengths)
-        self._source_identities = tuple(source_identities)
+        self._source_lengths = source_lengths
+        self._source_identities = source_identities
         self._repeat_weights = tuple(
             source.repeat_weight for source in normalized_sources
         )
         self._vocab_size = vocab_size
         self._bos_token_id = bos_token_id
-        tokenizer_identity = tokenizer.get_identity()
-        if not isinstance(tokenizer_identity, str) or not tokenizer_identity.strip():
-            raise SFTLoaderError("tokenizer identity must be a non-empty string")
         self._tokenizer_identity = tokenizer_identity
         self._rng = random.Random(seed)
         self._stats_values = {field: 0 for field in _STATS_FIELDS}
@@ -361,10 +492,6 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
         self.epoch_step = 0
         self.epoch_exhausted = False
         self._epoch_packed_conversations = 0
-        self._mixture_order: list[int] = []
-        self._mixture_cursor = 0
-        self._source_cursors: list[int] = []
-        self._source_iterators: list[Iterator[SFTConversationExample] | None] = []
         self._buffer: list[_BufferedConversation] = []
         self._last_batch_info: SFTBatchInfo | None = None
         self._start_next_epoch()
@@ -392,36 +519,44 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
     def next_batch(self) -> tuple[Tensor, Tensor]:
         """Return the next contiguous CPU ``long`` input/label batch."""
 
-        if self.epoch_exhausted:
-            if not self.repeat:
-                raise StopIteration
-            self._start_next_epoch()
+        packed_rows = self._collect_batch_rows()
+        inputs, labels = self._materialize_batch(packed_rows)
+        self._record_batch(packed_rows)
+        return inputs, labels
 
-        packed_rows: list[_PackedRow] = []
-        while len(packed_rows) < self.batch_size:
-            row = self._build_row()
-            if row is None:
+    def _collect_batch_rows(self) -> tuple[_PackedRow, ...]:
+        while True:
+            if self.epoch_exhausted:
+                if not self.repeat:
+                    raise StopIteration
+                self._start_next_epoch()
+
+            packed_rows: list[_PackedRow] = []
+            while len(packed_rows) < self.batch_size:
+                row = self._build_row()
+                if row is None:
+                    break
+                packed_rows.append(row)
+            if packed_rows:
                 break
-            packed_rows.append(row)
 
-        if not packed_rows:
             self.epoch_exhausted = True
             if self._epoch_packed_conversations == 0:
                 raise SFTLoaderError(
                     "SFT epoch has no supervised assistant targets after "
                     "bounded-prefix cropping"
                 )
-            if not self.repeat:
-                raise StopIteration
-            self._start_next_epoch()
-            return self.next_batch()
 
         while len(packed_rows) < self.batch_size:
             packed_rows.append(self._padding_row())
-
-        if self._mixture_cursor == len(self._mixture_order) and not self._buffer:
+        if self._mixture.exhausted and not self._buffer:
             self.epoch_exhausted = True
+        return tuple(packed_rows)
 
+    def _materialize_batch(
+        self,
+        packed_rows: Sequence[_PackedRow],
+    ) -> tuple[Tensor, Tensor]:
         input_rows: list[tuple[int, ...]] = []
         label_rows: list[tuple[int, ...]] = []
         for row in packed_rows:
@@ -442,7 +577,9 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
             raise AssertionError("SFT batch materialization produced an invalid shape")
         if not bool((labels != IGNORE_INDEX).any()):
             raise SFTLoaderError("refusing to emit an all-ignored SFT batch")
+        return inputs, labels
 
+    def _record_batch(self, packed_rows: Sequence[_PackedRow]) -> None:
         self.global_step += 1
         self.epoch_step += 1
         self._stats_values["emitted_batches"] += 1
@@ -453,7 +590,6 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
             row_item_identities=tuple(row.item_identities for row in packed_rows),
             content_lengths=tuple(row.content_length for row in packed_rows),
         )
-        return inputs, labels
 
     def iter_epoch(self) -> Iterator[tuple[Tensor, Tensor]]:
         """Yield exactly the current (or next) finite epoch and then stop."""
@@ -489,13 +625,11 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
             "format_version": SFT_LOADER_STATE_VERSION,
             "global_step": self.global_step,
             "max_seq_len": self.max_seq_len,
-            "mixture_cursor": self._mixture_cursor,
-            "mixture_order": list(self._mixture_order),
+            "mixture_cursor": self._mixture.cursor,
             "packing_buffer_size": self.packing_buffer_size,
             "repeat": self.repeat,
             "repeat_weights": list(self._repeat_weights),
             "rng_state": _rng_state_to_json(self._rng.getstate()),
-            "source_cursors": list(self._source_cursors),
             "source_order": list(self._source_identities),
             "stats": self.stats.to_dict(),
             "tokenizer_identity": self._tokenizer_identity,
@@ -505,10 +639,41 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
     def load_state_dict(self, state: Mapping[str, object]) -> None:
         """Validate and rehydrate exact continuation state transactionally."""
 
+        restored = self._decode_state(state)
+        progress = restored.progress
+        self._rng = progress.rng
+        self.epoch = progress.epoch
+        self.epoch_seed = progress.epoch_seed
+        self.epoch_step = progress.epoch_step
+        self.global_step = progress.global_step
+        self.epoch_exhausted = progress.epoch_exhausted
+        self._epoch_packed_conversations = progress.epoch_packed_conversations
+        self._mixture = restored.mixture
+        self._buffer = restored.buffer
+        self._stats_values = progress.stats.to_dict()
+        self._last_batch_info = None
+
+    def _decode_state(self, state: object) -> _RestoredLoaderState:
         if not isinstance(state, Mapping):
             raise SFTLoaderStateError(
                 f"loader state must be a mapping, got {type(state).__name__}"
             )
+        self._validate_state_contract(state)
+        progress = _parse_loader_progress(state)
+        try:
+            mixture = self._new_mixture(
+                progress.epoch_seed,
+                cursor=progress.mixture_cursor,
+            )
+            buffer = self._rehydrate_buffer(state["buffer"], mixture=mixture)
+        except (SFTLoaderError, StopIteration) as error:
+            raise SFTLoaderStateError(
+                f"loader state cannot rehydrate sources or buffer: {error}"
+            ) from error
+        self._validate_resume_position(progress, mixture, buffer)
+        return _RestoredLoaderState(progress, mixture, buffer)
+
+    def _validate_state_contract(self, state: Mapping[str, object]) -> None:
         keys = set(state)
         if keys != _STATE_FIELDS:
             missing = sorted(_STATE_FIELDS - keys)
@@ -531,10 +696,6 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
         _require_state_setting(state, "tokenizer_identity", self._tokenizer_identity)
         _require_state_setting(state, "vocab_size", self._vocab_size)
         _require_state_setting(state, "source_order", list(self._source_identities))
-        if state["source_order"] != list(self._source_identities):
-            raise SFTLoaderStateError(
-                "loader state source identities do not match configured sources"
-            )
         _require_state_setting(state, "repeat_weights", list(self._repeat_weights))
         _require_state_setting(state, "batch_size", self.batch_size)
         _require_state_setting(state, "max_seq_len", self.max_seq_len)
@@ -547,122 +708,25 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
         _require_state_setting(state, "repeat", self.repeat)
         _require_state_setting(state, "crop_policy", SFT_CROP_POLICY)
 
-        epoch = _state_non_negative_integer(state["epoch"], label="epoch")
-        epoch_seed = _state_integer(state["epoch_seed"], label="epoch_seed")
-        if not 0 <= epoch_seed <= _MAX_SEED:
-            raise SFTLoaderStateError("loader state epoch_seed is out of range")
-        epoch_step = _state_non_negative_integer(
-            state["epoch_step"],
-            label="epoch_step",
-        )
-        global_step = _state_non_negative_integer(
-            state["global_step"],
-            label="global_step",
-        )
-        if epoch_step > global_step:
-            raise SFTLoaderStateError(
-                "loader state epoch_step cannot exceed global_step"
-            )
-        epoch_packed = _state_non_negative_integer(
-            state["epoch_packed_conversations"],
-            label="epoch_packed_conversations",
-        )
-        epoch_exhausted = state["epoch_exhausted"]
-        if not isinstance(epoch_exhausted, bool):
-            raise SFTLoaderStateError("loader state epoch_exhausted must be a boolean")
-
-        mixture_order = _state_integer_list(
-            state["mixture_order"],
-            label="mixture_order",
-        )
-        expected_order = self._build_mixture_order(epoch_seed)
-        if mixture_order != expected_order:
-            raise SFTLoaderStateError(
-                "loader state mixture_order is a corrupt permutation"
-            )
-        mixture_cursor = _state_non_negative_integer(
-            state["mixture_cursor"],
-            label="mixture_cursor",
-        )
-        if mixture_cursor > len(mixture_order):
-            raise SFTLoaderStateError("loader state mixture cursor is out of range")
-        source_cursors = _state_integer_list(
-            state["source_cursors"],
-            label="source_cursors",
-        )
-        if len(source_cursors) != len(self.sources):
-            raise SFTLoaderStateError(
-                "loader state source cursor count does not match sources"
-            )
-        expected_source_cursors = Counter(mixture_order[:mixture_cursor])
-        for source_index, cursor in enumerate(source_cursors):
-            source_total = (
-                self._source_lengths[source_index] * self._repeat_weights[source_index]
-            )
-            if cursor < 0 or cursor > source_total:
-                raise SFTLoaderStateError(
-                    f"loader state source cursor {source_index} is out of range"
-                )
-            if cursor != expected_source_cursors[source_index]:
-                raise SFTLoaderStateError(
-                    "loader state source cursors do not match mixture cursor"
-                )
-
-        candidate_rng = random.Random()
-        candidate_rng.setstate(_rng_state_from_json(state["rng_state"]))
-        try:
-            candidate_iterators = self._build_source_iterators(
-                source_cursors,
-                epoch_seed,
-            )
-            candidate_buffer = self._rehydrate_buffer(
-                state["buffer"],
-                source_cursors=source_cursors,
-                epoch_seed=epoch_seed,
-            )
-        except (SFTLoaderError, StopIteration) as error:
-            raise SFTLoaderStateError(
-                f"loader state cannot rehydrate sources or buffer: {error}"
-            ) from error
-        if epoch_exhausted and (
-            mixture_cursor != len(mixture_order) or candidate_buffer
-        ):
+    def _validate_resume_position(
+        self,
+        progress: _LoaderProgress,
+        mixture: _ConversationMixture,
+        buffer: Sequence[_BufferedConversation],
+    ) -> None:
+        if progress.epoch_exhausted and (not mixture.exhausted or buffer):
             raise SFTLoaderStateError(
                 "loader state marks an epoch exhausted before mixture and buffer end"
             )
         if (
-            not epoch_exhausted
-            and mixture_cursor == len(mixture_order)
-            and not candidate_buffer
-            and epoch_packed > 0
+            not progress.epoch_exhausted
+            and mixture.exhausted
+            and not buffer
+            and progress.epoch_packed_conversations > 0
         ):
             raise SFTLoaderStateError(
                 "loader state must mark a drained epoch as exhausted"
             )
-        candidate_stats = _parse_stats(state["stats"])
-        if candidate_stats.emitted_batches != global_step:
-            raise SFTLoaderStateError(
-                "loader state stats emitted_batches must equal global_step"
-            )
-        if epoch_packed > candidate_stats.packed_conversations:
-            raise SFTLoaderStateError(
-                "loader state epoch packed count exceeds cumulative packed count"
-            )
-
-        self._rng = candidate_rng
-        self.epoch = epoch
-        self.epoch_seed = epoch_seed
-        self.epoch_step = epoch_step
-        self.global_step = global_step
-        self.epoch_exhausted = epoch_exhausted
-        self._epoch_packed_conversations = epoch_packed
-        self._mixture_order = mixture_order
-        self._mixture_cursor = mixture_cursor
-        self._source_cursors = source_cursors
-        self._source_iterators = candidate_iterators
-        self._buffer = candidate_buffer
-        self._stats_values = candidate_stats.to_dict()
-        self._last_batch_info = None
 
     def _start_next_epoch(self) -> None:
         self.epoch += 1
@@ -670,52 +734,24 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
         self.epoch_step = 0
         self.epoch_exhausted = False
         self._epoch_packed_conversations = 0
-        self._mixture_order = self._build_mixture_order(self.epoch_seed)
-        self._mixture_cursor = 0
-        self._source_cursors = [0] * len(self.sources)
-        self._source_iterators = self._build_source_iterators(
-            self._source_cursors,
-            self.epoch_seed,
-        )
+        self._mixture = self._new_mixture(self.epoch_seed)
         self._buffer = []
         self._last_batch_info = None
 
-    def _build_mixture_order(self, epoch_seed: int) -> list[int]:
-        order: list[int] = []
-        for source_index, (source_length, repeat_weight) in enumerate(
-            zip(self._source_lengths, self._repeat_weights, strict=True)
-        ):
-            order.extend([source_index] * (source_length * repeat_weight))
-        random.Random(epoch_seed).shuffle(order)
-        return order
-
-    def _build_source_iterators(
+    def _new_mixture(
         self,
-        source_cursors: Sequence[int],
         epoch_seed: int,
-    ) -> list[Iterator[SFTConversationExample] | None]:
-        iterators: list[Iterator[SFTConversationExample] | None] = []
-        for source_index, cursor in enumerate(source_cursors):
-            source_length = self._source_lengths[source_index]
-            source_total = source_length * self._repeat_weights[source_index]
-            if cursor == source_total:
-                iterators.append(None)
-                continue
-            cycle, position = divmod(cursor, source_length)
-            iterator = self.sources[source_index].source.iter_examples(
-                seed=_source_cycle_seed(epoch_seed, source_index, cycle)
-            )
-            for skipped_position in range(position):
-                try:
-                    skipped = next(iterator)
-                except StopIteration as error:
-                    raise SFTLoaderError(
-                        f"source {source_index} ended before declared length while "
-                        f"restoring position {skipped_position}"
-                    ) from error
-                self._validate_source_example(skipped, source_index)
-            iterators.append(iterator)
-        return iterators
+        *,
+        cursor: int = 0,
+    ) -> _ConversationMixture:
+        return _ConversationMixture(
+            self.sources,
+            source_lengths=self._source_lengths,
+            source_identities=self._source_identities,
+            repeat_weights=self._repeat_weights,
+            epoch_seed=epoch_seed,
+            cursor=cursor,
+        )
 
     def _fill_buffer(self) -> None:
         while len(self._buffer) < self.packing_buffer_size:
@@ -725,79 +761,28 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
             self._buffer.append(item)
 
     def _pull_next_item(self) -> _BufferedConversation | None:
-        while self._mixture_cursor < len(self._mixture_order):
-            source_index = self._mixture_order[self._mixture_cursor]
-            source_cursor = self._source_cursors[source_index]
-            source_length = self._source_lengths[source_index]
-            cycle, source_position = divmod(source_cursor, source_length)
-            iterator = self._source_iterators[source_index]
-            if iterator is None:
-                raise SFTLoaderError(
-                    f"source {source_index} iterator ended before mixture order"
-                )
-            try:
-                example = next(iterator)
-            except StopIteration as error:
-                raise SFTLoaderError(
-                    f"source {source_index} yielded fewer than {source_length} "
-                    "examples in one cycle"
-                ) from error
-            self._validate_source_example(example, source_index)
+        while located := self._mixture.pull():
             item, cropped = self._render_bounded_item(
-                example,
-                source_index=source_index,
-                cycle=cycle,
-                source_position=source_position,
+                located.example,
+                source_index=located.source_index,
+                source_offset=located.source_offset,
             )
 
-            self._mixture_cursor += 1
-            self._source_cursors[source_index] += 1
             self._stats_values["seen_conversations"] += 1
             if cropped:
                 self._stats_values["cropped_conversations"] += 1
-            self._advance_source_cycle_if_needed(source_index, iterator)
             if item is None:
                 self._stats_values["skipped_zero_supervision"] += 1
                 continue
             return item
         return None
 
-    def _advance_source_cycle_if_needed(
-        self,
-        source_index: int,
-        iterator: Iterator[SFTConversationExample],
-    ) -> None:
-        cursor = self._source_cursors[source_index]
-        source_length = self._source_lengths[source_index]
-        if cursor % source_length:
-            return
-        try:
-            extra = next(iterator)
-        except StopIteration:
-            extra = None
-        if extra is not None:
-            raise SFTLoaderError(
-                f"source {source_index} yielded more than its declared "
-                f"length {source_length}"
-            )
-        source_total = source_length * self._repeat_weights[source_index]
-        if cursor == source_total:
-            self._source_iterators[source_index] = None
-            return
-        cycle = cursor // source_length
-        self._source_iterators[source_index] = self.sources[
-            source_index
-        ].source.iter_examples(
-            seed=_source_cycle_seed(self.epoch_seed, source_index, cycle)
-        )
-
     def _render_bounded_item(
         self,
         example: SFTConversationExample,
         *,
         source_index: int,
-        cycle: int,
-        source_position: int,
+        source_offset: int,
     ) -> tuple[_BufferedConversation | None, bool]:
         try:
             rendered = render_conversation(example.conversation, self.tokenizer)
@@ -820,21 +805,17 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
             return None, cropped
         item_identity = _canonical_identity(
             {
-                "cycle": cycle,
                 "example_identity": example.identity,
                 "source_index": source_index,
-                "source_position": source_position,
+                "source_offset": source_offset,
             }
         )
         return (
             _BufferedConversation(
                 source_index=source_index,
-                cycle=cycle,
-                source_position=source_position,
-                example_identity=example.identity,
+                source_offset=source_offset,
                 item_identity=item_identity,
                 rendered=rendered,
-                cropped=cropped,
             ),
             cropped,
         )
@@ -850,13 +831,7 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
                     return None
                 break
             remaining = self.row_capacity - len(row_ids)
-            best_index: int | None = None
-            best_length = -1
-            for index, item in enumerate(self._buffer):
-                item_length = len(item.rendered.token_ids)
-                if item_length <= remaining and item_length > best_length:
-                    best_index = index
-                    best_length = item_length
+            best_index = _largest_fitting_index(self._buffer, remaining)
             if best_index is None:
                 if not row_ids:
                     raise AssertionError(
@@ -893,41 +868,11 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
             content_length=0,
         )
 
-    def _validate_source_example(
-        self,
-        example: object,
-        source_index: int,
-    ) -> SFTConversationExample:
-        if not isinstance(example, SFTConversationExample):
-            raise SFTLoaderError(
-                f"source {source_index} must yield SFTConversationExample values"
-            )
-        if example.source_identity != self._source_identities[source_index]:
-            raise SFTLoaderError(
-                f"source {source_index} yielded a conflicting source identity"
-            )
-        if (
-            not isinstance(example.identity, str)
-            or not example.identity.strip()
-            or not isinstance(example.source_row, int)
-            or isinstance(example.source_row, bool)
-            or example.source_row < 0
-        ):
-            raise SFTLoaderError(
-                f"source {source_index} yielded invalid example metadata"
-            )
-        if not isinstance(example.conversation, Conversation):
-            raise SFTLoaderError(
-                f"source {source_index} yielded an invalid conversation"
-            )
-        return example
-
     def _rehydrate_buffer(
         self,
         raw_buffer: object,
         *,
-        source_cursors: Sequence[int],
-        epoch_seed: int,
+        mixture: _ConversationMixture,
     ) -> list[_BufferedConversation]:
         if not isinstance(raw_buffer, list):
             raise SFTLoaderStateError("loader state buffer must be a list")
@@ -936,109 +881,63 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
         result: list[_BufferedConversation] = []
         identities: set[str] = set()
         for buffer_index, raw_item in enumerate(raw_buffer):
-            if not isinstance(raw_item, Mapping) or set(raw_item) != _BUFFER_FIELDS:
-                raise SFTLoaderStateError(
-                    f"loader state buffer[{buffer_index}] fields are invalid"
-                )
-            source_index = _state_non_negative_integer(
-                raw_item["source_index"],
-                label=f"buffer[{buffer_index}].source_index",
-            )
-            if source_index >= len(self.sources):
-                raise SFTLoaderStateError(
-                    f"loader state buffer[{buffer_index}] source is out of range"
-                )
-            cycle = _state_non_negative_integer(
-                raw_item["cycle"],
-                label=f"buffer[{buffer_index}].cycle",
-            )
-            source_position = _state_non_negative_integer(
-                raw_item["source_position"],
-                label=f"buffer[{buffer_index}].source_position",
-            )
-            if (
-                cycle >= self._repeat_weights[source_index]
-                or source_position >= (self._source_lengths[source_index])
-            ):
-                raise SFTLoaderStateError(
-                    f"loader state buffer[{buffer_index}] locator is out of range"
-                )
-            absolute_position = (
-                cycle * self._source_lengths[source_index] + source_position
-            )
-            if absolute_position >= source_cursors[source_index]:
-                raise SFTLoaderStateError(
-                    f"loader state buffer[{buffer_index}] was not yet consumed"
-                )
-            example = self._fetch_source_example(
-                source_index,
-                cycle,
-                source_position,
-                epoch_seed=epoch_seed,
-            )
-            example_identity = raw_item["example_identity"]
-            if example_identity != example.identity:
-                raise SFTLoaderStateError(
-                    f"loader state buffer[{buffer_index}] example identity is invalid"
-                )
-            item, cropped = self._render_bounded_item(
-                example,
-                source_index=source_index,
-                cycle=cycle,
-                source_position=source_position,
-            )
-            if item is None:
-                raise SFTLoaderStateError(
-                    f"loader state buffer[{buffer_index}] has no supervision"
-                )
-            item_identity = raw_item["item_identity"]
-            if item_identity != item.item_identity:
-                raise SFTLoaderStateError(
-                    f"loader state buffer[{buffer_index}] item identity is invalid"
-                )
-            if item_identity in identities:
+            item = self._rehydrate_buffer_item(raw_item, buffer_index, mixture)
+            if item.item_identity in identities:
                 raise SFTLoaderStateError(
                     "loader state buffer contains duplicate item identities"
                 )
-            identities.add(item_identity)  # type: ignore[arg-type]
-            token_count = _state_positive_integer(
-                raw_item["token_count"],
-                label=f"buffer[{buffer_index}].token_count",
-            )
-            if token_count != len(item.rendered.token_ids):
-                raise SFTLoaderStateError(
-                    f"loader state buffer[{buffer_index}] token count is invalid"
-                )
-            if raw_item["cropped"] is not cropped:
-                raise SFTLoaderStateError(
-                    f"loader state buffer[{buffer_index}] crop flag is invalid"
-                )
+            identities.add(item.item_identity)
             result.append(item)
         return result
 
-    def _fetch_source_example(
+    def _rehydrate_buffer_item(
         self,
-        source_index: int,
-        cycle: int,
-        source_position: int,
-        *,
-        epoch_seed: int,
-    ) -> SFTConversationExample:
-        iterator = self.sources[source_index].source.iter_examples(
-            seed=_source_cycle_seed(epoch_seed, source_index, cycle)
+        raw_item: object,
+        buffer_index: int,
+        mixture: _ConversationMixture,
+    ) -> _BufferedConversation:
+        if not isinstance(raw_item, Mapping) or set(raw_item) != _BUFFER_FIELDS:
+            raise SFTLoaderStateError(
+                f"loader state buffer[{buffer_index}] fields are invalid"
+            )
+        source_index = _state_non_negative_integer(
+            raw_item["source_index"],
+            label=f"buffer[{buffer_index}].source_index",
         )
-        for position in range(source_position + 1):
-            try:
-                example = next(iterator)
-            except StopIteration as error:
-                raise SFTLoaderStateError(
-                    f"source {source_index} ended before buffered position "
-                    f"{source_position}"
-                ) from error
-            self._validate_source_example(example, source_index)
-            if position == source_position:
-                return example
-        raise AssertionError("source position loop must return")
+        if source_index >= len(self.sources):
+            raise SFTLoaderStateError(
+                f"loader state buffer[{buffer_index}] source is out of range"
+            )
+        source_offset = _state_non_negative_integer(
+            raw_item["source_offset"],
+            label=f"buffer[{buffer_index}].source_offset",
+        )
+        source_total = (
+            self._source_lengths[source_index] * self._repeat_weights[source_index]
+        )
+        if source_offset >= source_total:
+            raise SFTLoaderStateError(
+                f"loader state buffer[{buffer_index}] locator is out of range"
+            )
+        if source_offset >= mixture.source_cursor(source_index):
+            raise SFTLoaderStateError(
+                f"loader state buffer[{buffer_index}] was not yet consumed"
+            )
+        example = mixture.fetch(source_index, source_offset)
+        item, _ = self._render_bounded_item(
+            example,
+            source_index=source_index,
+            source_offset=source_offset,
+        )
+        if item is None:
+            raise SFTLoaderStateError(
+                f"loader state buffer[{buffer_index}] has no supervision"
+            )
+        if raw_item["item_identity"] != item.item_identity:
+            raise SFTLoaderStateError(
+                f"loader state buffer[{buffer_index}] item identity is invalid"
+            )
+        return item
 
 
 def build_fresh_sft_validation_loader(
@@ -1083,6 +982,110 @@ def load_jsonl_conversation_source(
     )
 
 
+def _validate_source_contract(
+    sources: Sequence[WeightedConversationSource],
+) -> tuple[
+    tuple[WeightedConversationSource, ...],
+    tuple[int, ...],
+    tuple[str, ...],
+]:
+    normalized = tuple(sources)
+    if not normalized or not all(
+        isinstance(source, WeightedConversationSource) for source in normalized
+    ):
+        raise SFTLoaderError(
+            "sources must be a non-empty sequence of WeightedConversationSource"
+        )
+
+    lengths: list[int] = []
+    identities: list[str] = []
+    for index, weighted in enumerate(normalized):
+        identity = getattr(weighted.source, "source_identity", None)
+        if not isinstance(identity, str) or not identity.strip():
+            raise SFTLoaderError(f"source {index} has an invalid source_identity")
+        try:
+            source_length = len(weighted.source)
+        except (TypeError, ValueError) as error:
+            raise SFTLoaderError(
+                f"source {index} did not return a valid length: {error}"
+            ) from error
+        if (
+            not isinstance(source_length, int)
+            or isinstance(source_length, bool)
+            or source_length <= 0
+        ):
+            raise SFTLoaderError(
+                f"source {index} is empty or has an invalid length: {source_length!r}"
+            )
+        lengths.append(source_length)
+        identities.append(identity)
+    if len(set(identities)) != len(identities):
+        raise SFTLoaderError("weighted sources require unique source identities")
+    return normalized, tuple(lengths), tuple(identities)
+
+
+def _validate_loader_settings(
+    *,
+    batch_size: object,
+    max_seq_len: object,
+    packing_buffer_size: object,
+    seed: object,
+    repeat: object,
+) -> tuple[int, int, int, int, bool]:
+    try:
+        normalized_batch_size = require_positive_integer(
+            batch_size,
+            name="batch_size",
+        )
+        normalized_max_seq_len = require_positive_integer(
+            max_seq_len,
+            name="max_seq_len",
+        )
+        normalized_buffer_size = require_positive_integer(
+            packing_buffer_size,
+            name="packing_buffer_size",
+        )
+        normalized_seed = require_integer(seed, name="seed")
+    except (TypeError, ValueError) as error:
+        raise SFTLoaderError(str(error)) from error
+    if not 0 <= normalized_seed <= _MAX_SEED:
+        raise SFTLoaderError(
+            f"seed must be in range [0, {_MAX_SEED}], got {normalized_seed}"
+        )
+    if not isinstance(repeat, bool):
+        raise TypeError("repeat must be a boolean")
+    return (
+        normalized_batch_size,
+        normalized_max_seq_len,
+        normalized_buffer_size,
+        normalized_seed,
+        repeat,
+    )
+
+
+def _validate_tokenizer_contract(tokenizer: Tokenizer) -> tuple[int, int, str]:
+    if not isinstance(tokenizer, Tokenizer):
+        raise TypeError("tokenizer must implement Tokenizer")
+    vocab_size = tokenizer.get_vocab_size()
+    if (
+        not isinstance(vocab_size, int)
+        or isinstance(vocab_size, bool)
+        or vocab_size <= 0
+    ):
+        raise SFTLoaderError("tokenizer vocabulary size must be positive")
+    bos_token_id = tokenizer.get_bos_token_id()
+    if (
+        not isinstance(bos_token_id, int)
+        or isinstance(bos_token_id, bool)
+        or not 0 <= bos_token_id < vocab_size
+    ):
+        raise SFTLoaderError("tokenizer BOS token ID is invalid")
+    tokenizer_identity = tokenizer.get_identity()
+    if not isinstance(tokenizer_identity, str) or not tokenizer_identity.strip():
+        raise SFTLoaderError("tokenizer identity must be a non-empty string")
+    return vocab_size, bos_token_id, tokenizer_identity
+
+
 def _conversation_payload(conversation: Conversation) -> dict[str, object]:
     messages: list[dict[str, object]] = []
     for message in conversation.messages:
@@ -1114,6 +1117,22 @@ def _canonical_identity(value: object) -> str:
         sort_keys=True,
     ).encode("utf-8")
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _largest_fitting_index(
+    buffer: Sequence[_BufferedConversation],
+    capacity: int,
+) -> int | None:
+    fitting_indices = (
+        index
+        for index, item in enumerate(buffer)
+        if len(item.rendered.token_ids) <= capacity
+    )
+    return max(
+        fitting_indices,
+        key=lambda index: len(buffer[index].rendered.token_ids),
+        default=None,
+    )
 
 
 def _source_cycle_seed(epoch_seed: int, source_index: int, cycle: int) -> int:
@@ -1184,21 +1203,6 @@ def _state_non_negative_integer(value: object, *, label: str) -> int:
     return normalized
 
 
-def _state_positive_integer(value: object, *, label: str) -> int:
-    normalized = _state_integer(value, label=label)
-    if normalized <= 0:
-        raise SFTLoaderStateError(f"loader state {label} must be positive")
-    return normalized
-
-
-def _state_integer_list(value: object, *, label: str) -> list[int]:
-    if not isinstance(value, list) or any(
-        not isinstance(item, int) or isinstance(item, bool) for item in value
-    ):
-        raise SFTLoaderStateError(f"loader state {label} must be a list of integers")
-    return list(value)
-
-
 def _require_state_setting(
     state: Mapping[str, object],
     key: str,
@@ -1210,6 +1214,54 @@ def _require_state_setting(
         raise SFTLoaderStateError(
             f"loader state {label} does not match configured loader"
         )
+
+
+def _parse_loader_progress(state: Mapping[str, object]) -> _LoaderProgress:
+    epoch = _state_non_negative_integer(state["epoch"], label="epoch")
+    epoch_seed = _state_integer(state["epoch_seed"], label="epoch_seed")
+    if not 0 <= epoch_seed <= _MAX_SEED:
+        raise SFTLoaderStateError("loader state epoch_seed is out of range")
+    epoch_step = _state_non_negative_integer(state["epoch_step"], label="epoch_step")
+    global_step = _state_non_negative_integer(
+        state["global_step"],
+        label="global_step",
+    )
+    if epoch_step > global_step:
+        raise SFTLoaderStateError("loader state epoch_step cannot exceed global_step")
+    epoch_packed = _state_non_negative_integer(
+        state["epoch_packed_conversations"],
+        label="epoch_packed_conversations",
+    )
+    epoch_exhausted = state["epoch_exhausted"]
+    if not isinstance(epoch_exhausted, bool):
+        raise SFTLoaderStateError("loader state epoch_exhausted must be a boolean")
+    mixture_cursor = _state_non_negative_integer(
+        state["mixture_cursor"],
+        label="mixture_cursor",
+    )
+
+    rng = random.Random()
+    rng.setstate(_rng_state_from_json(state["rng_state"]))
+    stats = _parse_stats(state["stats"])
+    if stats.emitted_batches != global_step:
+        raise SFTLoaderStateError(
+            "loader state stats emitted_batches must equal global_step"
+        )
+    if epoch_packed > stats.packed_conversations:
+        raise SFTLoaderStateError(
+            "loader state epoch packed count exceeds cumulative packed count"
+        )
+    return _LoaderProgress(
+        rng=rng,
+        epoch=epoch,
+        epoch_seed=epoch_seed,
+        epoch_step=epoch_step,
+        global_step=global_step,
+        epoch_exhausted=epoch_exhausted,
+        epoch_packed_conversations=epoch_packed,
+        mixture_cursor=mixture_cursor,
+        stats=stats,
+    )
 
 
 def _parse_stats(value: object) -> SFTLoaderStats:
