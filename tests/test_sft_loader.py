@@ -17,11 +17,11 @@ from scratch_llm.chat.conversation import (
 from scratch_llm.chat.loader import (
     SFT_LOADER_STATE_FORMAT,
     SFT_LOADER_STATE_VERSION,
-    InMemoryConversationSource,
+    InMemorySFTSource,
+    SFTMixtureEntry,
     SFTConversationLoader,
     SFTLoaderError,
     SFTLoaderStateError,
-    WeightedConversationSource,
     build_fresh_sft_validation_loader,
     load_jsonl_conversation_source,
 )
@@ -55,8 +55,8 @@ def _source(
     *,
     identity: str = "source-a",
     shuffle: bool = False,
-) -> InMemoryConversationSource:
-    return InMemoryConversationSource(
+) -> InMemorySFTSource:
+    return InMemorySFTSource(
         conversations,
         source_identity=identity,
         shuffle=shuffle,
@@ -64,18 +64,18 @@ def _source(
 
 
 def _loader(
-    source: InMemoryConversationSource,
+    source: InMemorySFTSource,
     *,
     batch_size: int = 1,
     max_seq_len: int = 19,
     buffer_size: int = 3,
     seed: int = 7,
     repeat: bool = False,
-    weight: int = 1,
+    repeats: int = 1,
     tokenizer: ByteTokenizer | None = None,
 ) -> SFTConversationLoader:
     return SFTConversationLoader(
-        (WeightedConversationSource(source, repeat_weight=weight),),
+        (SFTMixtureEntry(source, repeats=repeats),),
         tokenizer=ByteTokenizer() if tokenizer is None else tokenizer,
         batch_size=batch_size,
         max_seq_len=max_seq_len,
@@ -256,7 +256,7 @@ def test_all_unsupervised_dataset_fails_instead_of_emitting_nan_batch() -> None:
     assert loader.stats.skipped_zero_supervision == 1
 
 
-def test_weighted_mixture_order_is_repeatable_and_counts_every_repeat() -> None:
+def test_mixture_order_is_repeatable_and_counts_every_source_repeat() -> None:
     first_source = _source(
         (_conversation("A", 8), _conversation("B", 8)),
         identity="first",
@@ -269,8 +269,8 @@ def test_weighted_mixture_order_is_repeatable_and_counts_every_repeat() -> None:
     def collect(seed: int) -> tuple[str, ...]:
         loader = SFTConversationLoader(
             (
-                WeightedConversationSource(first_source, repeat_weight=2),
-                WeightedConversationSource(second_source, repeat_weight=1),
+                SFTMixtureEntry(first_source, repeats=2),
+                SFTMixtureEntry(second_source, repeats=1),
             ),
             tokenizer=ByteTokenizer(),
             batch_size=1,
@@ -433,8 +433,8 @@ def test_compact_state_resumes_a_weighted_multi_source_mixture_exactly() -> None
     def build() -> SFTConversationLoader:
         return SFTConversationLoader(
             (
-                WeightedConversationSource(first, repeat_weight=2),
-                WeightedConversationSource(second),
+                SFTMixtureEntry(first, repeats=2),
+                SFTMixtureEntry(second),
             ),
             tokenizer=ByteTokenizer(),
             batch_size=1,
@@ -509,7 +509,7 @@ def test_state_rejection_is_transactional(mutation, match: str) -> None:
         ({"max_seq_len": 8}, "max_seq_len"),
         ({"batch_size": 2}, "batch_size"),
         ({"buffer_size": 2}, "packing_buffer_size"),
-        ({"weight": 2}, "repeat_weights"),
+        ({"repeats": 2}, "source_repeats"),
         ({"identity": "different"}, "source identities"),
         ({"tokenizer": _DifferentIdentityTokenizer()}, "tokenizer identity"),
     ],
@@ -540,7 +540,7 @@ def test_state_rejects_changed_continuation_contracts(
         buffer_size=int(replacement.get("buffer_size", 3)),
         seed=13,
         repeat=True,
-        weight=int(replacement.get("weight", 1)),
+        repeats=int(replacement.get("repeats", 1)),
         tokenizer=replacement.get("tokenizer"),  # type: ignore[arg-type]
     )
     before = incompatible.state_dict()
@@ -569,29 +569,29 @@ def test_loader_rejects_invalid_settings(kwargs: dict[str, int], match: str) -> 
     settings.update(kwargs)
     with pytest.raises((SFTLoaderError, TypeError, ValueError), match=match):
         SFTConversationLoader(
-            (WeightedConversationSource(_source((_conversation("A", 8),))),),
+            (SFTMixtureEntry(_source((_conversation("A", 8),))),),
             tokenizer=ByteTokenizer(),
             repeat=False,
             **settings,
         )
 
 
-def test_loader_rejects_empty_duplicate_or_zero_weight_sources() -> None:
+def test_loader_rejects_empty_duplicate_or_zero_repeat_sources() -> None:
     empty = _source((), identity="empty")
     source = _source((_conversation("A", 8),), identity="same")
     with pytest.raises(SFTLoaderError, match="empty"):
         _loader(empty)
     with pytest.raises(SFTLoaderError, match="unique source identities"):
         SFTConversationLoader(
-            (WeightedConversationSource(source), WeightedConversationSource(source)),
+            (SFTMixtureEntry(source), SFTMixtureEntry(source)),
             tokenizer=ByteTokenizer(),
             batch_size=1,
             max_seq_len=7,
             packing_buffer_size=1,
             seed=1,
         )
-    with pytest.raises((TypeError, ValueError), match="repeat_weight"):
-        WeightedConversationSource(source, repeat_weight=0)
+    with pytest.raises((TypeError, ValueError), match="repeats"):
+        SFTMixtureEntry(source, repeats=0)
 
 
 def test_tracked_jsonl_source_has_stable_identity_and_fresh_seeded_iteration() -> None:

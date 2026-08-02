@@ -66,7 +66,7 @@ _STATE_FIELDS: Final = frozenset(
         "mixture_cursor",
         "packing_buffer_size",
         "repeat",
-        "repeat_weights",
+        "source_repeats",
         "rng_state",
         "source_order",
         "stats",
@@ -103,7 +103,7 @@ class SFTLoaderStateError(SFTLoaderError):
     """A serialized loader state is malformed or incompatible."""
 
 
-class FiniteConversationSource(Protocol):
+class FiniteSFTSource(Protocol):
     """Fresh finite iteration contract shared by local and parquet sources."""
 
     source_identity: str
@@ -116,24 +116,24 @@ class FiniteConversationSource(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
-class WeightedConversationSource:
-    """One finite source and its explicit number of repeats per epoch."""
+class SFTMixtureEntry:
+    """One finite SFT source and its number of complete passes per epoch."""
 
-    source: FiniteConversationSource
-    repeat_weight: int = 1
+    source: FiniteSFTSource
+    repeats: int = 1
 
     def __post_init__(self) -> None:
         if not hasattr(self.source, "source_identity") or not callable(
             getattr(self.source, "iter_examples", None)
         ):
-            raise TypeError("source must implement the finite conversation contract")
+            raise TypeError("source must implement the finite SFT source contract")
         try:
-            require_positive_integer(self.repeat_weight, name="repeat_weight")
+            require_positive_integer(self.repeats, name="repeats")
         except (TypeError, ValueError) as error:
             raise type(error)(str(error)) from error
 
 
-class InMemoryConversationSource:
+class InMemorySFTSource:
     """Immutable tiny/local conversation source with optional seeded shuffling."""
 
     def __init__(
@@ -270,18 +270,18 @@ class _ConversationMixture:
 
     def __init__(
         self,
-        sources: tuple[WeightedConversationSource, ...],
+        sources: tuple[SFTMixtureEntry, ...],
         *,
         source_lengths: tuple[int, ...],
         source_identities: tuple[str, ...],
-        repeat_weights: tuple[int, ...],
+        source_repeats: tuple[int, ...],
         epoch_seed: int,
         cursor: int = 0,
     ) -> None:
         self._sources = sources
         self._source_lengths = source_lengths
         self._source_identities = source_identities
-        self._repeat_weights = repeat_weights
+        self._source_repeats = source_repeats
         self.epoch_seed = epoch_seed
         self._order = self._build_order()
         if not 0 <= cursor <= len(self._order):
@@ -346,10 +346,10 @@ class _ConversationMixture:
 
     def _build_order(self) -> list[int]:
         order: list[int] = []
-        for source_index, (source_length, repeat_weight) in enumerate(
-            zip(self._source_lengths, self._repeat_weights, strict=True)
+        for source_index, (source_length, repeats) in enumerate(
+            zip(self._source_lengths, self._source_repeats, strict=True)
         ):
-            order.extend([source_index] * (source_length * repeat_weight))
+            order.extend([source_index] * (source_length * repeats))
         random.Random(self.epoch_seed).shuffle(order)
         return order
 
@@ -359,7 +359,7 @@ class _ConversationMixture:
         iterators: list[Iterator[SFTConversationExample] | None] = []
         for source_index, cursor in enumerate(self._source_cursors):
             source_length = self._source_lengths[source_index]
-            source_total = source_length * self._repeat_weights[source_index]
+            source_total = source_length * self._source_repeats[source_index]
             if cursor == source_total:
                 iterators.append(None)
                 continue
@@ -397,7 +397,7 @@ class _ConversationMixture:
                 f"source {source_index} yielded more than its declared "
                 f"length {source_length}"
             )
-        source_total = source_length * self._repeat_weights[source_index]
+        source_total = source_length * self._source_repeats[source_index]
         if cursor == source_total:
             self._source_iterators[source_index] = None
             return
@@ -443,7 +443,7 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
 
     def __init__(
         self,
-        sources: Sequence[WeightedConversationSource],
+        sources: Sequence[SFTMixtureEntry],
         *,
         tokenizer: Tokenizer,
         batch_size: int,
@@ -478,9 +478,7 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
         self.repeat = repeat
         self._source_lengths = source_lengths
         self._source_identities = source_identities
-        self._repeat_weights = tuple(
-            source.repeat_weight for source in normalized_sources
-        )
+        self._source_repeats = tuple(entry.repeats for entry in normalized_sources)
         self._vocab_size = vocab_size
         self._bos_token_id = bos_token_id
         self._tokenizer_identity = tokenizer_identity
@@ -628,7 +626,7 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
             "mixture_cursor": self._mixture.cursor,
             "packing_buffer_size": self.packing_buffer_size,
             "repeat": self.repeat,
-            "repeat_weights": list(self._repeat_weights),
+            "source_repeats": list(self._source_repeats),
             "rng_state": _rng_state_to_json(self._rng.getstate()),
             "source_order": list(self._source_identities),
             "stats": self.stats.to_dict(),
@@ -696,7 +694,7 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
         _require_state_setting(state, "tokenizer_identity", self._tokenizer_identity)
         _require_state_setting(state, "vocab_size", self._vocab_size)
         _require_state_setting(state, "source_order", list(self._source_identities))
-        _require_state_setting(state, "repeat_weights", list(self._repeat_weights))
+        _require_state_setting(state, "source_repeats", list(self._source_repeats))
         _require_state_setting(state, "batch_size", self.batch_size)
         _require_state_setting(state, "max_seq_len", self.max_seq_len)
         _require_state_setting(
@@ -748,7 +746,7 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
             self.sources,
             source_lengths=self._source_lengths,
             source_identities=self._source_identities,
-            repeat_weights=self._repeat_weights,
+            source_repeats=self._source_repeats,
             epoch_seed=epoch_seed,
             cursor=cursor,
         )
@@ -913,7 +911,7 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
             label=f"buffer[{buffer_index}].source_offset",
         )
         source_total = (
-            self._source_lengths[source_index] * self._repeat_weights[source_index]
+            self._source_lengths[source_index] * self._source_repeats[source_index]
         )
         if source_offset >= source_total:
             raise SFTLoaderStateError(
@@ -941,7 +939,7 @@ class SFTConversationLoader(Iterator[tuple[Tensor, Tensor]]):
 
 
 def build_fresh_sft_validation_loader(
-    sources: Sequence[FiniteConversationSource],
+    sources: Sequence[FiniteSFTSource],
     *,
     tokenizer: Tokenizer,
     batch_size: int,
@@ -952,7 +950,7 @@ def build_fresh_sft_validation_loader(
     """Build a new finite validation view independent of every train cursor."""
 
     return SFTConversationLoader(
-        tuple(WeightedConversationSource(source) for source in sources),
+        tuple(SFTMixtureEntry(source) for source in sources),
         tokenizer=tokenizer,
         batch_size=batch_size,
         max_seq_len=max_seq_len,
@@ -966,11 +964,11 @@ def load_jsonl_conversation_source(
     path: str | PathLike[str],
     *,
     shuffle: bool,
-) -> InMemoryConversationSource:
+) -> InMemorySFTSource:
     """Load one strict tracked JSONL file as a stable finite source."""
 
     conversations = read_conversations(path)
-    return InMemoryConversationSource(
+    return InMemorySFTSource(
         conversations,
         source_identity=_canonical_identity(
             {
@@ -983,19 +981,17 @@ def load_jsonl_conversation_source(
 
 
 def _validate_source_contract(
-    sources: Sequence[WeightedConversationSource],
+    sources: Sequence[SFTMixtureEntry],
 ) -> tuple[
-    tuple[WeightedConversationSource, ...],
+    tuple[SFTMixtureEntry, ...],
     tuple[int, ...],
     tuple[str, ...],
 ]:
     normalized = tuple(sources)
     if not normalized or not all(
-        isinstance(source, WeightedConversationSource) for source in normalized
+        isinstance(entry, SFTMixtureEntry) for entry in normalized
     ):
-        raise SFTLoaderError(
-            "sources must be a non-empty sequence of WeightedConversationSource"
-        )
+        raise SFTLoaderError("sources must be a non-empty sequence of SFTMixtureEntry")
 
     lengths: list[int] = []
     identities: list[str] = []
@@ -1278,14 +1274,14 @@ __all__ = [
     "SFT_CROP_POLICY",
     "SFT_LOADER_STATE_FORMAT",
     "SFT_LOADER_STATE_VERSION",
-    "FiniteConversationSource",
-    "InMemoryConversationSource",
+    "FiniteSFTSource",
+    "InMemorySFTSource",
     "SFTBatchInfo",
     "SFTConversationLoader",
     "SFTLoaderError",
     "SFTLoaderStateError",
     "SFTLoaderStats",
-    "WeightedConversationSource",
+    "SFTMixtureEntry",
     "build_fresh_sft_validation_loader",
     "load_jsonl_conversation_source",
 ]
