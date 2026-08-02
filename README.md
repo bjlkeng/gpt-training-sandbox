@@ -1071,6 +1071,38 @@ tokenizer. `shift_sft_targets` applies the causal shift only after a full row is
 assembled, maps every ignored target to exactly `-1`, and rejects rows with no
 supervised assistant target.
 
+### SFT dataset sources
+
+The initial larger mixture pins its adapter semantics to nanochat commit
+`92d63d4e8bb4df75c3b71618f31ddde2378b2bcd`: SmolTalk `train`/`test`, MMLU
+`all` `auxiliary_train`/`test`, and GSM8K `main` `train`/`test`. SmolTalk keeps
+strict string conversations, MMLU uses the small-model `choice=letter` format
+with no whitespace after `=`, and GSM8K converts strict
+`<<expression=result>>` markers into supervised Python calls plus masked
+outputs.
+
+`prepare_sft_data` discovers auto-converted parquet files through the official
+[Hugging Face Dataset Viewer parquet endpoint](https://huggingface.co/docs/dataset-viewer/en/parquet).
+It needs only the base `urllib` and PyArrow dependencies. Downloads enter a
+private staging directory; schema, row count, byte size, and SHA-256 checks are
+recorded before the completed directory and its versioned `manifest.json` are
+published atomically. Existing caches are fully revalidated and can then be
+used without network access.
+
+```bash
+uv run python -m scripts.prepare_sft_data \
+  --dataset smoltalk \
+  --split train \
+  --cache-dir data/parquet/sft \
+  --limit 3
+```
+
+Use `--dry-run` to resolve the contract without discovery or writes. Tests and
+offline development can repeat `--local-parquet PATH` to inject local shards
+through the same cache checks. Seeded iteration shuffles through a bounded row
+buffer and supports deterministic `start`/`stop`/`step` views without building
+an eager list of dataset row dictionaries.
+
 ### Random token batches
 
 `RandomOffsetTokenLoader` consumes a validated `TokenizedShardReader` and

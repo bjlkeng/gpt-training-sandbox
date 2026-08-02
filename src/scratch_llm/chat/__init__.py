@@ -28,7 +28,6 @@ from scratch_llm.chat.rendering import (
     shift_sft_targets,
 )
 
-
 __all__ = [
     "CHAT_RENDERER_ID",
     "CHAT_SCHEMA_VERSION",

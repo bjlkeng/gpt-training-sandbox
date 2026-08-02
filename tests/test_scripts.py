@@ -73,6 +73,7 @@ ROADMAP_COMMANDS = (
         "scripts.compare_runs",
         "scripts.data_stats",
         "scripts.download_climbmix",
+        "scripts.prepare_sft_data",
     )
 )
 
