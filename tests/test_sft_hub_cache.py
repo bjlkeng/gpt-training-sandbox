@@ -13,8 +13,8 @@ import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import pytest
 
-from scratch_llm.chat.datasets import get_sft_dataset_spec
-from scratch_llm.chat.hub import (
+from scratch_llm.data.sft_sources import get_sft_dataset_spec
+from scratch_llm.data.hub import (
     HUB_PARQUET_CACHE_FORMAT,
     HubParquetCacheError,
     HubParquetDiscoveryError,

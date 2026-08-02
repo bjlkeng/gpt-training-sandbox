@@ -18,7 +18,7 @@ from scratch_llm.chat.conversation import (
     UserMessage,
     parse_conversation,
 )
-from scratch_llm.chat.datasets import (
+from scratch_llm.data.sft_sources import (
     NANOCHAT_SFT_REFERENCE_COMMIT,
     SFTConversationDataset,
     SFTDatasetError,
@@ -29,7 +29,7 @@ from scratch_llm.chat.datasets import (
     normalize_smoltalk_row,
     parse_gsm8k_answer_parts,
 )
-from scratch_llm.chat.hub import publish_local_parquet_cache
+from scratch_llm.data.hub import publish_local_parquet_cache
 from scratch_llm.chat.rendering import render_conversation
 from scratch_llm.tokenization.tokenizer import ByteTokenizer
 

@@ -6,13 +6,13 @@ import argparse
 from collections.abc import Sequence
 from pathlib import Path
 
-from scratch_llm.chat.datasets import (
+from scratch_llm.data.sft_sources import (
     SFTConversationDataset,
     SFTDatasetError,
     get_sft_dataset_spec,
     preview_examples_identity,
 )
-from scratch_llm.chat.hub import (
+from scratch_llm.data.hub import (
     HubParquetError,
     prepare_hub_parquet_cache,
     publish_local_parquet_cache,

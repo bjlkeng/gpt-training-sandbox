@@ -30,7 +30,7 @@ from scratch_llm.chat.conversation import (
     UserMessage,
     parse_conversation,
 )
-from scratch_llm.chat.hub import CachedHubParquetDataset, HubDatasetSpec
+from scratch_llm.data.hub import CachedHubParquetDataset, HubDatasetSpec
 
 
 _SHARED_SEED_MAX: Final = 2**32 - 1

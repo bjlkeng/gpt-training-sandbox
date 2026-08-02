@@ -79,9 +79,17 @@ OBSOLETE_TOP_LEVEL_EVALUATION_MODULES = {
     "tokenizer_tracking",
 }
 EXPECTED_DOMAIN_MODULES = {
-    "chat": {"conversation", "datasets", "hub", "rendering"},
+    "chat": {"conversation", "rendering"},
     "comparison": {"loading", "model", "pipeline", "reporting"},
-    "data": {"climbmix", "loaders", "preparation", "statistics", "tokenized"},
+    "data": {
+        "climbmix",
+        "hub",
+        "loaders",
+        "preparation",
+        "sft_sources",
+        "statistics",
+        "tokenized",
+    },
     "diagnostics": {
         "accelerator_memory",
         "oom",
@@ -106,6 +114,9 @@ EXPECTED_DOMAIN_MODULES = {
         "rng_state",
         "telemetry",
     },
+}
+OBSOLETE_DOMAIN_MODULES = {
+    "chat": {"datasets", "hub"},
 }
 OBSOLETE_TOP_LEVEL_DOMAIN_MODULES = {
     "_run_comparison_loading",
@@ -185,6 +196,9 @@ def test_domain_modules_are_grouped_by_responsibility() -> None:
 
     for module_name in OBSOLETE_TOP_LEVEL_DOMAIN_MODULES:
         assert find_spec(f"scratch_llm.{module_name}") is None
+    for package_name, module_names in OBSOLETE_DOMAIN_MODULES.items():
+        for module_name in module_names:
+            assert find_spec(f"scratch_llm.{package_name}.{module_name}") is None
 
 
 def test_editable_install_exposes_packages_outside_the_repository(
