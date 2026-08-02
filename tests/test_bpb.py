@@ -329,6 +329,34 @@ def test_model_evaluation_restores_modes_rng_and_training_state() -> None:
             assert parameter.grad is None
 
 
+def test_cpu_evaluation_restores_already_initialized_cuda_rng_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    initial_states = [torch.tensor([1, 2, 3], dtype=torch.uint8)]
+    restored: list[list[torch.Tensor]] = []
+    monkeypatch.setattr(torch.cuda, "is_initialized", lambda: True)
+    monkeypatch.setattr(
+        torch.cuda,
+        "get_rng_state_all",
+        lambda: [state.clone() for state in initial_states],
+    )
+    monkeypatch.setattr(
+        torch.cuda,
+        "set_rng_state_all",
+        lambda states: restored.append([state.clone() for state in states]),
+    )
+
+    evaluate_bpb_batches(
+        _SideEffectProbeModel(),
+        [(torch.tensor([[0.5]]), torch.tensor([[0]]))],
+        torch.tensor([1]),
+        device="cpu",
+    )
+
+    assert len(restored) == 1
+    assert torch.equal(restored[0][0], initial_states[0])
+
+
 def _validation_result() -> BaseValidationResult:
     accumulation = BPBAccumulation(
         processed_model_tokens=12,

@@ -1127,6 +1127,28 @@ packing counters, and buffered item identities. `load_state_dict()` rerenders
 those identities and validates the complete candidate before mutating live
 state; token or mask tensors are never serialized as loader state.
 
+### Assistant-only SFT validation BPB
+
+`evaluate_sft_assistant_bpb` consumes a fresh finite conversation loader under
+protocol `sft_assistant_bpb_v1`. Its optional budget is an exact count of
+complete device batches; the immutable result records that requested budget
+alongside actual batches, packed source conversations, processed model tokens,
+positive-byte supervised targets, summed nats, and BPB.
+
+The evaluator delegates unreduced loss arithmetic to the shared BPB
+accumulator. User spans, BOS, assistant prompts, Python outputs, ignored fill,
+and all special tokens have either `-1` labels or zero entries in the canonical
+`token_bytes` table. Assistant text and assistant-authored Python text retain
+their raw byte lengths; `<|assistant_end|>` remains a trained SFT target but is
+not part of the BPB numerator or denominator. Empty and zero-byte validation
+views fail explicitly. Module modes and Python, NumPy, Torch, and already
+initialized CUDA RNG states are restored on both success and failure.
+
+`SFTAssistantBPBCallback` is the artifact-free trainer boundary. It constructs
+a new validation loader for each non-negative optimizer step and names the
+in-memory checkpoint as `<prefix>#step:<step>`. Publishing metrics or reports
+is intentionally outside this protocol boundary.
+
 ### Random token batches
 
 `RandomOffsetTokenLoader` consumes a validated `TokenizedShardReader` and

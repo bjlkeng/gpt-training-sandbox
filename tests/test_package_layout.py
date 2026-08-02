@@ -47,6 +47,7 @@ EXPECTED_EVALUATION_MODULES = {
     "full_document_bpb",
     "nanochat_bpb",
     "sampling",
+    "sft_bpb",
     "tokenizer",
     "tokenizer_tracking",
 }
