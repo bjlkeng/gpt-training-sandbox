@@ -1103,6 +1103,30 @@ through the same cache checks. Seeded iteration shuffles through a bounded row
 buffer and supports deterministic `start`/`stop`/`step` views without building
 an eager list of dataset row dictionaries.
 
+### SFT conversation packing
+
+`SFTConversationLoader` accepts finite sources through one small protocol,
+including the tracked JSONL fixtures and the cached parquet views above.
+Explicit integer repeat weights form a seeded per-epoch mixture permutation.
+Within a finite conversation buffer, every row repeatedly takes the earliest
+largest complete rendering that fits. The buffer refills before each choice;
+equal-length ties therefore remain stable and observable.
+
+Each row contains `max_seq_len + 1` tokens before the causal shift. Residual
+space and incomplete batch rows use BOS as categorical fill with false mask
+bits, producing exactly `-1` labels after shifting. The bounded overlength
+policy retains one aligned prefix before buffering. Cropped examples that lose
+all assistant supervision are counted and skipped, and an entirely
+unsupervised epoch fails instead of emitting a NaN-producing batch.
+
+Training loaders expose current epoch/step and can repeat only after a complete
+finite epoch. Validation uses `build_fresh_sft_validation_loader`, which never
+inherits a train cursor. Versioned `state_dict()` data records source order,
+weights, the checked mixture permutation, source cursors, Python RNG state,
+packing counters, and buffered item identities. `load_state_dict()` rerenders
+those identities and validates the complete candidate before mutating live
+state; token or mask tensors are never serialized as loader state.
+
 ### Random token batches
 
 `RandomOffsetTokenLoader` consumes a validated `TokenizedShardReader` and
