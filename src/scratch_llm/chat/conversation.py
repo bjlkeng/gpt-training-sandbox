@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import ClassVar, Final, Literal, TypeAlias
 
 from scratch_llm._validation import JsonValueValidator
+from scratch_llm.utils import atomic_write
 
 
 CHAT_SCHEMA_VERSION: Final = 1
@@ -336,6 +337,48 @@ def read_conversations(path: str | PathLike[str]) -> tuple[Conversation, ...]:
     return tuple(conversations)
 
 
+def conversation_to_dict(conversation: Conversation) -> dict[str, object]:
+    """Return the canonical JSON-compatible conversation object."""
+
+    normalized = parse_conversation(conversation)
+    messages: list[dict[str, object]] = []
+    for message in normalized.messages:
+        if isinstance(message, (SystemMessage, UserMessage)):
+            content: object = message.content
+        elif isinstance(message.content, str):
+            content = message.content
+        else:
+            content = [
+                {"text": part.text, "type": part.type} for part in message.content
+            ]
+        messages.append({"content": content, "role": message.role})
+    return {
+        "messages": messages,
+        "schema_version": normalized.schema_version,
+    }
+
+
+def conversation_to_json(conversation: Conversation) -> str:
+    """Serialize one conversation as canonical UTF-8 JSON text."""
+
+    return json.dumps(
+        conversation_to_dict(conversation),
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def write_conversation_jsonl(
+    conversation: Conversation,
+    path: str | PathLike[str],
+) -> Path:
+    """Atomically replace a one-record canonical conversation JSONL file."""
+
+    return atomic_write(path, f"{conversation_to_json(conversation)}\n")
+
+
 def _reject_non_standard_number(value: str) -> object:
     raise ConversationValidationError(f"JSON contains non-standard number {value!r}")
 
@@ -353,6 +396,9 @@ __all__ = [
     "SystemMessage",
     "TextPart",
     "UserMessage",
+    "conversation_to_dict",
+    "conversation_to_json",
     "parse_conversation",
     "read_conversations",
+    "write_conversation_jsonl",
 ]

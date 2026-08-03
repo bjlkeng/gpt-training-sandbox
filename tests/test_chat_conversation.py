@@ -16,8 +16,11 @@ from scratch_llm.chat.conversation import (
     PythonPart,
     TextPart,
     UserMessage,
+    conversation_to_dict,
+    conversation_to_json,
     parse_conversation,
     read_conversations,
+    write_conversation_jsonl,
 )
 
 
@@ -126,6 +129,40 @@ def test_parse_conversation_preserves_empty_string_content() -> None:
             ),
         )
     )
+
+
+def test_conversation_serializer_is_canonical_utf8_and_round_trips(
+    tmp_path: Path,
+) -> None:
+    conversation = Conversation(
+        messages=(
+            UserMessage(content="Run ☕."),
+            AssistantMessage(
+                content=(
+                    TextPart(text="Working "),
+                    PythonPart(text="print('☕')"),
+                    PythonOutputPart(text="☕"),
+                )
+            ),
+        )
+    )
+    payload = conversation_to_dict(conversation)
+    encoded = conversation_to_json(conversation)
+    destination = tmp_path / "nested" / "transcript.jsonl"
+
+    result = write_conversation_jsonl(conversation, destination)
+
+    assert result == destination
+    assert encoded == json.dumps(
+        payload,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    assert destination.read_text(encoding="utf-8") == f"{encoded}\n"
+    assert read_conversations(destination) == (conversation,)
+    assert not list(destination.parent.glob(".transcript.jsonl.*.tmp"))
 
 
 @pytest.mark.parametrize(

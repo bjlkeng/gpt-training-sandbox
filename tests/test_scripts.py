@@ -63,10 +63,7 @@ CHECKPOINT_COMMANDS = (
     "scripts.chat",
     "scripts.web_chat",
 )
-UNIMPLEMENTED_CHECKPOINT_COMMANDS = (
-    "scripts.chat",
-    "scripts.web_chat",
-)
+UNIMPLEMENTED_CHECKPOINT_COMMANDS = ("scripts.web_chat",)
 ROADMAP_COMMANDS = (
     CONFIG_COMMANDS
     + CHECKPOINT_COMMANDS

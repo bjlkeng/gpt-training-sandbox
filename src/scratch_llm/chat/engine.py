@@ -21,6 +21,7 @@ from scratch_llm.chat.conversation import (
     AssistantMessage,
     Conversation,
     UserMessage,
+    write_conversation_jsonl,
 )
 from scratch_llm.chat.rendering import (
     CHAT_RENDERER_ID,
@@ -410,6 +411,21 @@ class ChatEngine:
             generation_seconds=generation_seconds,
             completion_reason=self._completion_reason,
             stop_token_id=self._stop_token_id,
+        )
+
+    def save_transcript(self, path: str | PathLike[str]) -> Path:
+        """Atomically save the complete canonical conversation as JSONL."""
+
+        self._require_inactive()
+        if (
+            self._status != "completed"
+            or not self._messages
+            or not isinstance(self._messages[-1], AssistantMessage)
+        ):
+            raise ChatEngineError("transcript export requires a completed conversation")
+        return write_conversation_jsonl(
+            Conversation(messages=self._messages),
+            path,
         )
 
     def _run_generation(

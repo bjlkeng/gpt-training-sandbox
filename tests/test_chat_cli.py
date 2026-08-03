@@ -1,0 +1,366 @@
+"""Terminal chat adapter and subprocess acceptance tests."""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from io import StringIO
+from pathlib import Path
+import subprocess
+import sys
+
+import pytest
+import torch
+
+import scripts.chat as chat_script
+from scratch_llm.chat import TokenEvent, read_conversations
+from scratch_llm.config import (
+    GPTConfig,
+    GenerationConfig,
+    ProjectConfig,
+    RunConfig,
+    SFTConfig,
+    TokenizerConfig,
+    TrainConfig,
+)
+from scratch_llm.model import GPT
+from scratch_llm.tokenization.tokenizer import VOCAB_SIZE, ByteTokenizer
+from scratch_llm.training.checkpoint import ExactTrainingState, save_checkpoint
+from scratch_llm.training.optim import build_lr_scheduler, build_optimizer
+from scratch_llm.training.rng_state import capture_training_rng_state
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _events(text: str) -> Iterator[TokenEvent]:
+    yield TokenEvent(
+        type="start",
+        token_ids=(),
+        text_delta="",
+        prompt_token_count=5,
+        generated_token_count=0,
+        sampled_token_count=0,
+        elapsed_seconds=0,
+        completion_reason=None,
+        stop_token_id=None,
+    )
+    yield TokenEvent(
+        type="token",
+        token_ids=(65,),
+        text_delta=text,
+        prompt_token_count=5,
+        generated_token_count=1,
+        sampled_token_count=1,
+        elapsed_seconds=1,
+        completion_reason=None,
+        stop_token_id=None,
+    )
+    yield TokenEvent(
+        type="complete",
+        token_ids=(),
+        text_delta="",
+        prompt_token_count=5,
+        generated_token_count=1,
+        sampled_token_count=1,
+        elapsed_seconds=1,
+        completion_reason="max_new_tokens",
+        stop_token_id=None,
+    )
+
+
+class _FakeEngine:
+    def __init__(self, responses: tuple[str, ...] = ("answer",)) -> None:
+        self.default_generation_config = GenerationConfig(
+            temperature=0.8,
+            top_k=50,
+            max_new_tokens=256,
+            seed=None,
+        )
+        self.responses = iter(responses)
+        self.appended: list[str] = []
+        self.settings: list[GenerationConfig] = []
+        self.resets = 0
+        self.saved: list[Path] = []
+
+    def append_user_message(self, text: str) -> None:
+        self.appended.append(text)
+
+    def generate_stream(self, settings: GenerationConfig) -> Iterator[TokenEvent]:
+        self.settings.append(settings)
+        return _events(next(self.responses))
+
+    def reset(self) -> None:
+        self.resets += 1
+
+    def save_transcript(self, path: Path) -> Path:
+        self.saved.append(path)
+        return path
+
+
+def test_main_resolves_checkpoint_defaults_and_explicit_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    engine = _FakeEngine()
+    monkeypatch.setattr(chat_script, "ChatEngine", lambda *_args, **_kwargs: engine)
+    transcript = tmp_path / "chat.jsonl"
+
+    exit_code = chat_script.main(
+        [
+            "--checkpoint",
+            "unused.pt",
+            "--device",
+            "cpu",
+            "--prompt",
+            "hello",
+            "--temperature",
+            "0",
+            "--top-k",
+            "3",
+            "--max-new-tokens",
+            "4",
+            "--seed",
+            "5",
+            "--transcript",
+            str(transcript),
+        ]
+    )
+
+    assert exit_code == 0
+    assert engine.appended == ["hello"]
+    assert engine.settings == [
+        GenerationConfig(
+            temperature=0,
+            top_k=3,
+            max_new_tokens=4,
+            seed=5,
+        )
+    ]
+    assert engine.saved == [transcript]
+    assert capsys.readouterr().out == "answer\n"
+
+
+def test_interactive_commands_preserve_turns_reset_and_exit_without_generation(
+    tmp_path: Path,
+) -> None:
+    engine = _FakeEngine(("first answer", "second answer"))
+    output = StringIO()
+    transcript = tmp_path / "chat.jsonl"
+
+    chat_script.run_terminal_chat(
+        engine,  # type: ignore[arg-type]
+        GenerationConfig(temperature=0),
+        prompt=None,
+        transcript_path=transcript,
+        input_stream=StringIO("first\n/reset\nsecond\n/quit\n"),
+        output_stream=output,
+    )
+
+    assert engine.appended == ["first", "second"]
+    assert engine.resets == 1
+    assert len(engine.settings) == 2
+    assert engine.saved == [transcript, transcript]
+    assert output.getvalue() == (
+        "user> assistant> first answer\n"
+        "user> Conversation reset.\n"
+        "user> assistant> second answer\n"
+        "user> "
+    )
+
+
+@pytest.mark.parametrize("command", ["/exit", "/quit"])
+def test_exit_commands_and_eof_never_generate(command: str) -> None:
+    engine = _FakeEngine()
+    output = StringIO()
+
+    chat_script.run_terminal_chat(
+        engine,  # type: ignore[arg-type]
+        GenerationConfig(),
+        prompt=None,
+        input_stream=StringIO(f"{command}\n"),
+        output_stream=output,
+    )
+    chat_script.run_terminal_chat(
+        engine,  # type: ignore[arg-type]
+        GenerationConfig(),
+        prompt=None,
+        input_stream=StringIO(""),
+        output_stream=output,
+    )
+
+    assert engine.appended == []
+    assert engine.settings == []
+    assert engine.saved == []
+
+
+def test_keyboard_interrupt_and_generation_failure_close_cleanly_without_save(
+    tmp_path: Path,
+) -> None:
+    class _InterruptingInput:
+        def readline(self) -> str:
+            raise KeyboardInterrupt
+
+    engine = _FakeEngine()
+    output = StringIO()
+    chat_script.run_terminal_chat(
+        engine,  # type: ignore[arg-type]
+        GenerationConfig(),
+        prompt=None,
+        input_stream=_InterruptingInput(),  # type: ignore[arg-type]
+        output_stream=output,
+    )
+    assert engine.appended == []
+
+    closed = False
+
+    class _FailingEngine(_FakeEngine):
+        def generate_stream(
+            self,
+            settings: GenerationConfig,
+        ) -> Iterator[TokenEvent]:
+            def fail() -> Iterator[TokenEvent]:
+                nonlocal closed
+                try:
+                    yield next(_events("partial"))
+                    raise RuntimeError("generation failed")
+                finally:
+                    closed = True
+
+            return fail()
+
+    failing = _FailingEngine()
+    with pytest.raises(RuntimeError, match="generation failed"):
+        chat_script.run_terminal_chat(
+            failing,  # type: ignore[arg-type]
+            GenerationConfig(),
+            prompt="hello",
+            transcript_path=tmp_path / "must-not-exist.jsonl",
+            output_stream=StringIO(),
+        )
+
+    assert closed is True
+    assert failing.saved == []
+    assert not (tmp_path / "must-not-exist.jsonl").exists()
+
+
+def test_invalid_generation_override_is_actionable_without_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    engine = _FakeEngine()
+    monkeypatch.setattr(chat_script, "ChatEngine", lambda *_args, **_kwargs: engine)
+
+    with pytest.raises(SystemExit) as raised:
+        chat_script.main(
+            [
+                "--checkpoint",
+                "unused.pt",
+                "--prompt",
+                "hello",
+                "--max-new-tokens",
+                "0",
+            ]
+        )
+
+    assert raised.value.code == 2
+    error_output = capsys.readouterr().err
+    assert "generation.max_new_tokens" in error_output
+    assert "Traceback" not in error_output
+
+
+def _save_sft_checkpoint(path: Path) -> Path:
+    config = ProjectConfig(
+        run=RunConfig(device="cpu"),
+        tokenizer=TokenizerConfig(type="byte", vocab_size=VOCAB_SIZE),
+        model=GPTConfig(
+            vocab_size=VOCAB_SIZE,
+            seq_len=16,
+            n_layer=1,
+            n_head=1,
+            n_embd=8,
+            mlp_ratio=2,
+        ),
+        train=TrainConfig(
+            device_batch_size=1,
+            total_batch_size_tokens=16,
+            max_steps=1,
+            warmup_steps=0,
+            warmdown_ratio=0,
+        ),
+        sft=SFTConfig(
+            device_batch_size=1,
+            total_batch_size_tokens=16,
+            max_steps=1,
+            warmup_steps=0,
+            warmdown_ratio=0,
+            eval_every=1,
+            eval_batches=1,
+            save_every=1,
+            log_every=1,
+        ),
+        generation=GenerationConfig(temperature=0, top_k=1, max_new_tokens=2),
+    )
+    model = GPT(config.model)
+    with torch.no_grad():
+        for parameter in model.parameters():
+            parameter.zero_()
+    active_train = config.sft.to_train_config(config.model.seq_len)
+    optimizer = build_optimizer(model, active_train)
+    scheduler = build_lr_scheduler(optimizer, active_train)
+    return save_checkpoint(
+        path,
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        config=config,
+        step=0,
+        tokenizer=ByteTokenizer(),
+        continuation=ExactTrainingState(
+            loader_format="fixture_loader_v1",
+            loader_state={"format": "fixture_loader_v1", "position": 0},
+            rng_state=capture_training_rng_state("cpu"),
+            tracker_step=0,
+            total_training_time_seconds=0,
+            total_training_flops=0,
+        ),
+        training_stage="sft",
+        base_checkpoint_identity="sha256:" + "a" * 64,
+    )
+
+
+def test_one_shot_subprocess_uses_real_engine_and_writes_parseable_transcript(
+    tmp_path: Path,
+) -> None:
+    checkpoint = _save_sft_checkpoint(tmp_path / "sft.pt")
+    transcript = tmp_path / "chat.jsonl"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.chat",
+            "--checkpoint",
+            str(checkpoint),
+            "--prompt",
+            "Hi",
+            "--transcript",
+            str(transcript),
+        ],
+        cwd=PROJECT_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "\x00\x00\n"
+    assert "Traceback" not in result.stderr
+    conversations = read_conversations(transcript)
+    assert len(conversations) == 1
+    assert [
+        (message.role, message.content) for message in conversations[0].messages
+    ] == [
+        ("user", "Hi"),
+        ("assistant", "\x00\x00"),
+    ]
