@@ -15,7 +15,9 @@ from scratch_llm._validation import require_non_negative_integer
 from scratch_llm.chat import (
     SUPPORTED_CHAT_RENDERER_IDS,
     ChatEngine,
+    ChatEventTracker,
     ChatState,
+    ChatTrackingSession,
     TokenEvent,
     close_token_stream,
 )
@@ -144,6 +146,12 @@ class SessionEngine(Protocol):
 
     def get_pending_prompt_token_ids(self) -> tuple[int, ...]:
         """Return exact renderer-owned prompt IDs for explicit debugging."""
+
+    def get_last_completed_message(
+        self,
+        role: Literal["user", "assistant"],
+    ) -> str:
+        """Return only the requested side of the latest committed turn."""
 
     def export_transcript_bytes(self) -> bytes:
         """Return one canonical completed conversation record."""
@@ -345,6 +353,7 @@ class ChatSessionService:
         initial_checkpoint_id: str | None = None,
         engine_factory: EngineFactory = _create_engine,
         identity_factory: IdentityFactory = new_public_identity,
+        chat_tracking: ChatEventTracker | None = None,
         reset_memory_peak: MemoryPeakReset = reset_accelerator_memory_peak,
         collect_memory: MemoryCollector = collect_accelerator_memory,
     ) -> None:
@@ -366,6 +375,10 @@ class ChatSessionService:
             raise TypeError("initial_checkpoint_id must be a string or None")
         if not callable(engine_factory):
             raise TypeError("engine_factory must be callable")
+        if chat_tracking is not None and not isinstance(
+            chat_tracking, ChatEventTracker
+        ):
+            raise TypeError("chat_tracking must be a ChatEventTracker or None")
         if not callable(reset_memory_peak):
             raise TypeError("reset_memory_peak must be callable")
         if not callable(collect_memory):
@@ -374,6 +387,14 @@ class ChatSessionService:
         self._initial_checkpoint_id = initial_checkpoint_id
         self._engine_factory = engine_factory
         self._session_metrics = SessionMetricsBoundary(identity_factory)
+        self._chat_tracking_session: ChatTrackingSession | None = (
+            None
+            if chat_tracking is None
+            else chat_tracking.start_session(
+                "web",
+                session_id=self._session_metrics.session_id,
+            )
+        )
         self._reset_memory_peak = reset_memory_peak
         self._collect_memory = collect_memory
         self._engine: SessionEngine | None = None
@@ -508,6 +529,7 @@ class ChatSessionService:
         self._active_checkpoint_id = record.entry.checkpoint_id
         self._status = "ready"
         self._session_metrics.start_new_session()
+        self._reset_chat_tracking_session()
         if previous is not None and previous is not replacement:
             self._release_engine(previous)
         return self.get_state()
@@ -526,7 +548,14 @@ class ChatSessionService:
             ) from error
         self._status = "ready"
         self._session_metrics.start_new_session()
+        self._reset_chat_tracking_session()
         return self.get_state()
+
+    def _reset_chat_tracking_session(self) -> None:
+        if self._chat_tracking_session is not None:
+            self._chat_tracking_session.reset(
+                session_id=self._session_metrics.session_id
+            )
 
     def export_transcript(self) -> bytes:
         """Return one canonical download without exposing a write path."""
@@ -926,6 +955,30 @@ class ChatSessionService:
         if self._generation_lease is lease:
             self._generation_lease = None
             self._status = "ready" if self._engine is not None else "unloaded"
+        if (
+            outcome == "completed"
+            and completion_event is not None
+            and self._chat_tracking_session is not None
+            and self._engine is not None
+        ):
+            try:
+                engine = self._engine
+                self._chat_tracking_session.record_completed_turn(
+                    completion_event,
+                    prompt_factory=lambda: engine.get_last_completed_message("user"),
+                    response_factory=lambda: engine.get_last_completed_message(
+                        "assistant"
+                    ),
+                    turn_id=lease.turn_id,
+                )
+            except Exception:
+                outcome = "failed"
+                completion_event = None
+                metrics = None
+                try:
+                    self._engine.rollback_last_turn(include_completed=True)
+                except Exception:
+                    pass
         try:
             state = self.get_state()
         except WebServiceError:

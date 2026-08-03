@@ -2,22 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
-import unicodedata
-from uuid import uuid4
 
-from scratch_llm.chat import TokenEvent
-
-
-_MAX_PUBLIC_ID_BYTES = 256
-IdentityFactory = Callable[[str], str]
-
-
-def new_public_identity(kind: str) -> str:
-    """Return an opaque local session or turn identity."""
-
-    return f"{kind}-{uuid4().hex}"
+from scratch_llm.chat import (
+    IdentityFactory,
+    TokenEvent,
+    create_public_identity,
+    new_public_identity,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,21 +157,7 @@ class SessionMetricsBoundary:
         )
 
     def _create_identity(self, kind: str) -> str:
-        try:
-            identity = self._identity_factory(kind)
-        except Exception as error:
-            raise RuntimeError(f"failed to create {kind} identity") from error
-        if (
-            not isinstance(identity, str)
-            or not identity
-            or len(identity.encode("utf-8")) > _MAX_PUBLIC_ID_BYTES
-            or any(
-                unicodedata.category(character).startswith("C")
-                for character in identity
-            )
-        ):
-            raise ValueError(f"{kind} identity is invalid")
-        return identity
+        return create_public_identity(self._identity_factory, kind)
 
 
 def finalize_generation_metrics(

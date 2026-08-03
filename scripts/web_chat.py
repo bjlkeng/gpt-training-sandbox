@@ -10,7 +10,9 @@ from typing import TypeAlias, cast
 from scratch_llm.config import ConfigValidationError, GenerationConfig, WebConfig
 from scripts._common import (
     add_generation_arguments,
+    add_optional_chat_tracking_arguments,
     checkpoint_parser,
+    optional_chat_tracking,
     resolve_generation_arguments,
 )
 
@@ -51,6 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     add_generation_arguments(parser)
+    add_optional_chat_tracking_arguments(parser)
     return parser
 
 
@@ -106,19 +109,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     web_config, generation_config = _resolve_configs(parser, arguments)
     try:
-        create_app, create_service, run_server = _load_web_runtime()
+        with optional_chat_tracking(
+            parser,
+            arguments,
+            command=COMMAND,
+        ) as chat_tracking:
+            create_app, create_service, run_server = _load_web_runtime()
+            service_kwargs: dict[str, object] = {
+                "device": arguments.device,
+                "initial_checkpoint_id": arguments.checkpoint.name,
+            }
+            if chat_tracking is not None:
+                service_kwargs["chat_tracking"] = chat_tracking
+            app = create_app(
+                web_config=web_config,
+                generation_config=generation_config,
+                service_factory=lambda: create_service(
+                    web_config.checkpoint_dir,
+                    **service_kwargs,
+                ),
+            )
+            run_server(app, host=web_config.host, port=web_config.port)
     except WebDependencyError as error:
         parser.error(str(error))
-    app = create_app(
-        web_config=web_config,
-        generation_config=generation_config,
-        service_factory=lambda: create_service(
-            web_config.checkpoint_dir,
-            device=arguments.device,
-            initial_checkpoint_id=arguments.checkpoint.name,
-        ),
-    )
-    run_server(app, host=web_config.host, port=web_config.port)
     return 0
 
 

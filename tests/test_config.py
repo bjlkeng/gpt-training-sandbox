@@ -174,6 +174,22 @@ def test_defaults_cover_the_roadmap_sections_and_are_deterministic() -> None:
     assert first.sft.train_sources is not second.sft.train_sources
 
 
+@pytest.mark.parametrize("field_name", ["log_prompts", "log_responses"])
+@pytest.mark.parametrize("invalid", [0, 1, "false", None])
+def test_wandb_chat_content_gates_require_real_booleans(
+    field_name: str,
+    invalid: object,
+) -> None:
+    config = WandbConfig()
+    setattr(config, field_name, invalid)
+
+    with pytest.raises(
+        ConfigValidationError,
+        match=rf"tracking\.wandb\.{field_name}.*boolean",
+    ):
+        config.validate()
+
+
 def test_generation_overrides_are_shared_validated_and_detached() -> None:
     defaults = GenerationConfig(
         temperature=0.7,

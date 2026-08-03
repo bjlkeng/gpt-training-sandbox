@@ -495,6 +495,20 @@ class ChatEngine:
 
         return conversation_to_jsonl_bytes(self._completed_conversation())
 
+    def get_last_completed_message(
+        self,
+        role: Literal["user", "assistant"],
+    ) -> str:
+        """Return only one requested side of the latest completed turn."""
+
+        if role not in {"user", "assistant"}:
+            raise ValueError("role must be 'user' or 'assistant'")
+        conversation = self._completed_conversation()
+        message = conversation.messages[-2 if role == "user" else -1]
+        if message.role != role or not isinstance(message.content, str):
+            raise AssertionError("completed chat turn has an invalid message pair")
+        return message.content
+
     def _completed_conversation(self) -> Conversation:
         self._require_inactive()
         if (

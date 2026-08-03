@@ -78,6 +78,11 @@ def _error_summary(error: Exception) -> str:
     return summary or type(error).__name__
 
 
+def _require_bool(value: object, path: str) -> None:
+    if not isinstance(value, bool):
+        _fail(path, "must be a boolean")
+
+
 def _omegaconf_error_path(error: Exception, fallback: str) -> str:
     full_key = getattr(error, "full_key", None)
     return str(full_key) if full_key else fallback
@@ -211,6 +216,8 @@ class WandbConfig(_SerializableConfig):
         _require_choice(self.mode, "tracking.wandb.mode", _WANDB_MODES)
         _require_non_empty(self.project, "tracking.wandb.project")
         _require_non_empty(self.dir, "tracking.wandb.dir")
+        _require_bool(self.log_prompts, "tracking.wandb.log_prompts")
+        _require_bool(self.log_responses, "tracking.wandb.log_responses")
         for index, tag in enumerate(self.tags):
             _require_non_empty(tag, f"tracking.wandb.tags.{index}")
 

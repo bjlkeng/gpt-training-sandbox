@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from io import StringIO
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -291,3 +292,55 @@ def test_one_shot_subprocess_uses_real_engine_and_writes_parseable_transcript(
         ("user", "Hi"),
         ("assistant", "\x00\x00"),
     ]
+
+
+def test_tracking_config_logs_only_opted_in_prompt_and_warns_locally(
+    tmp_path: Path,
+) -> None:
+    checkpoint = create_tiny_sft_checkpoint(tmp_path / "sft.pt")
+    run_name = "tracked-terminal-chat"
+    output_dir = tmp_path / "runs"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.chat",
+            "--checkpoint",
+            str(checkpoint),
+            "--prompt",
+            "PROMPT_COMMAND_SECRET",
+            "--config",
+            str(PROJECT_ROOT / "configs" / "smoke.yaml"),
+            "--override",
+            f"run.output_dir={output_dir}",
+            "--override",
+            f"run.name={run_name}",
+            "--override",
+            "tracking.wandb.log_prompts=true",
+            "--override",
+            "tracking.wandb.log_responses=false",
+            "--no-wandb",
+        ],
+        cwd=PROJECT_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Privacy warning" in result.stderr
+    metrics_path = output_dir / run_name / "metrics" / "metrics.jsonl"
+    records = [json.loads(line) for line in metrics_path.read_text().splitlines()]
+    chat_record = next(
+        record["metrics"]
+        for record in records
+        if record.get("record_type") == "metrics"
+    )
+    assert chat_record["chat/prompt"] == "PROMPT_COMMAND_SECRET"
+    assert "chat/response" not in chat_record
+    assert chat_record["chat/transport"] == "cli"
+    assert chat_record["chat/generated_tokens"] == 2
+    summary = (output_dir / run_name / "metrics" / "summary.json").read_text()
+    assert "PROMPT_COMMAND_SECRET" in summary
+    assert "chat/response" not in summary

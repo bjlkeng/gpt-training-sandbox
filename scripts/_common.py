@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import argparse
 import os
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 
 from scratch_llm.config import (
@@ -14,6 +15,7 @@ from scratch_llm.config import (
     apply_generation_overrides,
     load_config,
 )
+from scratch_llm.chat import ChatEventTracker
 from scratch_llm.run import RunConflictError, RunPaths, prepare_run
 from scratch_llm.tracking import RunTracker, build_tracker
 from scratch_llm.tracking_state import TrackingState
@@ -26,11 +28,31 @@ def config_parser(command: str, description: str) -> argparse.ArgumentParser:
         prog=f"python -m scripts.{command}",
         description=description,
     )
+    add_config_arguments(parser, required=True)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Resolve configuration and prepare run paths without doing work.",
+    )
+    return parser
+
+
+def add_config_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    required: bool,
+) -> None:
+    """Add the shared project-config and optional W&B source arguments."""
+
     parser.add_argument(
         "--config",
         type=Path,
-        required=True,
-        help="YAML configuration file to resolve.",
+        required=required,
+        help=(
+            "YAML configuration file to resolve."
+            if required
+            else "Optional YAML configuration enabling chat tracking."
+        ),
     )
     parser.add_argument(
         "-o",
@@ -40,11 +62,6 @@ def config_parser(command: str, description: str) -> argparse.ArgumentParser:
         default=[],
         metavar="PATH=VALUE",
         help="Dotted configuration override; repeat to apply in order.",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Resolve configuration and prepare run paths without doing work.",
     )
     wandb_group = parser.add_mutually_exclusive_group()
     wandb_group.add_argument(
@@ -65,7 +82,12 @@ def config_parser(command: str, description: str) -> argparse.ArgumentParser:
         choices=("online", "offline", "disabled"),
         help="Select the W&B operating mode.",
     )
-    return parser
+
+
+def add_optional_chat_tracking_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add opt-in config resolution to a checkpoint-driven chat command."""
+
+    add_config_arguments(parser, required=False)
 
 
 def checkpoint_parser(command: str, description: str) -> argparse.ArgumentParser:
@@ -208,6 +230,63 @@ def prepare_tracked_run(
     ) as error:
         parser.error(str(error))
     return paths, tracker
+
+
+def _prepare_optional_chat_tracking(
+    parser: argparse.ArgumentParser,
+    arguments: argparse.Namespace,
+    *,
+    command: str,
+) -> tuple[RunTracker | None, ChatEventTracker | None]:
+    """Build chat tracking only when any project-config source was supplied."""
+
+    requested = any(
+        (
+            arguments.config is not None,
+            bool(arguments.overrides),
+            arguments.wandb_enabled is not None,
+            arguments.wandb_mode is not None,
+        )
+    )
+    if not requested:
+        return None, None
+    config = resolve_config_arguments(parser, arguments)
+    _paths, tracker = prepare_tracked_run(parser, config, command=command)
+    wandb = config.tracking.wandb
+    try:
+        chat_tracking = ChatEventTracker(
+            tracker,
+            run_id=config.run.name,
+            log_prompts=wandb.log_prompts,
+            log_responses=wandb.log_responses,
+        )
+    except (RuntimeError, TypeError, ValueError) as error:
+        try:
+            tracker.fail()
+        finally:
+            parser.error(str(error))
+    return tracker, chat_tracking
+
+
+@contextmanager
+def optional_chat_tracking(
+    parser: argparse.ArgumentParser,
+    arguments: argparse.Namespace,
+    *,
+    command: str,
+) -> Iterator[ChatEventTracker | None]:
+    """Own optional tracker lifecycle and yield the shared chat boundary."""
+
+    tracker, chat_tracking = _prepare_optional_chat_tracking(
+        parser,
+        arguments,
+        command=command,
+    )
+    if tracker is None:
+        yield None
+        return
+    with tracker:
+        yield chat_tracking
 
 
 def run_checkpoint_stub(

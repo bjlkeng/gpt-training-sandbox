@@ -11,12 +11,17 @@ from typing import TextIO
 from scratch_llm.chat import (
     ChatEngine,
     ChatEngineError,
+    ChatEventTracker,
+    ChatTrackingSession,
+    TokenEvent,
     close_token_stream,
 )
 from scratch_llm.config import GenerationConfig
 from scripts._common import (
     add_generation_arguments,
+    add_optional_chat_tracking_arguments,
     checkpoint_parser,
+    optional_chat_tracking,
     resolve_generation_arguments,
 )
 
@@ -39,6 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Atomically save completed conversation history as one JSONL record.",
     )
     add_generation_arguments(parser)
+    add_optional_chat_tracking_arguments(parser)
     return parser
 
 
@@ -50,27 +56,35 @@ def _generate_turn(
     transcript_path: Path | None,
     output_stream: TextIO,
     interactive: bool,
+    tracking_session: ChatTrackingSession | None,
 ) -> None:
     engine.append_user_message(user_text)
     if interactive:
         output_stream.write("assistant> ")
         output_stream.flush()
     events = engine.generate_stream(settings)
-    completed = False
+    completion: TokenEvent | None = None
     try:
         for event in events:
             if event.text_delta:
                 output_stream.write(event.text_delta)
                 output_stream.flush()
-            completed = completed or event.type == "complete"
+            if event.type == "complete":
+                completion = event
     finally:
         close_token_stream(events)
-    if not completed:
+    if completion is None:
         raise ChatEngineError("chat generation ended without a completion event")
     output_stream.write("\n")
     output_stream.flush()
     if transcript_path is not None:
         engine.save_transcript(transcript_path)
+    if tracking_session is not None:
+        tracking_session.record_completed_turn(
+            completion,
+            prompt_factory=lambda: engine.get_last_completed_message("user"),
+            response_factory=lambda: engine.get_last_completed_message("assistant"),
+        )
 
 
 def run_terminal_chat(
@@ -81,11 +95,15 @@ def run_terminal_chat(
     transcript_path: Path | None = None,
     input_stream: TextIO | None = None,
     output_stream: TextIO | None = None,
+    chat_tracking: ChatEventTracker | None = None,
 ) -> None:
     """Drive one-shot or interactive terminal I/O through ``ChatEngine`` only."""
 
     active_input = sys.stdin if input_stream is None else input_stream
     active_output = sys.stdout if output_stream is None else output_stream
+    tracking_session = (
+        None if chat_tracking is None else chat_tracking.start_session("cli")
+    )
     try:
         if prompt is not None:
             _generate_turn(
@@ -95,6 +113,7 @@ def run_terminal_chat(
                 transcript_path=transcript_path,
                 output_stream=active_output,
                 interactive=False,
+                tracking_session=tracking_session,
             )
             return
 
@@ -110,6 +129,8 @@ def run_terminal_chat(
                 return
             if command == "/reset":
                 engine.reset()
+                if tracking_session is not None:
+                    tracking_session.reset()
                 active_output.write("Conversation reset.\n")
                 active_output.flush()
                 continue
@@ -120,6 +141,7 @@ def run_terminal_chat(
                 transcript_path=transcript_path,
                 output_stream=active_output,
                 interactive=True,
+                tracking_session=tracking_session,
             )
     except KeyboardInterrupt:
         active_output.write("\n")
@@ -132,17 +154,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
     try:
-        engine = ChatEngine(arguments.checkpoint, device=arguments.device)
-        settings = resolve_generation_arguments(
-            engine.default_generation_config,
+        with optional_chat_tracking(
+            parser,
             arguments,
-        )
-        run_terminal_chat(
-            engine,
-            settings,
-            prompt=arguments.prompt,
-            transcript_path=arguments.transcript,
-        )
+            command=COMMAND,
+        ) as chat_tracking:
+            engine = ChatEngine(arguments.checkpoint, device=arguments.device)
+            settings = resolve_generation_arguments(
+                engine.default_generation_config,
+                arguments,
+            )
+            run_terminal_chat(
+                engine,
+                settings,
+                prompt=arguments.prompt,
+                transcript_path=arguments.transcript,
+                chat_tracking=chat_tracking,
+            )
     except (OSError, RuntimeError, TypeError, ValueError) as error:
         parser.error(str(error))
     return 0
