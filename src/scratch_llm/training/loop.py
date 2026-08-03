@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator, Sized
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sized
 from dataclasses import dataclass, replace
 from time import perf_counter
 
@@ -278,6 +278,13 @@ def run_training_steps(
     collect_memory: (
         Callable[[str | torch.device], AcceleratorMemorySnapshot] | None
     ) = None,
+    metrics_adapter: (
+        Callable[
+            [Mapping[str, float | None]],
+            Mapping[str, float | None],
+        ]
+        | None
+    ) = None,
 ) -> list[OptimizerStepResult]:
     """Train to ``max_steps`` and call ``on_step`` after each completed step."""
 
@@ -306,6 +313,8 @@ def run_training_steps(
         raise TypeError(
             f"on_step must be callable or None, got {type(on_step).__name__}"
         )
+    if metrics_adapter is not None and not callable(metrics_adapter):
+        raise TypeError("metrics_adapter must be callable or None")
     if peak_flops_basis is not None and not isinstance(
         peak_flops_basis,
         PeakFlopsBasis,
@@ -486,6 +495,13 @@ def run_training_steps(
                     grad_norm=result.grad_norm,
                     epoch=epoch,
                 )
+            if metrics_adapter is not None:
+                adapted_metrics = metrics_adapter(metrics)
+                if not isinstance(adapted_metrics, Mapping):
+                    raise TypeError("metrics_adapter must return a mapping")
+                if not all(isinstance(key, str) for key in adapted_metrics):
+                    raise TypeError("metrics_adapter keys must be strings")
+                metrics = dict(adapted_metrics)
             tracker.log(metrics, step=step)
         if on_step is not None:
             on_step(step, result)

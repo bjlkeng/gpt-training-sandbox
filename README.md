@@ -1189,6 +1189,43 @@ loader, global RNG, assistant-BPB minimum, tracker identity, and cumulative
 time/FLOPs. Configuration changes other than run name/output directory fail
 before continuation state is installed.
 
+SFT telemetry is published under its stage-specific contract:
+`sft/train_loss`, `sft/val_bpb`, `sft/tok_per_sec`, `sft/mfu`, and
+`sft/peak_memory_mib`. Training and validation may produce separate records at
+the same completed optimizer step, so their steps are monotonically
+non-decreasing across exact resume while cumulative time and FLOPs continue
+from the checkpoint.
+
+Every completed SFT run atomically writes `metrics/sft_eval.json` and
+`metrics/sft_samples.md` and registers both as stable run-relative evaluation
+artifacts. The Markdown contains only the frozen five public prompts from the
+roadmap and their generated assistant outputs. Prompts are rendered through
+the shared chat template, and sampling stops on `assistant_end` with BOS as a
+safety stop. Training conversations are never copied into either artifact,
+and ChatCORE fields remain absent until that evaluator exists.
+
+The bounded CPU acceptance test uses the tracked train and validation JSONL
+fixtures, a deterministic two-layer/64-channel base checkpoint, and 200 real
+optimizer steps. It requires assistant-only mean training loss below `0.35`,
+at least `95%` supervised-token accuracy, and more than a tenfold loss
+improvement from the base checkpoint. It also loads the resulting `best.pt`
+and `last.pt`, renders the held `Say hi.` validation prompt, and requires a
+non-empty greedy response terminated by `assistant_end`:
+
+```bash
+uv run --extra dev pytest -q tests/test_sft_overfit_integration.py
+```
+
+An optional single-RTX-3090 smoke run is deliberately outside CI. After
+preparing the configured tokenizer artifacts and verified SFT parquet caches,
+provide a compatible base checkpoint explicitly:
+
+```bash
+uv run python -m scripts.train_sft \
+  --config configs/sft_20m_3090.yaml \
+  --base-checkpoint runs/base-20m/checkpoints/best.pt
+```
+
 ### Random token batches
 
 `RandomOffsetTokenLoader` consumes a validated `TokenizedShardReader` and
