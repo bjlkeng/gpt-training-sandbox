@@ -23,6 +23,7 @@ from scratch_llm.config import (
     WandbConfig,
     WandbMode,
     WebConfig,
+    apply_generation_overrides,
 )
 
 
@@ -171,6 +172,30 @@ def test_defaults_cover_the_roadmap_sections_and_are_deterministic() -> None:
     assert first.tokenizer.special_tokens is not second.tokenizer.special_tokens
     assert first.tracking.wandb.tags is not second.tracking.wandb.tags
     assert first.sft.train_sources is not second.sft.train_sources
+
+
+def test_generation_overrides_are_shared_validated_and_detached() -> None:
+    defaults = GenerationConfig(
+        temperature=0.7,
+        top_k=11,
+        max_new_tokens=9,
+        seed=3,
+    )
+
+    updated = apply_generation_overrides(
+        defaults,
+        {"temperature": 0.25, "top_k": None, "max_new_tokens": 4},
+    )
+
+    assert updated == GenerationConfig(
+        temperature=0.25,
+        top_k=11,
+        max_new_tokens=4,
+        seed=3,
+    )
+    assert defaults.temperature == 0.7
+    with pytest.raises(ValueError, match="unsupported generation overrides"):
+        apply_generation_overrides(defaults, {"unknown": 1})
 
 
 def test_gpt_config_exposes_the_planned_dimensions_and_architecture() -> None:

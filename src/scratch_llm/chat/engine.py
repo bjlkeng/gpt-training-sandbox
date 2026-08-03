@@ -352,7 +352,34 @@ class ChatEngine:
         self._require_inactive()
         self._messages = ()
         self._pending_prompt = None
-        self._status = "idle"
+        self._reset_turn_state(status="idle")
+
+    def rollback_last_turn(self, *, include_completed: bool = False) -> None:
+        """Discard the newest user transaction while preserving earlier history."""
+
+        self._require_inactive()
+        if not isinstance(include_completed, bool):
+            raise TypeError("include_completed must be a boolean")
+        if self._messages and isinstance(self._messages[-1], UserMessage):
+            retained_messages = self._messages[:-1]
+        elif (
+            include_completed
+            and self._status == "completed"
+            and len(self._messages) >= 2
+            and isinstance(self._messages[-1], AssistantMessage)
+            and isinstance(self._messages[-2], UserMessage)
+        ):
+            retained_messages = self._messages[:-2]
+        else:
+            raise ChatEngineError("chat engine has no latest chat turn to roll back")
+        self._messages = retained_messages
+        self._pending_prompt = None
+        self._reset_turn_state(
+            status="completed" if retained_messages else "idle",
+        )
+
+    def _reset_turn_state(self, *, status: Literal["idle", "completed"]) -> None:
+        self._status = status
         self._generation_started_at = None
         self._prompt_token_count = 0
         self._generated_token_count = 0
@@ -664,6 +691,14 @@ def _message_payload(message: _HistoryMessage) -> dict[str, str]:
     return {"role": message.role, "content": content}
 
 
+def close_token_stream(events: Iterator[TokenEvent]) -> None:
+    """Close a token iterator when it exposes generator-style cleanup."""
+
+    close = getattr(events, "close", None)
+    if callable(close):
+        close()
+
+
 __all__ = [
     "ChatEngine",
     "ChatEngineError",
@@ -671,4 +706,5 @@ __all__ = [
     "ChatStatus",
     "TokenEvent",
     "TokenEventType",
+    "close_token_stream",
 ]

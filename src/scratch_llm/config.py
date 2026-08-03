@@ -767,6 +767,33 @@ class GenerationConfig(_SerializableConfig):
             _require_int(self.seed, "generation.seed")
 
 
+_GENERATION_OVERRIDE_FIELDS = frozenset(
+    {"max_new_tokens", "seed", "temperature", "top_k"}
+)
+
+
+def apply_generation_overrides(
+    defaults: GenerationConfig,
+    overrides: Mapping[str, object],
+) -> GenerationConfig:
+    """Return validated generation defaults with explicit non-None overrides."""
+
+    if not isinstance(defaults, GenerationConfig):
+        raise TypeError(
+            f"defaults must be a GenerationConfig, got {type(defaults).__name__}"
+        )
+    if not isinstance(overrides, Mapping):
+        raise TypeError("overrides must be a mapping")
+    unexpected = set(overrides) - _GENERATION_OVERRIDE_FIELDS
+    if unexpected:
+        raise ValueError(f"unsupported generation overrides: {sorted(unexpected)}")
+    values = defaults.to_dict()
+    for field_name, value in overrides.items():
+        if value is not None:
+            values[field_name] = value
+    return GenerationConfig(**values)
+
+
 @dataclass
 class WebConfig(_SerializableConfig):
     """Local web testing harness settings."""

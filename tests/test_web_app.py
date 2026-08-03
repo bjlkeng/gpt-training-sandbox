@@ -85,6 +85,8 @@ def test_health_and_config_are_stable_versioned_sanitized_contracts() -> None:
             "config": True,
             "checkpoint_sessions": True,
             "tokenizer": True,
+            "streaming": True,
+            "cancellation": True,
         },
     }
     serialized = public_config.text

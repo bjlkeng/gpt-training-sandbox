@@ -3,20 +3,27 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import threading
 from typing import Literal, Protocol, TypeAlias
 import unicodedata
 
 from scratch_llm._validation import require_non_negative_integer
-from scratch_llm.chat import ChatEngine, ChatState
+from scratch_llm.chat import ChatEngine, ChatState, TokenEvent, close_token_stream
+from scratch_llm.config import GenerationConfig, apply_generation_overrides
 
 
 MAX_CATALOG_ID_BYTES = 512
+MAX_GENERATION_TOKENS = 4_096
+MAX_TEMPERATURE = 10.0
 MAX_TEXT_BYTES = 16_384
+MAX_TOP_K = 100_000
 MAX_TOKEN_IDS = 16_384
+MIN_SEED = -(2**63)
+MAX_SEED = 2**63 - 1
 
 ServiceStatus: TypeAlias = Literal[
     "unloaded",
@@ -59,6 +66,13 @@ class WebSessionService(WebService, Protocol):
     def detokenize(self, token_ids: Sequence[int]) -> str:
         """Decode IDs with the active checkpoint."""
 
+    async def start_generation(
+        self,
+        message: str,
+        overrides: GenerationOverrides,
+    ) -> GenerationLease:
+        """Acquire the sole generation lease without queueing."""
+
 
 class SessionEngine(Protocol):
     """Narrow shared-ChatEngine surface consumed by the web session."""
@@ -67,11 +81,27 @@ class SessionEngine(Protocol):
     def max_context_tokens(self) -> int:
         """Return the checkpoint model context limit."""
 
+    @property
+    def default_generation_config(self) -> GenerationConfig:
+        """Return detached checkpoint generation defaults."""
+
     def get_state(self) -> ChatState:
         """Return an immutable engine snapshot."""
 
     def reset(self) -> None:
         """Clear the current conversation."""
+
+    def append_user_message(self, text: str) -> None:
+        """Append and render one pending user turn."""
+
+    def generate_stream(
+        self,
+        config: GenerationConfig | None = None,
+    ) -> Iterator[TokenEvent]:
+        """Return the shared synchronous token iterator."""
+
+    def rollback_last_turn(self, *, include_completed: bool = False) -> None:
+        """Discard the service-owned user transaction after interruption."""
 
     def tokenize(self, text: str) -> tuple[int, ...]:
         """Encode ordinary text with the active checkpoint tokenizer."""
@@ -94,6 +124,85 @@ class WebServiceError(RuntimeError):
         self.public_message = message
         self.status_code = status_code
         super().__init__(message)
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationOverrides:
+    """Optional client overrides applied to checkpoint generation defaults."""
+
+    temperature: float | None = None
+    top_k: int | None = None
+    max_new_tokens: int | None = None
+    seed: int | None = None
+
+
+GenerationOutcome: TypeAlias = Literal["completed", "cancelled", "failed"]
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationTerminal:
+    """Exactly one terminal outcome for a service-owned generation lease."""
+
+    outcome: GenerationOutcome
+    state: PublicSessionState
+    completion_event: TokenEvent | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+
+
+GenerationStreamItem: TypeAlias = TokenEvent | GenerationTerminal
+
+
+class GenerationLease(AsyncIterator[GenerationStreamItem]):
+    """Async event bridge around one cooperative worker-thread generation."""
+
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        self._loop = loop
+        self._queue: asyncio.Queue[GenerationStreamItem] = asyncio.Queue()
+        self._done: asyncio.Future[GenerationTerminal] = loop.create_future()
+        self._cancel = threading.Event()
+        self._terminal_consumed = False
+        self._worker: asyncio.Task[None] | None = None
+
+    @property
+    def cancel_requested(self) -> bool:
+        return self._cancel.is_set()
+
+    @property
+    def done(self) -> bool:
+        return self._done.done()
+
+    def cancel(self) -> None:
+        """Request cooperative cancellation without waiting for the lease."""
+
+        self._cancel.set()
+
+    async def wait(self) -> GenerationTerminal:
+        """Wait for cleanup and return the terminal outcome."""
+
+        return await asyncio.shield(self._done)
+
+    def __aiter__(self) -> GenerationLease:
+        return self
+
+    async def __anext__(self) -> GenerationStreamItem:
+        if self._terminal_consumed:
+            raise StopAsyncIteration
+        item = await self._queue.get()
+        if isinstance(item, GenerationTerminal):
+            self._terminal_consumed = True
+        return item
+
+    def _start(self, worker: Callable[[], None]) -> None:
+        self._worker = asyncio.create_task(asyncio.to_thread(worker))
+
+    def _emit_from_worker(self, event: TokenEvent) -> None:
+        self._loop.call_soon_threadsafe(self._queue.put_nowait, event)
+
+    def _deliver_terminal(self, terminal: GenerationTerminal) -> None:
+        self._queue.put_nowait(terminal)
+        if not self._done.done():
+            self._done.set_result(terminal)
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,12 +307,13 @@ class ChatSessionService:
         self._status: ServiceStatus = "unloaded"
         self._mutation_lock = asyncio.Lock()
         self._load_task: asyncio.Task[SessionEngine] | None = None
+        self._generation_lease: GenerationLease | None = None
 
     @property
     def status(self) -> ServiceStatus:
         """Return the current lifecycle state, including engine generation."""
 
-        if self._status in {"loading", "failed"}:
+        if self._status in {"loading", "generating", "failed"}:
             return self._status
         if self._engine is None:
             return "unloaded"
@@ -227,6 +337,10 @@ class ChatSessionService:
     async def shutdown(self) -> None:
         """Drop and release the service-owned engine deterministically."""
 
+        lease = self._generation_lease
+        if lease is not None:
+            lease.cancel()
+            await lease.wait()
         async with self._mutation_lock:
             engine = self._engine
             self._engine = None
@@ -369,6 +483,34 @@ class ChatSessionService:
             )
         return text
 
+    async def start_generation(
+        self,
+        message: str,
+        overrides: GenerationOverrides,
+    ) -> GenerationLease:
+        """Validate and acquire the sole generation lease without queueing."""
+
+        _validate_generation_message(message)
+        if not isinstance(overrides, GenerationOverrides):
+            raise _invalid_generation_request()
+        engine = self._require_available_engine()
+        settings = _resolve_generation_config(engine, overrides)
+        if self._generation_lease is not None or self.status != "ready":
+            raise _busy_error()
+        loop = asyncio.get_running_loop()
+        lease = GenerationLease(loop)
+        self._generation_lease = lease
+        self._status = "generating"
+        lease._start(
+            lambda: self._run_generation(
+                lease,
+                engine,
+                message,
+                settings,
+            )
+        )
+        return lease
+
     def get_state(self) -> PublicSessionState:
         """Return an immutable public view without transcript content or paths."""
 
@@ -502,6 +644,102 @@ class ChatSessionService:
             return
         self._release_engine(engine)
 
+    def _run_generation(
+        self,
+        lease: GenerationLease,
+        engine: SessionEngine,
+        message: str,
+        settings: GenerationConfig,
+    ) -> None:
+        iterator: Iterator[TokenEvent] | None = None
+        appended = False
+        outcome: GenerationOutcome = "failed"
+        completion_event: TokenEvent | None = None
+        try:
+            if lease.cancel_requested:
+                outcome = "cancelled"
+                return
+            engine.append_user_message(message)
+            appended = True
+            if lease.cancel_requested:
+                outcome = "cancelled"
+                return
+            iterator = engine.generate_stream(settings)
+            while True:
+                if lease.cancel_requested:
+                    outcome = "cancelled"
+                    break
+                try:
+                    event = next(iterator)
+                except StopIteration as error:
+                    raise RuntimeError(
+                        "shared ChatEngine ended without a completion event"
+                    ) from error
+                if not isinstance(event, TokenEvent):
+                    raise RuntimeError("shared ChatEngine emitted an invalid event")
+                if lease.cancel_requested:
+                    outcome = "cancelled"
+                    break
+                if event.type == "complete":
+                    completion_event = event
+                    outcome = "completed"
+                    break
+                lease._emit_from_worker(event)
+        except BaseException:
+            outcome = "failed"
+        finally:
+            if iterator is not None:
+                try:
+                    close_token_stream(iterator)
+                except BaseException:
+                    if outcome == "completed":
+                        outcome = "failed"
+                        completion_event = None
+            if appended and outcome != "completed":
+                try:
+                    engine.rollback_last_turn(include_completed=True)
+                except BaseException:
+                    outcome = "failed"
+            lease._loop.call_soon_threadsafe(
+                self._finish_generation,
+                lease,
+                outcome,
+                completion_event,
+            )
+
+    def _finish_generation(
+        self,
+        lease: GenerationLease,
+        outcome: GenerationOutcome,
+        completion_event: TokenEvent | None,
+    ) -> None:
+        if self._generation_lease is lease:
+            self._generation_lease = None
+            self._status = "ready" if self._engine is not None else "unloaded"
+        try:
+            state = self.get_state()
+        except WebServiceError:
+            state = PublicSessionState(
+                status="failed",
+                checkpoint_id=self._active_checkpoint_id,
+                checkpoint_step=None,
+                training_stage=None,
+                device=self._device,
+                tokenizer_identity=None,
+                renderer_id=None,
+                context=None,
+            )
+            outcome = "failed"
+            completion_event = None
+        terminal = GenerationTerminal(
+            outcome=outcome,
+            state=state,
+            completion_event=completion_event,
+            error_code="generation_failed" if outcome == "failed" else None,
+            error_message="generation failed" if outcome == "failed" else None,
+        )
+        lease._deliver_terminal(terminal)
+
 
 def _normalize_token_ids(token_ids: object) -> tuple[int, ...]:
     if isinstance(token_ids, (str, bytes)) or not isinstance(token_ids, Sequence):
@@ -521,6 +759,44 @@ def _normalize_token_ids(token_ids: object) -> tuple[int, ...]:
                 status_code=422,
             ) from None
     return tuple(normalized)
+
+
+def _validate_generation_message(message: object) -> None:
+    if not isinstance(message, str):
+        raise _invalid_generation_request()
+    if len(message.encode("utf-8")) > MAX_TEXT_BYTES:
+        raise WebServiceError(
+            "request_too_large",
+            "user message exceeds the generation request limit",
+            status_code=413,
+        )
+
+
+def _resolve_generation_config(
+    engine: SessionEngine,
+    overrides: GenerationOverrides,
+) -> GenerationConfig:
+    try:
+        settings = apply_generation_overrides(
+            engine.default_generation_config,
+            {
+                "temperature": overrides.temperature,
+                "top_k": overrides.top_k,
+                "max_new_tokens": overrides.max_new_tokens,
+                "seed": overrides.seed,
+            },
+        )
+    except (AttributeError, TypeError, ValueError) as error:
+        raise _invalid_generation_request() from error
+    if (
+        settings.temperature > MAX_TEMPERATURE
+        or settings.max_new_tokens > MAX_GENERATION_TOKENS
+        or (settings.top_k is not None and settings.top_k > MAX_TOP_K)
+        or (settings.seed is not None and not MIN_SEED <= settings.seed <= MAX_SEED)
+        or settings.top_p is not None
+    ):
+        raise _invalid_generation_request()
+    return settings
 
 
 def _is_safe_catalog_id(value: object) -> bool:
@@ -551,6 +827,14 @@ def _busy_error() -> WebServiceError:
     )
 
 
+def _invalid_generation_request() -> WebServiceError:
+    return WebServiceError(
+        "invalid_generation_request",
+        "generation request is invalid",
+        status_code=422,
+    )
+
+
 def _checkpoint_not_found() -> WebServiceError:
     return WebServiceError(
         "checkpoint_not_found",
@@ -561,11 +845,21 @@ def _checkpoint_not_found() -> WebServiceError:
 
 __all__ = [
     "MAX_CATALOG_ID_BYTES",
+    "MAX_GENERATION_TOKENS",
+    "MAX_SEED",
+    "MAX_TEMPERATURE",
     "MAX_TEXT_BYTES",
+    "MAX_TOP_K",
     "MAX_TOKEN_IDS",
+    "MIN_SEED",
     "ChatSessionService",
     "CheckpointCatalogEntry",
     "EngineFactory",
+    "GenerationLease",
+    "GenerationOutcome",
+    "GenerationOverrides",
+    "GenerationStreamItem",
+    "GenerationTerminal",
     "PublicContextState",
     "PublicSessionState",
     "ServiceStatus",
