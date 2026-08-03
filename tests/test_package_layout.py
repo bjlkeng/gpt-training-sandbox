@@ -48,6 +48,8 @@ EXPECTED_EVALUATION_MODULES = {
     "nanochat_bpb",
     "sampling",
     "sft_bpb",
+    "sft_sampling",
+    "sft_tracking",
     "tokenizer",
     "tokenizer_tracking",
 }
@@ -113,6 +115,7 @@ EXPECTED_DOMAIN_MODULES = {
         "optim",
         "pretraining",
         "rng_state",
+        "sft",
         "telemetry",
     },
 }

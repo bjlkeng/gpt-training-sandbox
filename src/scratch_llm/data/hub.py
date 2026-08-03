@@ -21,7 +21,7 @@ import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
 from scratch_llm._validation import require_positive_integer, require_positive_real
-from scratch_llm.identity import file_identity
+from scratch_llm.identity import canonical_json_identity, file_identity
 from scratch_llm.utils import save_json
 
 
@@ -150,7 +150,7 @@ class HubDatasetSpec:
     def source_identity(self) -> str:
         """Return a stable identity for the adapter and Hub coordinates."""
 
-        return _canonical_identity(self.to_dict())
+        return canonical_json_identity(self.to_dict())
 
     @property
     def cache_key(self) -> str:
@@ -560,7 +560,7 @@ def _build_manifest(
         "source_identity": spec.source_identity,
     }
     return {
-        "dataset_identity": _canonical_identity(identity_payload),
+        "dataset_identity": canonical_json_identity(identity_payload),
         "format": HUB_PARQUET_CACHE_FORMAT,
         "format_version": HUB_PARQUET_CACHE_VERSION,
         "row_count": total_rows,
@@ -733,7 +733,7 @@ def _load_cache_directory(
     schema_fingerprint = _schema_identity(reference_schema)
     if schema_identity != schema_fingerprint:
         raise HubParquetCacheError("parquet cache schema fingerprint is inconsistent")
-    expected_identity = _canonical_identity(
+    expected_identity = canonical_json_identity(
         {
             "shards": identity_shards,
             "source_identity": spec.source_identity,
@@ -770,17 +770,6 @@ def _inspect_parquet(path: Path, spec: HubDatasetSpec) -> tuple[pa.Schema, int]:
 
 def _schema_identity(schema: pa.Schema) -> str:
     return "sha256:" + hashlib.sha256(schema.serialize().to_pybytes()).hexdigest()
-
-
-def _canonical_identity(value: object) -> str:
-    encoded = json.dumps(
-        value,
-        allow_nan=False,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 def _manifest_positive_int(value: object, *, label: str) -> int:

@@ -55,6 +55,7 @@ UNIMPLEMENTED_CONFIG_COMMANDS = tuple(
         "scripts.prepare_data",
         "scripts.eval_tokenizer",
         "scripts.train_tokenizer",
+        "scripts.train_sft",
     }
 )
 CHECKPOINT_COMMANDS = (

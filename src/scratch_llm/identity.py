@@ -9,6 +9,19 @@ from pathlib import Path
 from scratch_llm.config import ProjectConfig
 
 
+def canonical_json_identity(value: object) -> str:
+    """Return the SHA-256 identity of one canonical JSON value."""
+
+    encoded = json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
 def file_identity(path: str | Path) -> str:
     """Return a streaming SHA-256 identity for one regular file."""
 
@@ -27,14 +40,7 @@ def project_config_identity(config: ProjectConfig) -> str:
 
     if not isinstance(config, ProjectConfig):
         raise TypeError("config must be a ProjectConfig")
-    encoded = json.dumps(
-        config.to_dict(),
-        allow_nan=False,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+    return canonical_json_identity(config.to_dict())
 
 
-__all__ = ["file_identity", "project_config_identity"]
+__all__ = ["canonical_json_identity", "file_identity", "project_config_identity"]

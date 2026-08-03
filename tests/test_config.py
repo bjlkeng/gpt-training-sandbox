@@ -16,6 +16,7 @@ from scratch_llm.config import (
     NormType,
     ProjectConfig,
     RunConfig,
+    SFTConfig,
     TokenizerConfig,
     TrainConfig,
     TrainDType,
@@ -37,6 +38,7 @@ def test_defaults_cover_the_roadmap_sections_and_are_deterministic() -> None:
         "tokenizer",
         "model",
         "train",
+        "sft",
         "generation",
         "web",
     ]
@@ -150,6 +152,7 @@ def test_defaults_cover_the_roadmap_sections_and_are_deterministic() -> None:
             "compile": False,
             "activation_checkpointing": False,
         },
+        "sft": SFTConfig().to_dict(),
         "generation": {
             "temperature": 0.8,
             "top_k": 50,
@@ -167,6 +170,7 @@ def test_defaults_cover_the_roadmap_sections_and_are_deterministic() -> None:
     }
     assert first.tokenizer.special_tokens is not second.tokenizer.special_tokens
     assert first.tracking.wandb.tags is not second.tracking.wandb.tags
+    assert first.sft.train_sources is not second.sft.train_sources
 
 
 def test_gpt_config_exposes_the_planned_dimensions_and_architecture() -> None:
@@ -263,6 +267,7 @@ def test_to_dict_preserves_nested_configured_values_without_aliasing() -> None:
         "tokenizer",
         "model",
         "train",
+        "sft",
         "generation",
         "web",
     }
