@@ -18,6 +18,7 @@ from scratch_llm.chat.conversation import (
     UserMessage,
     conversation_to_dict,
     conversation_to_json,
+    conversation_to_jsonl_bytes,
     parse_conversation,
     read_conversations,
     write_conversation_jsonl,
@@ -148,6 +149,7 @@ def test_conversation_serializer_is_canonical_utf8_and_round_trips(
     )
     payload = conversation_to_dict(conversation)
     encoded = conversation_to_json(conversation)
+    encoded_line = conversation_to_jsonl_bytes(conversation)
     destination = tmp_path / "nested" / "transcript.jsonl"
 
     result = write_conversation_jsonl(conversation, destination)
@@ -161,6 +163,8 @@ def test_conversation_serializer_is_canonical_utf8_and_round_trips(
         sort_keys=True,
     )
     assert destination.read_text(encoding="utf-8") == f"{encoded}\n"
+    assert encoded_line == f"{encoded}\n".encode()
+    assert destination.read_bytes() == encoded_line
     assert read_conversations(destination) == (conversation,)
     assert not list(destination.parent.glob(".transcript.jsonl.*.tmp"))
 

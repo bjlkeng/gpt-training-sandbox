@@ -454,6 +454,7 @@ def test_multi_turn_prompt_is_rendered_only_through_canonical_renderer() -> None
         ),
         tokenizer,
     )
+    assert engine.get_pending_prompt_token_ids() == expected.token_ids
     model.contexts.clear()
     tuple(engine.generate_stream(GenerationConfig(temperature=0, max_new_tokens=2)))
 
@@ -633,6 +634,8 @@ def test_transcript_save_is_atomic_completed_only_and_reset_preserves_file(
 
     with pytest.raises(ChatEngineError, match="completed conversation"):
         engine.save_transcript(transcript)
+    with pytest.raises(ChatEngineError, match="completed conversation"):
+        engine.export_transcript_bytes()
     assert not transcript.exists()
 
     tuple(engine.generate_stream(GenerationConfig(temperature=0, max_new_tokens=2)))
@@ -641,6 +644,7 @@ def test_transcript_save_is_atomic_completed_only_and_reset_preserves_file(
     assert read_conversations(transcript) == (
         Conversation(messages=(UserMessage("Café"), AssistantMessage("A"))),
     )
+    assert engine.export_transcript_bytes() == transcript.read_bytes()
     engine.append_user_message("第二")
     tuple(engine.generate_stream(GenerationConfig(temperature=0, max_new_tokens=2)))
     engine.save_transcript(transcript)

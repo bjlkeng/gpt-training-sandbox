@@ -1,3 +1,14 @@
+import {
+  downloadTranscript,
+  loadCheckpoint,
+  populateSelect,
+  renderDebug,
+  renderMetrics,
+  requestJson,
+  selectRenderer,
+} from "./inspection.js";
+
+
 const API_VERSION = "v1";
 
 
@@ -47,11 +58,12 @@ export function normalizeSettings(values) {
 }
 
 
-export function buildGenerateMessage(message, settings) {
+export function buildGenerateMessage(message, settings, debug = false) {
   return {
     protocol_version: API_VERSION,
     type: "generate",
     message,
+    debug,
     settings,
   };
 }
@@ -90,16 +102,38 @@ export function contextLabel(state) {
 }
 
 
-export function applyControlState(controls, state) {
+function disable(control, value) {
+  if (control) {
+    control.disabled = value;
+  }
+}
+
+
+export function applyControlState(
+  controls,
+  state,
+  {
+    sessionReady = true,
+    transcriptAvailable = false,
+    hasCheckpoints = true,
+    hasRenderers = true,
+  } = {},
+) {
   const active = ["connecting", "generating", "stopping"].includes(state);
-  const resetting = state === "resetting";
-  controls.input.disabled = active || resetting;
-  controls.send.disabled = active || resetting;
-  controls.stop.disabled = !active || state === "stopping" || resetting;
-  controls.reset.disabled = active || resetting;
-  controls.temperature.disabled = active || resetting;
-  controls.topK.disabled = active || resetting;
-  controls.maxNewTokens.disabled = active || resetting;
+  const locked = state !== "idle";
+  disable(controls.input, locked || !sessionReady);
+  disable(controls.send, locked || !sessionReady);
+  disable(controls.stop, !active || state === "stopping");
+  disable(controls.reset, locked || !sessionReady);
+  disable(controls.temperature, locked || !sessionReady);
+  disable(controls.topK, locked || !sessionReady);
+  disable(controls.maxNewTokens, locked || !sessionReady);
+  disable(controls.checkpoint, locked || !hasCheckpoints);
+  disable(controls.loadCheckpoint, locked || !hasCheckpoints);
+  disable(controls.renderer, locked || !sessionReady || !hasRenderers);
+  disable(controls.applyRenderer, locked || !sessionReady || !hasRenderers);
+  disable(controls.exportTranscript, locked || !transcriptAvailable);
+  disable(controls.debug, locked || !sessionReady);
 }
 
 
@@ -141,14 +175,9 @@ export function applyServerEvent(payload, view) {
 
 
 export async function resetConversation(fetchImpl, view) {
-  const response = await fetchImpl("/api/reset", {
+  const payload = await requestJson(fetchImpl, "/api/reset", {
     method: "POST",
-    headers: {accept: "application/json"},
   });
-  if (!response.ok) {
-    throw new Error("The server did not reset the conversation.");
-  }
-  const payload = await response.json();
   view.clearConversation();
   view.updateContext(payload.state);
   return payload.state;
@@ -177,6 +206,14 @@ export class ChatController {
     this.log = documentRef.getElementById("chat-log");
     this.status = documentRef.getElementById("connection-status");
     this.context = documentRef.getElementById("context-status");
+    this.metrics = {
+      generatedTokens: documentRef.getElementById("generated-token-metric"),
+      prefill: documentRef.getElementById("prefill-metric"),
+      decode: documentRef.getElementById("decode-metric"),
+      throughput: documentRef.getElementById("throughput-metric"),
+      memory: documentRef.getElementById("memory-metric"),
+    };
+    this.debugOutput = documentRef.getElementById("debug-output");
     this.controls = {
       input: documentRef.getElementById("message-input"),
       temperature: documentRef.getElementById("temperature"),
@@ -185,8 +222,18 @@ export class ChatController {
       send: documentRef.getElementById("send-button"),
       stop: documentRef.getElementById("stop-button"),
       reset: documentRef.getElementById("reset-button"),
+      checkpoint: documentRef.getElementById("checkpoint-select"),
+      loadCheckpoint: documentRef.getElementById("load-checkpoint-button"),
+      renderer: documentRef.getElementById("renderer-select"),
+      applyRenderer: documentRef.getElementById("apply-renderer-button"),
+      exportTranscript: documentRef.getElementById("export-button"),
+      debug: documentRef.getElementById("debug-enabled"),
     };
     this.state = "idle";
+    this.sessionReady = false;
+    this.transcriptAvailable = false;
+    this.hasCheckpoints = false;
+    this.hasRenderers = false;
     this.socket = null;
     this.terminalReceived = false;
     this.stopSent = false;
@@ -210,11 +257,61 @@ export class ChatController {
     });
     this.controls.stop.addEventListener("click", () => this.stop());
     this.controls.reset.addEventListener("click", () => this.reset());
+    this.controls.loadCheckpoint.addEventListener("click", () => {
+      this.loadSelectedCheckpoint();
+    });
+    this.controls.applyRenderer.addEventListener("click", () => {
+      this.applySelectedRenderer();
+    });
+    this.controls.exportTranscript.addEventListener("click", () => {
+      this.exportTranscript();
+    });
   }
 
   transition(state) {
     this.state = state;
-    applyControlState(this.controls, state);
+    applyControlState(this.controls, state, {
+      sessionReady: this.sessionReady,
+      transcriptAvailable: this.transcriptAvailable,
+      hasCheckpoints: this.hasCheckpoints,
+      hasRenderers: this.hasRenderers,
+    });
+  }
+
+  async initialize() {
+    this.transition("loading");
+    this.setStatus("Discovering local checkpoints…");
+    try {
+      const [checkpointCatalog, rendererCatalog, session] = await Promise.all([
+        requestJson(this.fetch, "/api/checkpoints"),
+        requestJson(this.fetch, "/api/renderers"),
+        requestJson(this.fetch, "/api/session"),
+      ]);
+      this.hasCheckpoints = checkpointCatalog.checkpoints.length > 0;
+      this.hasRenderers = rendererCatalog.renderers.length > 0;
+      populateSelect(
+        this.controls.checkpoint,
+        checkpointCatalog.checkpoints,
+        checkpointCatalog.active_checkpoint_id,
+        this.document,
+      );
+      populateSelect(
+        this.controls.renderer,
+        rendererCatalog.renderers,
+        rendererCatalog.active_renderer_id,
+        this.document,
+      );
+      this.sessionReady = session.state.status === "ready";
+      this.updateContext(session.state);
+      this.setStatus(
+        this.sessionReady ? "Checkpoint ready" : "Load a checkpoint to begin.",
+      );
+    } catch (error) {
+      this.setStatus(error.message);
+    } finally {
+      this.transition("idle");
+      this.controls.input.focus();
+    }
   }
 
   setStatus(text) {
@@ -234,6 +331,10 @@ export class ChatController {
 
   submit() {
     if (this.state !== "idle") {
+      return;
+    }
+    if (!this.sessionReady) {
+      this.setStatus("Load a checkpoint first.");
       return;
     }
     const message = this.controls.input.value;
@@ -265,7 +366,11 @@ export class ChatController {
       if (this.socket !== socket) {
         return;
       }
-      socket.send(JSON.stringify(buildGenerateMessage(message, settings)));
+      socket.send(
+        JSON.stringify(
+          buildGenerateMessage(message, settings, this.controls.debug.checked),
+        ),
+      );
       this.controls.input.value = "";
       this.setStatus("Waiting for the server…");
     });
@@ -331,6 +436,13 @@ export class ChatController {
     this.terminalReceived = true;
     if (kind === "done") {
       this.updateContext(state);
+      renderMetrics(this.metrics, terminal.metrics);
+      renderDebug(
+        this.debugOutput,
+        this.controls.debug.checked ? terminal.debug : null,
+        state,
+      );
+      this.transcriptAvailable = true;
       this.clearActiveTurn();
       this.setStatus("Complete");
     } else {
@@ -358,38 +470,117 @@ export class ChatController {
     this.activeAssistantBody = null;
   }
 
-  async reset() {
-    if (this.state !== "idle") {
-      return;
-    }
-    this.transition("resetting");
-    this.setStatus("Resetting…");
+  clearConversation() {
+    this.log.replaceChildren();
+    this.clearActiveTurn();
+    this.transcriptAvailable = false;
+    renderMetrics(this.metrics, null);
+    renderDebug(this.debugOutput, null, null);
+  }
+
+  async performOperation({
+    state,
+    pendingStatus,
+    successStatus,
+    operation,
+    onError = () => {},
+  }) {
+    this.transition(state);
+    this.setStatus(pendingStatus);
     try {
-      await resetConversation(this.fetch, {
-        clearConversation: () => {
-          this.log.replaceChildren();
-          this.clearActiveTurn();
-        },
-        updateContext: (state) => this.updateContext(state),
-      });
-      this.setStatus("Conversation reset.");
+      await operation();
+      this.setStatus(successStatus);
     } catch (error) {
+      onError();
       this.setStatus(error.message);
     } finally {
       this.transition("idle");
       this.controls.input.focus();
     }
   }
+
+  async reset() {
+    if (this.state !== "idle") {
+      return;
+    }
+    return this.performOperation({
+      state: "resetting",
+      pendingStatus: "Resetting…",
+      successStatus: "Conversation reset.",
+      operation: () => resetConversation(this.fetch, {
+        clearConversation: () => this.clearConversation(),
+        updateContext: (state) => this.updateContext(state),
+      }),
+    });
+  }
+
+  async loadSelectedCheckpoint() {
+    if (this.state !== "idle" || !this.hasCheckpoints) {
+      return;
+    }
+    const priorReady = this.sessionReady;
+    return this.performOperation({
+      state: "loading",
+      pendingStatus: "Loading checkpoint…",
+      successStatus: "Checkpoint loaded.",
+      operation: () => loadCheckpoint(
+        this.fetch,
+        this.controls.checkpoint.value,
+        (payload) => {
+          this.clearConversation();
+          this.sessionReady = payload.state.status === "ready";
+          this.updateContext(payload.state);
+        },
+      ),
+      onError: () => {
+        this.sessionReady = priorReady;
+      },
+    });
+  }
+
+  async applySelectedRenderer() {
+    if (this.state !== "idle" || !this.sessionReady || !this.hasRenderers) {
+      return;
+    }
+    return this.performOperation({
+      state: "switching",
+      pendingStatus: "Applying prompt template…",
+      successStatus: "Prompt template ready.",
+      operation: () => selectRenderer(
+        this.fetch,
+        this.controls.renderer.value,
+        (payload) => {
+          if (payload.history_reset) {
+            this.clearConversation();
+          }
+          this.updateContext(payload.state);
+        },
+      ),
+    });
+  }
+
+  async exportTranscript() {
+    if (this.state !== "idle" || !this.transcriptAvailable) {
+      return;
+    }
+    return this.performOperation({
+      state: "exporting",
+      pendingStatus: "Preparing transcript…",
+      successStatus: "Transcript downloaded.",
+      operation: () => downloadTranscript(this.fetch, this.document),
+    });
+  }
 }
 
 
 if (typeof document !== "undefined" && typeof window !== "undefined") {
   window.addEventListener("DOMContentLoaded", () => {
-    new ChatController({
+    const controller = new ChatController({
       documentRef: document,
       fetchImpl: window.fetch.bind(window),
       WebSocketImpl: window.WebSocket,
       locationRef: window.location,
     });
+    controller.initialize();
   });
 }

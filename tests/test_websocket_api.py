@@ -32,11 +32,16 @@ def _client(
     return TestClient(app), service
 
 
-def _generate(message: str = "hello") -> dict[str, object]:
+def _generate(
+    message: str = "hello",
+    *,
+    debug: bool = False,
+) -> dict[str, object]:
     return {
         "protocol_version": "v1",
         "type": "generate",
         "message": message,
+        "debug": debug,
         "settings": {
             "temperature": 0.25,
             "top_k": 7,
@@ -55,6 +60,7 @@ def test_websocket_streams_lossless_events_then_one_done(tmp_path: Path) -> None
         _complete_event(1, stop_token_id=264),
     ]
     engine = ScriptedEngine(tmp_path / "model.pt", "cpu", script)
+    engine.pending_prompt_token_ids = (256, 104, 105)
     client, _service = _client(root, engine)
 
     with client:
@@ -65,7 +71,7 @@ def test_websocket_streams_lossless_events_then_one_done(tmp_path: Path) -> None
             == 200
         )
         with client.websocket_connect("/ws/generate") as websocket:
-            websocket.send_json(_generate())
+            websocket.send_json(_generate(debug=True))
             start = websocket.receive_json()
             token = websocket.receive_json()
             done = websocket.receive_json()
@@ -84,6 +90,24 @@ def test_websocket_streams_lossless_events_then_one_done(tmp_path: Path) -> None
     assert done["type"] == "done"
     assert done["event"] == script[2].to_dict()
     assert done["state"]["status"] == "ready"
+    assert done["metrics"] == {
+        "generated_tokens": 1,
+        "sampled_tokens": 2,
+        "generation_seconds": 0.5,
+        "prefill_latency_seconds": 0.1,
+        "decode_latency_per_sampled_token_seconds": 0.4,
+        "tokens_per_second": 4.0,
+        "peak_memory_mib": None,
+    }
+    assert done["debug"] == {
+        "prompt_token_ids": [256, 104, 105],
+        "generated_token_ids": [ord("A")],
+        "completion_reason": "stop_token",
+        "stop_token_id": 264,
+    }
+    assert done["aggregate"]["session_id"].startswith("session-")
+    assert done["aggregate"]["turn_id"].startswith("turn-")
+    assert done["aggregate"]["turn_count"] == 1
     assert engine.messages[-1].content == "A"  # type: ignore[union-attr]
 
 

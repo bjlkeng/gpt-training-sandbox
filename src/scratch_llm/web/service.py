@@ -12,8 +12,28 @@ from typing import Literal, Protocol, TypeAlias
 import unicodedata
 
 from scratch_llm._validation import require_non_negative_integer
-from scratch_llm.chat import ChatEngine, ChatState, TokenEvent, close_token_stream
+from scratch_llm.chat import (
+    SUPPORTED_CHAT_RENDERER_IDS,
+    ChatEngine,
+    ChatState,
+    TokenEvent,
+    close_token_stream,
+)
 from scratch_llm.config import GenerationConfig, apply_generation_overrides
+from scratch_llm.diagnostics.accelerator_memory import (
+    AcceleratorMemorySnapshot,
+    collect_accelerator_memory,
+    reset_accelerator_memory_peak,
+)
+from scratch_llm.web.inspection import (
+    GenerationDebug,
+    GenerationMetrics,
+    IdentityFactory,
+    SessionAggregate,
+    SessionMetricsBoundary,
+    finalize_generation_metrics,
+    new_public_identity,
+)
 
 
 MAX_CATALOG_ID_BYTES = 512
@@ -32,6 +52,8 @@ ServiceStatus: TypeAlias = Literal[
     "generating",
     "failed",
 ]
+MemoryCollector: TypeAlias = Callable[[str], AcceleratorMemorySnapshot]
+MemoryPeakReset: TypeAlias = Callable[[str], bool]
 
 
 class WebService(Protocol):
@@ -54,11 +76,26 @@ class WebSessionService(WebService, Protocol):
     def list_checkpoints(self) -> tuple[CheckpointCatalogEntry, ...]:
         """Return the sanitized checkpoint catalog."""
 
+    def list_renderers(self) -> tuple[str, ...]:
+        """Return server-supported prompt renderer identities."""
+
     async def load_checkpoint(self, checkpoint_id: str) -> PublicSessionState:
         """Atomically load one catalog checkpoint."""
 
     def reset(self) -> PublicSessionState:
         """Reset the active chat conversation."""
+
+    def get_state(self) -> PublicSessionState:
+        """Return the current sanitized session state."""
+
+    def select_renderer(self, renderer_id: str) -> RendererSelection:
+        """Acknowledge one server-supported renderer selection."""
+
+    def export_transcript(self) -> bytes:
+        """Return canonical transcript bytes without accepting a path."""
+
+    def get_session_aggregate(self) -> SessionAggregate:
+        """Return aggregate values with no prompt or response content."""
 
     def tokenize(self, text: str) -> tuple[int, ...]:
         """Tokenize ordinary text with the active checkpoint."""
@@ -70,6 +107,8 @@ class WebSessionService(WebService, Protocol):
         self,
         message: str,
         overrides: GenerationOverrides,
+        *,
+        include_debug: bool = False,
     ) -> GenerationLease:
         """Acquire the sole generation lease without queueing."""
 
@@ -102,6 +141,12 @@ class SessionEngine(Protocol):
 
     def rollback_last_turn(self, *, include_completed: bool = False) -> None:
         """Discard the service-owned user transaction after interruption."""
+
+    def get_pending_prompt_token_ids(self) -> tuple[int, ...]:
+        """Return exact renderer-owned prompt IDs for explicit debugging."""
+
+    def export_transcript_bytes(self) -> bytes:
+        """Return one canonical completed conversation record."""
 
     def tokenize(self, text: str) -> tuple[int, ...]:
         """Encode ordinary text with the active checkpoint tokenizer."""
@@ -140,12 +185,23 @@ GenerationOutcome: TypeAlias = Literal["completed", "cancelled", "failed"]
 
 
 @dataclass(frozen=True, slots=True)
+class RendererSelection:
+    """Acknowledged renderer state and whether history was reset."""
+
+    state: PublicSessionState
+    history_reset: bool
+
+
+@dataclass(frozen=True, slots=True)
 class GenerationTerminal:
     """Exactly one terminal outcome for a service-owned generation lease."""
 
     outcome: GenerationOutcome
     state: PublicSessionState
+    aggregate: SessionAggregate
     completion_event: TokenEvent | None = None
+    metrics: GenerationMetrics | None = None
+    debug: GenerationDebug | None = None
     error_code: str | None = None
     error_message: str | None = None
 
@@ -156,8 +212,16 @@ GenerationStreamItem: TypeAlias = TokenEvent | GenerationTerminal
 class GenerationLease(AsyncIterator[GenerationStreamItem]):
     """Async event bridge around one cooperative worker-thread generation."""
 
-    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        *,
+        session_id: str,
+        turn_id: str,
+    ) -> None:
         self._loop = loop
+        self.session_id = session_id
+        self.turn_id = turn_id
         self._queue: asyncio.Queue[GenerationStreamItem] = asyncio.Queue()
         self._done: asyncio.Future[GenerationTerminal] = loop.create_future()
         self._cancel = threading.Event()
@@ -280,6 +344,9 @@ class ChatSessionService:
         device: str = "cpu",
         initial_checkpoint_id: str | None = None,
         engine_factory: EngineFactory = _create_engine,
+        identity_factory: IdentityFactory = new_public_identity,
+        reset_memory_peak: MemoryPeakReset = reset_accelerator_memory_peak,
+        collect_memory: MemoryCollector = collect_accelerator_memory,
     ) -> None:
         if isinstance(checkpoint_dir, bytes):
             raise TypeError("checkpoint_dir must be a string or path-like value")
@@ -299,9 +366,16 @@ class ChatSessionService:
             raise TypeError("initial_checkpoint_id must be a string or None")
         if not callable(engine_factory):
             raise TypeError("engine_factory must be callable")
+        if not callable(reset_memory_peak):
+            raise TypeError("reset_memory_peak must be callable")
+        if not callable(collect_memory):
+            raise TypeError("collect_memory must be callable")
         self._device = device
         self._initial_checkpoint_id = initial_checkpoint_id
         self._engine_factory = engine_factory
+        self._session_metrics = SessionMetricsBoundary(identity_factory)
+        self._reset_memory_peak = reset_memory_peak
+        self._collect_memory = collect_memory
         self._engine: SessionEngine | None = None
         self._active_checkpoint_id: str | None = None
         self._status: ServiceStatus = "unloaded"
@@ -354,6 +428,36 @@ class ChatSessionService:
 
         return tuple(record.entry for record in self._catalog_records())
 
+    def list_renderers(self) -> tuple[str, ...]:
+        """Return the renderer identities implemented by the shared chat layer."""
+
+        return SUPPORTED_CHAT_RENDERER_IDS
+
+    def select_renderer(self, renderer_id: str) -> RendererSelection:
+        """Validate a server-owned renderer selection without templating here."""
+
+        if renderer_id not in SUPPORTED_CHAT_RENDERER_IDS:
+            raise WebServiceError(
+                "unsupported_renderer",
+                "prompt renderer is not supported",
+                status_code=422,
+            )
+        self._require_available_engine()
+        state = self.get_state()
+        if state.renderer_id is None:
+            raise WebServiceError(
+                "checkpoint_not_loaded",
+                "load a checkpoint first",
+                status_code=409,
+            )
+        if state.renderer_id != renderer_id:
+            raise WebServiceError(
+                "unsupported_renderer",
+                "prompt renderer is not supported by the loaded checkpoint",
+                status_code=422,
+            )
+        return RendererSelection(state=state, history_reset=False)
+
     async def load_checkpoint(self, checkpoint_id: str) -> PublicSessionState:
         """Construct and validate a replacement before atomically swapping it."""
 
@@ -387,7 +491,7 @@ class ChatSessionService:
             load_task.add_done_callback(self._release_cancelled_result)
             raise
         except Exception as error:
-            self._status = "failed"
+            self._status = prior_status if self._engine is not None else "failed"
             if replacement is not None:
                 self._release_engine(replacement)
             raise WebServiceError(
@@ -403,6 +507,7 @@ class ChatSessionService:
         self._engine = replacement
         self._active_checkpoint_id = record.entry.checkpoint_id
         self._status = "ready"
+        self._session_metrics.start_new_session()
         if previous is not None and previous is not replacement:
             self._release_engine(previous)
         return self.get_state()
@@ -420,7 +525,37 @@ class ChatSessionService:
                 status_code=500,
             ) from error
         self._status = "ready"
+        self._session_metrics.start_new_session()
         return self.get_state()
+
+    def export_transcript(self) -> bytes:
+        """Return one canonical download without exposing a write path."""
+
+        engine = self._require_available_engine()
+        try:
+            payload = engine.export_transcript_bytes()
+        except Exception as error:
+            raise WebServiceError(
+                "transcript_unavailable",
+                "a completed conversation is required for transcript export",
+                status_code=409,
+            ) from error
+        if not isinstance(payload, bytes):
+            raise WebServiceError(
+                "session_operation_failed",
+                "transcript export failed",
+                status_code=500,
+            )
+        return payload
+
+    def get_session_aggregate(
+        self,
+        *,
+        turn_id: str | None = None,
+    ) -> SessionAggregate:
+        """Return cumulative non-content values for the current session."""
+
+        return self._session_metrics.snapshot(turn_id=turn_id)
 
     def tokenize(self, text: str) -> tuple[int, ...]:
         """Encode bounded ordinary text with no implicit special tokens."""
@@ -487,18 +622,27 @@ class ChatSessionService:
         self,
         message: str,
         overrides: GenerationOverrides,
+        *,
+        include_debug: bool = False,
     ) -> GenerationLease:
         """Validate and acquire the sole generation lease without queueing."""
 
         _validate_generation_message(message)
         if not isinstance(overrides, GenerationOverrides):
             raise _invalid_generation_request()
+        if not isinstance(include_debug, bool):
+            raise _invalid_generation_request()
         engine = self._require_available_engine()
         settings = _resolve_generation_config(engine, overrides)
         if self._generation_lease is not None or self.status != "ready":
             raise _busy_error()
         loop = asyncio.get_running_loop()
-        lease = GenerationLease(loop)
+        turn_id = self._session_metrics.new_turn_id()
+        lease = GenerationLease(
+            loop,
+            session_id=self._session_metrics.session_id,
+            turn_id=turn_id,
+        )
         self._generation_lease = lease
         self._status = "generating"
         lease._start(
@@ -507,6 +651,7 @@ class ChatSessionService:
                 engine,
                 message,
                 settings,
+                include_debug,
             )
         )
         return lease
@@ -551,6 +696,26 @@ class ChatSessionService:
                 truncated_user_tokens=state.truncated_user_token_count,
             ),
         )
+
+    def _try_reset_memory_peak(self) -> bool:
+        try:
+            return self._reset_memory_peak(self._device)
+        except Exception:
+            return False
+
+    def _try_collect_peak_memory(self, peak_was_reset: bool) -> float | None:
+        if not peak_was_reset:
+            return None
+        try:
+            snapshot = self._collect_memory(self._device)
+        except Exception:
+            return None
+        if (
+            not isinstance(snapshot, AcceleratorMemorySnapshot)
+            or not snapshot.available
+        ):
+            return None
+        return snapshot.peak_allocated_mib
 
     def _require_available_engine(self) -> SessionEngine:
         status = self.status
@@ -621,6 +786,8 @@ class ChatSessionService:
         state = engine.get_state()
         if state.training_stage != "sft":
             raise ValueError("replacement engine is not an SFT session")
+        if state.renderer_id not in SUPPORTED_CHAT_RENDERER_IDS:
+            raise ValueError("replacement engine uses an unsupported renderer")
         limit = engine.max_context_tokens
         if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
             raise ValueError("replacement engine has no valid context limit")
@@ -650,17 +817,24 @@ class ChatSessionService:
         engine: SessionEngine,
         message: str,
         settings: GenerationConfig,
+        include_debug: bool,
     ) -> None:
         iterator: Iterator[TokenEvent] | None = None
         appended = False
         outcome: GenerationOutcome = "failed"
         completion_event: TokenEvent | None = None
+        first_sample_seconds: float | None = None
+        prompt_token_ids: tuple[int, ...] = ()
+        generated_token_ids: list[int] = []
+        memory_peak_reset = self._try_reset_memory_peak()
         try:
             if lease.cancel_requested:
                 outcome = "cancelled"
                 return
             engine.append_user_message(message)
             appended = True
+            if include_debug:
+                prompt_token_ids = engine.get_pending_prompt_token_ids()
             if lease.cancel_requested:
                 outcome = "cancelled"
                 return
@@ -684,6 +858,11 @@ class ChatSessionService:
                     completion_event = event
                     outcome = "completed"
                     break
+                if event.type == "token":
+                    if first_sample_seconds is None:
+                        first_sample_seconds = event.elapsed_seconds
+                    if include_debug:
+                        generated_token_ids.extend(event.token_ids)
                 lease._emit_from_worker(event)
         except BaseException:
             outcome = "failed"
@@ -700,11 +879,40 @@ class ChatSessionService:
                     engine.rollback_last_turn(include_completed=True)
                 except BaseException:
                     outcome = "failed"
+            metrics = (
+                finalize_generation_metrics(
+                    completion_event,
+                    first_sample_seconds=first_sample_seconds,
+                    peak_memory_mib=self._try_collect_peak_memory(memory_peak_reset),
+                )
+                if outcome == "completed" and completion_event is not None
+                else None
+            )
+            debug = (
+                GenerationDebug(
+                    prompt_token_ids=prompt_token_ids,
+                    generated_token_ids=tuple(generated_token_ids),
+                    completion_reason=(
+                        None
+                        if completion_event is None
+                        else completion_event.completion_reason
+                    ),
+                    stop_token_id=(
+                        None
+                        if completion_event is None
+                        else completion_event.stop_token_id
+                    ),
+                )
+                if include_debug
+                else None
+            )
             lease._loop.call_soon_threadsafe(
                 self._finish_generation,
                 lease,
                 outcome,
                 completion_event,
+                metrics,
+                debug,
             )
 
     def _finish_generation(
@@ -712,6 +920,8 @@ class ChatSessionService:
         lease: GenerationLease,
         outcome: GenerationOutcome,
         completion_event: TokenEvent | None,
+        metrics: GenerationMetrics | None,
+        debug: GenerationDebug | None,
     ) -> None:
         if self._generation_lease is lease:
             self._generation_lease = None
@@ -731,10 +941,17 @@ class ChatSessionService:
             )
             outcome = "failed"
             completion_event = None
+            metrics = None
+        if outcome == "completed" and metrics is not None:
+            self._session_metrics.record(metrics)
+        aggregate = self.get_session_aggregate(turn_id=lease.turn_id)
         terminal = GenerationTerminal(
             outcome=outcome,
             state=state,
+            aggregate=aggregate,
             completion_event=completion_event,
+            metrics=metrics,
+            debug=debug,
             error_code="generation_failed" if outcome == "failed" else None,
             error_message="generation failed" if outcome == "failed" else None,
         )
@@ -855,13 +1072,17 @@ __all__ = [
     "ChatSessionService",
     "CheckpointCatalogEntry",
     "EngineFactory",
+    "GenerationDebug",
     "GenerationLease",
+    "GenerationMetrics",
     "GenerationOutcome",
     "GenerationOverrides",
     "GenerationStreamItem",
     "GenerationTerminal",
     "PublicContextState",
     "PublicSessionState",
+    "RendererSelection",
+    "SessionAggregate",
     "ServiceStatus",
     "SessionEngine",
     "WebService",

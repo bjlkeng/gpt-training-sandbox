@@ -87,6 +87,9 @@ def test_health_and_config_are_stable_versioned_sanitized_contracts() -> None:
             "tokenizer": True,
             "streaming": True,
             "cancellation": True,
+            "metrics": True,
+            "transcript_export": True,
+            "inspection": True,
         },
     }
     serialized = public_config.text

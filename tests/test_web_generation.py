@@ -9,7 +9,13 @@ import threading
 
 import pytest
 
-from scratch_llm.chat import AssistantMessage, TokenEvent, UserMessage
+from scratch_llm.chat import (
+    AssistantMessage,
+    Conversation,
+    TokenEvent,
+    UserMessage,
+    conversation_to_jsonl_bytes,
+)
 from scratch_llm.config import GenerationConfig
 from scratch_llm.web.service import (
     ChatSessionService,
@@ -234,8 +240,14 @@ def test_cancellation_rolls_back_partial_turn_and_allows_immediate_reuse(
         terminal = await anext(lease)
         assert isinstance(terminal, GenerationTerminal)
         assert terminal.outcome == "cancelled"
+        assert terminal.metrics is None
+        assert terminal.aggregate.turn_count == 0
+        assert terminal.aggregate.generated_tokens == 0
         with pytest.raises(StopAsyncIteration):
             await anext(lease)
+        assert service.export_transcript() == conversation_to_jsonl_bytes(
+            Conversation(messages=prior_messages)
+        )
 
         engine.script = [_start_event(), _complete_event(0)]
         engine.block_before = None

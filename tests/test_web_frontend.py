@@ -29,9 +29,18 @@ def test_plain_frontend_and_local_assets_have_no_remote_dependencies() -> None:
         page = client.get("/")
         styles = client.get("/assets/styles.css")
         script = client.get("/assets/app.js")
+        inspection_script = client.get("/assets/inspection.js")
+        unknown_asset = client.get("/assets/not-tracked.js")
 
-    assert page.status_code == styles.status_code == script.status_code == 200
+    assert (
+        page.status_code
+        == styles.status_code
+        == script.status_code
+        == inspection_script.status_code
+        == 200
+    )
     assert page.headers["content-type"].startswith("text/html")
+    assert unknown_asset.status_code == 404
     assert styles.headers["content-type"].startswith("text/css")
     assert "javascript" in script.headers["content-type"]
     assert page.headers["content-security-policy"] == (
@@ -49,7 +58,7 @@ def test_plain_frontend_and_local_assets_have_no_remote_dependencies() -> None:
     assert 'max="4096"' in page.text
     assert 'value="31"' in page.text
     assert "{{" not in page.text
-    combined = page.text + styles.text + script.text
+    combined = page.text + styles.text + script.text + inspection_script.text
     for remote_marker in ("https://", "http://", "//cdn", "@import url"):
         assert remote_marker not in combined
 
@@ -57,7 +66,10 @@ def test_plain_frontend_and_local_assets_have_no_remote_dependencies() -> None:
 def test_frontend_has_accessible_controls_and_no_client_inference_logic() -> None:
     asset_root = files("scratch_llm.web").joinpath("static")
     html = asset_root.joinpath("index.html").read_text(encoding="utf-8")
-    javascript = asset_root.joinpath("app.js").read_text(encoding="utf-8")
+    javascript = "\n".join(
+        asset_root.joinpath(name).read_text(encoding="utf-8")
+        for name in ("app.js", "inspection.js")
+    )
 
     for control_id in (
         "message-input",
@@ -70,6 +82,18 @@ def test_frontend_has_accessible_controls_and_no_client_inference_logic() -> Non
         "context-status",
         "connection-status",
         "chat-log",
+        "checkpoint-select",
+        "load-checkpoint-button",
+        "renderer-select",
+        "apply-renderer-button",
+        "export-button",
+        "debug-enabled",
+        "debug-output",
+        "generated-token-metric",
+        "prefill-metric",
+        "decode-metric",
+        "throughput-metric",
+        "memory-metric",
     ):
         assert f'id="{control_id}"' in html
     assert 'aria-live="polite"' in html
@@ -77,6 +101,7 @@ def test_frontend_has_accessible_controls_and_no_client_inference_logic() -> Non
     assert "innerHTML" not in javascript
     assert "createTextNode" in javascript
     assert "textContent" in javascript
+    assert "Raw token debug" in html
     for forbidden_logic in (
         "encode_special",
         "assistant_end",
