@@ -110,10 +110,14 @@ def test_launcher_reuses_validated_configs_and_uvicorn_boundary(
     def run_server(app: object, **keyword_arguments: object) -> None:
         calls["run_server"] = (app, keyword_arguments)
 
+    def create_service(*arguments: object, **keyword_arguments: object) -> object:
+        calls["create_service"] = (arguments, keyword_arguments)
+        return object()
+
     monkeypatch.setattr(
         web_chat_script,
         "_load_web_runtime",
-        lambda: (create_app, run_server),
+        lambda: (create_app, create_service, run_server),
     )
 
     exit_code = web_chat_script.main(
@@ -134,6 +138,7 @@ def test_launcher_reuses_validated_configs_and_uvicorn_boundary(
     assert isinstance(app_arguments, dict)
     web_config = app_arguments["web_config"]
     generation_config = app_arguments["generation_config"]
+    service_factory = app_arguments["service_factory"]
     assert isinstance(web_config, WebConfig)
     assert web_config.host == "127.0.0.1"
     assert web_config.port == 8000
@@ -143,6 +148,12 @@ def test_launcher_reuses_validated_configs_and_uvicorn_boundary(
         temperature=0.5,
         top_k=9,
         max_new_tokens=22,
+    )
+    assert callable(service_factory)
+    service_factory()
+    assert calls["create_service"] == (
+        (str(tmp_path / "checkpoints"),),
+        {"device": "cpu", "initial_checkpoint_id": "model.pt"},
     )
     assert calls["run_server"] == (
         sentinel_app,
@@ -184,10 +195,10 @@ def test_non_loopback_bind_requires_explicit_opt_in(
 ) -> None:
     loaded = False
 
-    def load_runtime() -> tuple[object, object]:
+    def load_runtime() -> tuple[object, object, object]:
         nonlocal loaded
         loaded = True
-        return object(), object()
+        return object(), object(), object()
 
     monkeypatch.setattr(web_chat_script, "_load_web_runtime", load_runtime)
 
@@ -218,6 +229,7 @@ def test_explicit_remote_bind_opt_in_reaches_uvicorn(
         "_load_web_runtime",
         lambda: (
             lambda **_kwargs: sentinel_app,
+            lambda *_args, **_kwargs: object(),
             lambda app, **kwargs: calls.append((app, kwargs)),
         ),
     )

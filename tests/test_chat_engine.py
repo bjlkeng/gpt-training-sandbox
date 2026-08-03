@@ -161,6 +161,24 @@ def test_engine_loads_sft_checkpoint_and_exposes_frozen_json_state() -> None:
         state.status = "failed"  # type: ignore[misc]
 
 
+def test_engine_owns_tokenizer_utilities_context_limit_and_resource_release() -> None:
+    tokenizer = ByteTokenizer()
+    model = _TransitionModel({_assistant_start(tokenizer): ord("A")}, max_seq_len=23)
+    engine, _ = _engine(model)
+
+    token_ids = engine.tokenize("café 🚀")
+
+    assert token_ids == tuple(tokenizer.encode("café 🚀"))
+    assert engine.detokenize(token_ids) == "café 🚀"
+    assert engine.max_context_tokens == 23
+
+    engine.close()
+    engine.close()
+
+    with pytest.raises(ChatEngineError, match="closed"):
+        engine.tokenize("after close")
+
+
 def test_engine_rejects_non_sft_checkpoint_actionably() -> None:
     tokenizer = ByteTokenizer()
     model = _TransitionModel({_assistant_start(tokenizer): ord("A")})

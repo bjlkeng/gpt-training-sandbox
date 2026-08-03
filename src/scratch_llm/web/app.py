@@ -4,35 +4,27 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import asynccontextmanager
-from typing import Literal, Protocol
+from typing import Literal, cast
 
 from fastapi import FastAPI, Request
-from pydantic import BaseModel, ConfigDict
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from scratch_llm.config import GenerationConfig, WebConfig
+from scratch_llm.web.service import (
+    MAX_CATALOG_ID_BYTES,
+    MAX_TEXT_BYTES,
+    MAX_TOKEN_IDS,
+    ChatSessionService,
+    PublicSessionState,
+    WebService,
+    WebServiceError,
+    WebSessionService,
+)
 
 
 API_VERSION: Literal["v1"] = "v1"
-
-
-class WebService(Protocol):
-    """Application-owned service lifecycle used by web transport adapters."""
-
-    async def startup(self) -> None:
-        """Acquire resources needed while the application is serving."""
-
-    async def shutdown(self) -> None:
-        """Release resources acquired by ``startup``."""
-
-
-class _IdleWebService:
-    """Dependency-free placeholder until a checkpoint session is requested."""
-
-    async def startup(self) -> None:
-        return None
-
-    async def shutdown(self) -> None:
-        return None
 
 
 class _ResponseModel(BaseModel):
@@ -70,6 +62,8 @@ class PublicCapabilities(_ResponseModel):
 
     health: Literal[True] = True
     config: Literal[True] = True
+    checkpoint_sessions: Literal[True] = True
+    tokenizer: Literal[True] = True
 
 
 class PublicConfigResponse(_ResponseModel):
@@ -81,8 +75,76 @@ class PublicConfigResponse(_ResponseModel):
     capabilities: PublicCapabilities = PublicCapabilities()
 
 
-def _idle_service_factory() -> WebService:
-    return _IdleWebService()
+class _RequestModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class LoadCheckpointRequest(_RequestModel):
+    checkpoint_id: str = Field(min_length=1, max_length=MAX_CATALOG_ID_BYTES)
+
+
+class TokenizeRequest(_RequestModel):
+    text: str = Field(max_length=MAX_TEXT_BYTES)
+
+
+class DetokenizeRequest(_RequestModel):
+    token_ids: list[int] = Field(max_length=MAX_TOKEN_IDS)
+
+
+class CheckpointResponse(_ResponseModel):
+    id: str
+    name: str
+
+
+class CheckpointCatalogResponse(_ResponseModel):
+    api_version: Literal["v1"] = API_VERSION
+    active_checkpoint_id: str | None
+    checkpoints: tuple[CheckpointResponse, ...]
+
+
+class ContextStateResponse(_ResponseModel):
+    prompt_tokens: int
+    max_tokens: int
+    dropped_turns: int
+    truncated_user_tokens: int
+
+
+class SessionStateResponse(_ResponseModel):
+    status: Literal["unloaded", "loading", "ready", "generating", "failed"]
+    checkpoint_id: str | None
+    checkpoint_step: int | None
+    training_stage: Literal["sft"] | None
+    device: str
+    tokenizer_identity: str | None
+    renderer_id: str | None
+    context: ContextStateResponse | None
+
+
+class SessionResponse(_ResponseModel):
+    api_version: Literal["v1"] = API_VERSION
+    state: SessionStateResponse
+
+
+class TokenizeResponse(_ResponseModel):
+    api_version: Literal["v1"] = API_VERSION
+    token_ids: tuple[int, ...]
+    token_count: int
+
+
+class DetokenizeResponse(_ResponseModel):
+    api_version: Literal["v1"] = API_VERSION
+    text: str
+    token_count: int
+
+
+class ErrorDetail(_ResponseModel):
+    code: str
+    message: str
+
+
+class ErrorResponse(_ResponseModel):
+    api_version: Literal["v1"] = API_VERSION
+    error: ErrorDetail
 
 
 def _public_config(
@@ -105,7 +167,7 @@ def create_app(
     *,
     web_config: WebConfig,
     generation_config: GenerationConfig,
-    service_factory: Callable[[], WebService] = _idle_service_factory,
+    service_factory: Callable[[], WebService] | None = None,
 ) -> FastAPI:
     """Return a fresh lazy application with an independently owned service."""
 
@@ -113,15 +175,18 @@ def create_app(
         raise TypeError("web_config must be a WebConfig")
     if not isinstance(generation_config, GenerationConfig):
         raise TypeError("generation_config must be a GenerationConfig")
-    if not callable(service_factory):
-        raise TypeError("service_factory must be callable")
+    if service_factory is not None and not callable(service_factory):
+        raise TypeError("service_factory must be callable or None")
     web_config.validate()
     generation_config.validate()
     public_config = _public_config(web_config, generation_config)
+    active_service_factory = service_factory or (
+        lambda: ChatSessionService(web_config.checkpoint_dir)
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        service = service_factory()
+        service = active_service_factory()
         app.state.service = service
         try:
             await service.startup()
@@ -141,6 +206,32 @@ def create_app(
     )
     app.state.ready = False
 
+    @app.exception_handler(WebServiceError)
+    async def web_service_error(
+        _request: Request,
+        error: WebServiceError,
+    ) -> JSONResponse:
+        payload = ErrorResponse(
+            error=ErrorDetail(code=error.code, message=error.public_message)
+        )
+        return JSONResponse(
+            status_code=error.status_code,
+            content=payload.model_dump(mode="json"),
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(
+        _request: Request,
+        _error: RequestValidationError,
+    ) -> JSONResponse:
+        payload = ErrorResponse(
+            error=ErrorDetail(
+                code="invalid_request",
+                message="request payload is invalid",
+            )
+        )
+        return JSONResponse(status_code=422, content=payload.model_dump(mode="json"))
+
     @app.get("/api/health", response_model=HealthResponse)
     async def health(request: Request) -> HealthResponse:
         return HealthResponse(ready=bool(request.app.state.ready))
@@ -149,16 +240,83 @@ def create_app(
     async def config() -> PublicConfigResponse:
         return public_config
 
+    @app.get("/api/checkpoints", response_model=CheckpointCatalogResponse)
+    async def checkpoints(request: Request) -> CheckpointCatalogResponse:
+        service = _session_service(request)
+        return CheckpointCatalogResponse(
+            active_checkpoint_id=service.active_checkpoint_id,
+            checkpoints=tuple(
+                CheckpointResponse(**entry.to_dict())
+                for entry in service.list_checkpoints()
+            ),
+        )
+
+    @app.post("/api/load_checkpoint", response_model=SessionResponse)
+    async def load_checkpoint(
+        payload: LoadCheckpointRequest,
+        request: Request,
+    ) -> SessionResponse:
+        state = await _session_service(request).load_checkpoint(payload.checkpoint_id)
+        return _session_response(state)
+
+    @app.post("/api/reset", response_model=SessionResponse)
+    async def reset(request: Request) -> SessionResponse:
+        return _session_response(_session_service(request).reset())
+
+    @app.post("/api/tokenize", response_model=TokenizeResponse)
+    async def tokenize(
+        payload: TokenizeRequest,
+        request: Request,
+    ) -> TokenizeResponse:
+        token_ids = _session_service(request).tokenize(payload.text)
+        return TokenizeResponse(
+            token_ids=token_ids,
+            token_count=len(token_ids),
+        )
+
+    @app.post("/api/detokenize", response_model=DetokenizeResponse)
+    async def detokenize(
+        payload: DetokenizeRequest,
+        request: Request,
+    ) -> DetokenizeResponse:
+        text = _session_service(request).detokenize(payload.token_ids)
+        return DetokenizeResponse(
+            text=text,
+            token_count=len(payload.token_ids),
+        )
+
     return app
+
+
+def _session_service(request: Request) -> WebSessionService:
+    return cast(WebSessionService, request.app.state.service)
+
+
+def _session_response(state: PublicSessionState) -> SessionResponse:
+    return SessionResponse(
+        state=SessionStateResponse.model_validate(state.to_dict()),
+    )
 
 
 __all__ = [
     "API_VERSION",
+    "CheckpointCatalogResponse",
+    "CheckpointResponse",
+    "ContextStateResponse",
+    "DetokenizeRequest",
+    "DetokenizeResponse",
+    "ErrorDetail",
+    "ErrorResponse",
     "HealthResponse",
+    "LoadCheckpointRequest",
     "PublicCapabilities",
     "PublicConfigResponse",
     "PublicGenerationConfig",
     "PublicRuntimeConfig",
+    "SessionResponse",
+    "SessionStateResponse",
+    "TokenizeRequest",
+    "TokenizeResponse",
     "WebService",
     "create_app",
 ]
