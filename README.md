@@ -149,6 +149,13 @@ Logs, the validated JSONL response, and failure diagnostics remain in
 `runs/web-smoke/`; the screenshots above are regenerated from the same
 synthetic messages and contain no user data or credentials.
 
+The plain FastAPI/JavaScript client is the required and primary educational web
+harness. The optional Gradio adapter and checkpoint-comparison surface are
+deferred beyond Milestone 7: the former currently duplicates maintained UI
+behavior, while the latter needs a reproducible one-RTX-3090 execution design.
+The rationale, ownership, and post-milestone constraints are recorded in the
+[optional web extension decisions](docs/decisions/optional-web-extensions.md).
+
 The focused FastAPI and browser acceptance suite is:
 
 ```bash
