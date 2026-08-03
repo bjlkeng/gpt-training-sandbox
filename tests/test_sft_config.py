@@ -204,3 +204,33 @@ def test_sft_20m_3090_preset_encodes_single_device_baseline() -> None:
         "smoltalk",
     }
     assert config.sft.to_train_config(config.model.seq_len).grad_accum_steps == 16
+
+
+def test_sft_111m_3090_experiment_preset_matches_the_base_and_weighted_mix() -> None:
+    config = load_config(PROJECT_ROOT / "configs" / "sft_111m_3090.yaml")
+
+    assert config.run.name == "sft-111m-base30k-3090"
+    assert config.run.device == "cuda"
+    assert config.tracking.wandb.enabled is True
+    assert config.tracking.wandb.project == "gpt-training-sandbox"
+    assert config.tracking.wandb.entity is None
+    assert config.tracking.wandb.group == "111m-3090-base-to-sft"
+    assert config.tracking.wandb.mode == "online"
+    assert config.tracking.wandb.log_model_artifacts is False
+    assert config.tracking.wandb.log_dataset_artifacts is False
+    assert config.tracking.wandb.log_tokenizer_artifacts is False
+    assert config.model.seq_len == 1_024
+    assert config.model.n_layer == 12
+    assert config.model.n_head == 12
+    assert config.model.n_embd == 768
+    assert config.sft.device_batch_size == 8
+    assert config.sft.total_batch_size_tokens == 32_768
+    assert config.sft.max_steps == 2_000
+    assert config.sft.learning_rate == pytest.approx(1e-5)
+    assert config.sft.warmup_steps == 50
+    assert config.sft.warmdown_ratio == pytest.approx(0.5)
+    assert config.sft.save_every == 250
+    assert {
+        source.dataset: source.repeat_weight for source in config.sft.train_sources
+    } == {"smoltalk": 1, "mmlu": 3, "gsm8k": 4}
+    assert config.sft.to_train_config(config.model.seq_len).grad_accum_steps == 4

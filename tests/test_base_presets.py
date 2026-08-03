@@ -174,6 +174,47 @@ def test_first_sprint_smoke_remains_the_byte_tokenizer_fixture() -> None:
     assert config.model.vocab_size == 265
 
 
+def test_111m_3090_experiment_preset_is_exact_and_metrics_focused() -> None:
+    config = load_config(CONFIG_DIR / "base_111m_3090.yaml")
+
+    assert config.run.name == "base-111m-3090-2b"
+    assert config.run.device == "cuda"
+    assert config.tracking.wandb.enabled is True
+    assert config.tracking.wandb.project == WANDB_PROJECT
+    assert config.tracking.wandb.entity is None
+    assert config.tracking.wandb.group == "111m-3090-base-to-sft"
+    assert config.tracking.wandb.mode == "online"
+    assert config.tracking.wandb.log_code is False
+    assert config.tracking.wandb.log_model_artifacts is False
+    assert config.tracking.wandb.log_dataset_artifacts is False
+    assert config.tracking.wandb.log_tokenizer_artifacts is False
+    assert config.data.loader_strategy == "packed"
+    assert config.data.tokenized_dir == "data/tokenized_37"
+    assert config.data.num_pretrain_train_shards == 37
+    assert config.model.seq_len == 1_024
+    assert config.model.n_layer == 12
+    assert config.model.n_head == 12
+    assert config.model.n_embd == 768
+    assert config.model.mlp_ratio == 4
+    assert config.model.tie_weights is True
+    assert config.train.device_batch_size == 8
+    assert config.train.total_batch_size_tokens == 65_536
+    assert config.train.max_steps == 30_000
+    assert config.train.warmup_steps == 200
+    assert config.train.warmdown_ratio == pytest.approx(0.5)
+    assert config.train.eval_every == 500
+    assert config.train.save_every == 1_000
+    assert derive_grad_accum_steps(
+        device_batch_size=config.train.device_batch_size,
+        seq_len=config.model.seq_len,
+        total_batch_size_tokens=config.train.total_batch_size_tokens,
+    ) == 8
+
+    model = GPT(config.model)
+    assert count_parameters(model) == 110_906_112
+    assert config.train.max_steps * config.train.total_batch_size_tokens == 1_966_080_000
+
+
 def test_readme_documents_the_preset_boundary_and_3090_smoke_commands() -> None:
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
 
