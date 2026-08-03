@@ -92,6 +92,40 @@ class _MetricsTracker(NullTracker):
         self.records.append((metrics, step))
 
 
+def test_resume_metric_scan_allows_validation_at_the_training_step(
+    tmp_path: Path,
+) -> None:
+    metrics_path = tmp_path / "metrics.jsonl"
+    records = (
+        {"record_type": "metrics", "step": 500, "metrics": {"train/loss": 9.2}},
+        {"record_type": "metrics", "step": 500, "metrics": {"val_bpb": 2.84}},
+    )
+    metrics_path.write_text(
+        "".join(f"{json.dumps(record)}\n" for record in records),
+        encoding="utf-8",
+    )
+
+    assert pretraining._last_metric_step(metrics_path) == 500
+
+
+def test_resume_metric_scan_rejects_a_step_regression(tmp_path: Path) -> None:
+    metrics_path = tmp_path / "metrics.jsonl"
+    records = (
+        {"record_type": "metrics", "step": 500, "metrics": {"val_bpb": 2.84}},
+        {"record_type": "metrics", "step": 490, "metrics": {"train/loss": 9.3}},
+    )
+    metrics_path.write_text(
+        "".join(f"{json.dumps(record)}\n" for record in records),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        pretraining.PretrainingError,
+        match="metric steps must be monotonically non-decreasing",
+    ):
+        pretraining._last_metric_step(metrics_path)
+
+
 def _fake_validation_result(
     *,
     step: int,
