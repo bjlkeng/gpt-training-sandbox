@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Generator
 from dataclasses import dataclass
 import random
-from typing import Literal, overload
+from typing import Literal, TypeAlias, overload
 
 import numpy as np
 import torch
@@ -93,6 +93,54 @@ class GenerationBatchResult:
             raise TypeError("sequences must contain only GeneratedSequence values")
 
 
+@dataclass(frozen=True, slots=True)
+class GeneratedToken:
+    """One visible token sampled by an incremental single-sequence request."""
+
+    token_id: int
+    generated_token_count: int
+    sampled_token_count: int
+
+    def __post_init__(self) -> None:
+        require_non_negative_integer(self.token_id, name="token_id")
+        require_positive_integer(
+            self.generated_token_count,
+            name="generated_token_count",
+        )
+        require_positive_integer(
+            self.sampled_token_count,
+            name="sampled_token_count",
+        )
+        if self.sampled_token_count != self.generated_token_count:
+            raise ValueError(
+                "visible generated tokens must have matching sampled and "
+                "generated token counts"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationComplete:
+    """Final metadata for one incremental single-sequence request."""
+
+    sequence: GeneratedSequence
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.sequence, GeneratedSequence):
+            raise TypeError("sequence must be a GeneratedSequence")
+
+
+GenerationStreamEvent: TypeAlias = GeneratedToken | GenerationComplete
+
+
+@dataclass(frozen=True, slots=True)
+class _BatchGenerationStep:
+    """One aligned sampling step shared by batch and streaming adapters."""
+
+    visible_token_ids: tuple[int | None, ...]
+    generated_token_counts: tuple[int, ...]
+    sampled_token_counts: tuple[int, ...]
+
+
 @overload
 def generate(
     model: nn.Module,
@@ -166,6 +214,85 @@ def generate_sequences(
 ) -> GenerationBatchResult:
     """Generate variable-length rows with independent finished-row tracking."""
 
+    result: GenerationBatchResult | None = None
+    for event in _stream_generate_batch(
+        model,
+        token_ids,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_k=top_k,
+        seed=seed,
+        stop_token_ids=stop_token_ids,
+    ):
+        if isinstance(event, GenerationBatchResult):
+            result = event
+    if result is None:  # pragma: no cover - the shared primitive always completes.
+        raise RuntimeError("generation ended without a completion result")
+    return result
+
+
+def stream_generate_sequence(
+    model: nn.Module,
+    token_ids: torch.Tensor,
+    *,
+    max_new_tokens: int,
+    temperature: float = 1.0,
+    top_k: int | None = None,
+    seed: int | None = None,
+    stop_token_ids: Collection[int] = (),
+) -> Generator[GenerationStreamEvent, None, None]:
+    """Incrementally generate one row using the shared batch sampling loop.
+
+    Stop tokens are represented only by the final :class:`GenerationComplete`
+    value. Closing the iterator restores the caller's module modes and global
+    random-number-generator states before control returns to the caller.
+    """
+
+    if not isinstance(token_ids, torch.Tensor) or token_ids.ndim != 2:
+        raise ValueError("token_ids must have shape (1, sequence)")
+    if token_ids.shape[0] != 1:
+        raise ValueError(
+            "stream_generate_sequence requires exactly one batch row; "
+            f"received {token_ids.shape[0]}"
+        )
+    batch_stream = _stream_generate_batch(
+        model,
+        token_ids,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_k=top_k,
+        seed=seed,
+        stop_token_ids=stop_token_ids,
+    )
+    try:
+        for event in batch_stream:
+            if isinstance(event, GenerationBatchResult):
+                batch_stream.close()
+                yield GenerationComplete(event.sequences[0])
+                return
+            visible_token_id = event.visible_token_ids[0]
+            if visible_token_id is not None:
+                yield GeneratedToken(
+                    token_id=visible_token_id,
+                    generated_token_count=event.generated_token_counts[0],
+                    sampled_token_count=event.sampled_token_counts[0],
+                )
+    finally:
+        batch_stream.close()
+
+
+def _stream_generate_batch(
+    model: nn.Module,
+    token_ids: torch.Tensor,
+    *,
+    max_new_tokens: int,
+    temperature: float,
+    top_k: int | None,
+    seed: int | None,
+    stop_token_ids: Collection[int],
+) -> Generator[_BatchGenerationStep | GenerationBatchResult, None, None]:
+    """Yield batch sampling steps and one final result from a single loop."""
+
     if not isinstance(model, nn.Module):
         raise TypeError(f"model must be an nn.Module, got {type(model).__name__}")
     max_seq_len = getattr(model, "max_seq_len", None)
@@ -228,15 +355,13 @@ def generate_sequences(
     )
     try:
         model.eval()
-        with torch.inference_mode():
-            for _ in range(max_new_tokens):
-                active_indices = [
-                    index
-                    for index, is_finished in enumerate(finished)
-                    if not is_finished
-                ]
-                if not active_indices:
-                    break
+        for _ in range(max_new_tokens):
+            active_indices = [
+                index for index, is_finished in enumerate(finished) if not is_finished
+            ]
+            if not active_indices:
+                break
+            with torch.inference_mode():
                 context = torch.stack(
                     [generated_rows[index][-max_seq_len:] for index in active_indices]
                 )
@@ -286,20 +411,38 @@ def generate_sequences(
                             for active_row, batch_index in enumerate(active_indices)
                         ]
                     )
-                for active_row, batch_index in enumerate(active_indices):
-                    token_id = int(next_token[active_row, 0].item())
-                    sampled_token_counts[batch_index] += 1
-                    if token_id in normalized_stop_ids:
-                        completion_reasons[batch_index] = "stop_token"
-                        observed_stop_ids[batch_index] = token_id
-                        finished[batch_index] = True
-                    else:
-                        generated_rows[batch_index] = torch.cat(
-                            (
-                                generated_rows[batch_index],
-                                next_token[active_row],
-                            )
+            visible_ids: list[int | None] = [None] * token_ids.shape[0]
+            for active_row, batch_index in enumerate(active_indices):
+                token_id = int(next_token[active_row, 0].item())
+                sampled_token_counts[batch_index] += 1
+                if token_id in normalized_stop_ids:
+                    completion_reasons[batch_index] = "stop_token"
+                    observed_stop_ids[batch_index] = token_id
+                    finished[batch_index] = True
+                else:
+                    visible_ids[batch_index] = token_id
+                    generated_rows[batch_index] = torch.cat(
+                        (
+                            generated_rows[batch_index],
+                            next_token[active_row],
                         )
+                    )
+            yield _BatchGenerationStep(
+                visible_token_ids=tuple(visible_ids),
+                generated_token_counts=tuple(
+                    len(row) - token_ids.shape[1] for row in generated_rows
+                ),
+                sampled_token_counts=tuple(sampled_token_counts),
+            )
+
+        yield _build_batch_result(
+            generated_rows=generated_rows,
+            prompt_token_ids=prompt_token_ids,
+            prompt_length=token_ids.shape[1],
+            completion_reasons=completion_reasons,
+            observed_stop_ids=observed_stop_ids,
+            sampled_token_counts=sampled_token_counts,
+        )
     finally:
         for module, training_mode in module_modes:
             module.training = training_mode
@@ -309,8 +452,17 @@ def generate_sequences(
         if cuda_rng_states is not None:
             torch.cuda.set_rng_state_all(list(cuda_rng_states))
 
-    sequences = []
-    prompt_length = token_ids.shape[1]
+
+def _build_batch_result(
+    *,
+    generated_rows: list[torch.Tensor],
+    prompt_token_ids: tuple[tuple[int, ...], ...],
+    prompt_length: int,
+    completion_reasons: list[CompletionReason],
+    observed_stop_ids: list[int | None],
+    sampled_token_counts: list[int],
+) -> GenerationBatchResult:
+    sequences: list[GeneratedSequence] = []
     for index, generated_row in enumerate(generated_rows):
         visible_ids = tuple(
             int(token_id)
@@ -386,8 +538,12 @@ def _validate_token_tuple(value: object, *, name: str) -> None:
 
 __all__ = [
     "CompletionReason",
+    "GeneratedToken",
     "GeneratedSequence",
     "GenerationBatchResult",
+    "GenerationComplete",
+    "GenerationStreamEvent",
     "generate",
     "generate_sequences",
+    "stream_generate_sequence",
 ]

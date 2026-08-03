@@ -8,7 +8,13 @@ import numpy as np
 import torch
 
 from scratch_llm.config import GPTConfig
-from scratch_llm.generation import GenerationBatchResult, generate
+from scratch_llm.generation import (
+    GeneratedToken,
+    GenerationBatchResult,
+    GenerationComplete,
+    generate,
+    stream_generate_sequence,
+)
 from scratch_llm.model import GPT
 from scratch_llm.tokenization.tokenizer import VOCAB_SIZE, ByteTokenizer
 
@@ -272,6 +278,61 @@ def test_explicit_stop_set_handles_immediate_mid_and_fallback_rows() -> None:
         fallback_alone.sequences[0].generated_token_ids
         == generated.sequences[2].generated_token_ids
     )
+
+
+def test_stream_generate_sequence_yields_visible_tokens_then_completion() -> None:
+    model = _TransitionLogitsModel({10: 11, 11: 12, 12: 31})
+
+    events = tuple(
+        stream_generate_sequence(
+            model,
+            torch.tensor([[10]]),
+            max_new_tokens=4,
+            temperature=0,
+            stop_token_ids={31},
+        )
+    )
+
+    assert events[:-1] == (
+        GeneratedToken(token_id=11, generated_token_count=1, sampled_token_count=1),
+        GeneratedToken(token_id=12, generated_token_count=2, sampled_token_count=2),
+    )
+    assert isinstance(events[-1], GenerationComplete)
+    assert events[-1].sequence.generated_token_ids == (11, 12)
+    assert events[-1].sequence.completion_reason == "stop_token"
+    assert events[-1].sequence.stop_token_id == 31
+    assert events[-1].sequence.sampled_token_count == 3
+
+
+def test_closing_stream_restores_model_modes_and_caller_rng_state() -> None:
+    model = _RngConsumingLogitsModel(torch.zeros(32))
+    model.train()
+    random.seed(41)
+    np.random.seed(42)
+    torch.manual_seed(43)
+    python_state = random.getstate()
+    numpy_state = np.random.get_state(legacy=True)
+    torch_state = torch.get_rng_state().clone()
+    stream = stream_generate_sequence(
+        model,
+        torch.tensor([[4]]),
+        max_new_tokens=4,
+        temperature=1.0,
+        seed=44,
+    )
+
+    first = next(stream)
+    assert isinstance(first, GeneratedToken)
+    assert model.training is False
+    stream.close()
+
+    assert model.training is True
+    assert random.getstate() == python_state
+    restored_numpy = np.random.get_state(legacy=True)
+    assert restored_numpy[0] == numpy_state[0]
+    np.testing.assert_array_equal(restored_numpy[1], numpy_state[1])
+    assert restored_numpy[2:] == numpy_state[2:]
+    torch.testing.assert_close(torch.get_rng_state(), torch_state, rtol=0, atol=0)
 
 
 def test_finished_rows_do_not_change_an_unfinished_rows_sampling_stream() -> None:
