@@ -27,6 +27,14 @@ from scratch_llm.chat.rendering import (
     render_conversation,
     shift_sft_targets,
 )
+from scratch_llm.chat.engine import (
+    ChatEngine,
+    ChatEngineError,
+    ChatState,
+    ChatStatus,
+    TokenEvent,
+    TokenEventType,
+)
 
 __all__ = [
     "CHAT_RENDERER_ID",
@@ -35,7 +43,11 @@ __all__ = [
     "AssistantContent",
     "AssistantMessage",
     "AssistantPart",
+    "ChatEngine",
+    "ChatEngineError",
     "ChatRenderingError",
+    "ChatState",
+    "ChatStatus",
     "CompletionPrompt",
     "Conversation",
     "ConversationValidationError",
@@ -46,6 +58,8 @@ __all__ = [
     "ShiftedSFTSequence",
     "SystemMessage",
     "TextPart",
+    "TokenEvent",
+    "TokenEventType",
     "UserMessage",
     "parse_conversation",
     "read_conversations",
