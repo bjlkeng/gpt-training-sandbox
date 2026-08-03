@@ -20,13 +20,8 @@ from scratch_llm._validation import (
     require_positive_integer,
 )
 from scratch_llm.chat.conversation import (
-    AssistantMessage,
     Conversation,
-    PythonOutputPart,
-    PythonPart,
-    SystemMessage,
-    TextPart,
-    UserMessage,
+    conversation_to_dict,
     parse_conversation,
     read_conversations,
 )
@@ -151,7 +146,7 @@ class InMemorySFTSource:
             source_identity = canonical_json_identity(
                 {
                     "conversations": [
-                        _conversation_payload(conversation)
+                        conversation_to_dict(conversation)
                         for conversation in self._conversations
                     ],
                     "format": "scratch_llm_in_memory_conversations_v1",
@@ -179,7 +174,7 @@ class InMemorySFTSource:
                 source_row=source_row,
                 identity=canonical_json_identity(
                     {
-                        "conversation": _conversation_payload(conversation),
+                        "conversation": conversation_to_dict(conversation),
                         "source_identity": self.source_identity,
                         "source_row": source_row,
                     }
@@ -1079,28 +1074,6 @@ def _validate_tokenizer_contract(tokenizer: Tokenizer) -> tuple[int, int, str]:
     if not isinstance(tokenizer_identity, str) or not tokenizer_identity.strip():
         raise SFTLoaderError("tokenizer identity must be a non-empty string")
     return vocab_size, bos_token_id, tokenizer_identity
-
-
-def _conversation_payload(conversation: Conversation) -> dict[str, object]:
-    messages: list[dict[str, object]] = []
-    for message in conversation.messages:
-        if isinstance(message, (SystemMessage, UserMessage)):
-            content: object = message.content
-        elif isinstance(message, AssistantMessage) and isinstance(message.content, str):
-            content = message.content
-        elif isinstance(message, AssistantMessage):
-            content = [
-                {"text": part.text, "type": part.type}
-                for part in message.content
-                if isinstance(part, (TextPart, PythonPart, PythonOutputPart))
-            ]
-        else:
-            raise AssertionError("validated conversation contains an unknown message")
-        messages.append({"content": content, "role": message.role})
-    return {
-        "messages": messages,
-        "schema_version": conversation.schema_version,
-    }
 
 
 def _largest_fitting_index(

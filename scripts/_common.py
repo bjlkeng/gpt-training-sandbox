@@ -7,7 +7,12 @@ import os
 from collections.abc import Sequence
 from pathlib import Path
 
-from scratch_llm.config import ConfigValidationError, ProjectConfig, load_config
+from scratch_llm.config import (
+    ConfigValidationError,
+    GenerationConfig,
+    ProjectConfig,
+    load_config,
+)
 from scratch_llm.run import RunConflictError, RunPaths, prepare_run
 from scratch_llm.tracking import RunTracker, build_tracker
 from scratch_llm.tracking_state import TrackingState
@@ -76,6 +81,55 @@ def checkpoint_parser(command: str, description: str) -> argparse.ArgumentParser
         help="Checkpoint to load.",
     )
     return parser
+
+
+def add_generation_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add shared checkpoint-generation device and sampling overrides."""
+
+    parser.add_argument(
+        "--device",
+        default="cpu",
+        help="Torch device for checkpoint loading and generation (default: cpu).",
+    )
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        help="Override the checkpoint's generation.max_new_tokens.",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        help="Override the checkpoint's generation.temperature; zero is greedy.",
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        help="Override the checkpoint's generation.top_k.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        help="Override the checkpoint's generation.seed.",
+    )
+
+
+def resolve_generation_arguments(
+    defaults: GenerationConfig,
+    arguments: argparse.Namespace,
+) -> GenerationConfig:
+    """Apply explicit CLI values to detached canonical checkpoint defaults."""
+
+    if not isinstance(defaults, GenerationConfig):
+        raise TypeError(
+            "checkpoint generation defaults must be a GenerationConfig, "
+            f"got {type(defaults).__name__}"
+        )
+    values = defaults.to_dict()
+    for field in ("max_new_tokens", "temperature", "top_k", "seed"):
+        override = getattr(arguments, field)
+        if override is not None:
+            values[field] = override
+    return GenerationConfig(**values)
 
 
 def run_config_stub(

@@ -9,7 +9,11 @@ import torch
 
 from scratch_llm.training.checkpoint import CheckpointError, load_model_checkpoint
 from scratch_llm.generation import generate_sequences
-from scripts._common import checkpoint_parser
+from scripts._common import (
+    add_generation_arguments,
+    checkpoint_parser,
+    resolve_generation_arguments,
+)
 
 
 COMMAND = "sample"
@@ -25,31 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         help="Optional prompt; repeat to sample from multiple prompts.",
     )
-    parser.add_argument(
-        "--device",
-        default="cpu",
-        help="Torch device for checkpoint loading and generation (default: cpu).",
-    )
-    parser.add_argument(
-        "--max-new-tokens",
-        type=int,
-        help="Override the checkpoint's generation.max_new_tokens.",
-    )
-    parser.add_argument(
-        "--temperature",
-        type=float,
-        help="Override the checkpoint's generation.temperature; zero is greedy.",
-    )
-    parser.add_argument(
-        "--top-k",
-        type=int,
-        help="Override the checkpoint's generation.top_k.",
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        help="Override the checkpoint's generation.seed.",
-    )
+    add_generation_arguments(parser)
     return parser
 
 
@@ -63,22 +43,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.checkpoint,
             device=arguments.device,
         )
-        settings = checkpoint.config.generation
+        settings = resolve_generation_arguments(
+            checkpoint.config.generation,
+            arguments,
+        )
         if settings.top_p is not None:
             raise ValueError("top_p sampling is not implemented in the naive generator")
-
-        max_new_tokens = (
-            settings.max_new_tokens
-            if arguments.max_new_tokens is None
-            else arguments.max_new_tokens
-        )
-        temperature = (
-            settings.temperature
-            if arguments.temperature is None
-            else arguments.temperature
-        )
-        top_k = settings.top_k if arguments.top_k is None else arguments.top_k
-        seed = settings.seed if arguments.seed is None else arguments.seed
         device = next(checkpoint.model.parameters()).device
 
         for prompt in arguments.prompt or [""]:
@@ -95,10 +65,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             generated = generate_sequences(
                 checkpoint.model,
                 token_ids,
-                max_new_tokens=max_new_tokens,
-                temperature=temperature,
-                top_k=top_k,
-                seed=seed,
+                max_new_tokens=settings.max_new_tokens,
+                temperature=settings.temperature,
+                top_k=settings.top_k,
+                seed=settings.seed,
                 stop_token_ids={bos_token_id},
             )
             first_visible_token = 1 if used_synthetic_bos else 0

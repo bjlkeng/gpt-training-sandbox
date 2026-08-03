@@ -13,8 +13,11 @@ from scratch_llm.chat.conversation import (
     SystemMessage,
     TextPart,
     UserMessage,
+    conversation_to_dict,
+    conversation_to_json,
     parse_conversation,
     read_conversations,
+    write_conversation_jsonl,
 )
 from scratch_llm.chat.rendering import (
     CHAT_RENDERER_ID,
@@ -61,9 +64,12 @@ __all__ = [
     "TokenEvent",
     "TokenEventType",
     "UserMessage",
+    "conversation_to_dict",
+    "conversation_to_json",
     "parse_conversation",
     "read_conversations",
     "render_completion_prompt",
     "render_conversation",
     "shift_sft_targets",
+    "write_conversation_jsonl",
 ]

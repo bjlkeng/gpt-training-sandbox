@@ -22,6 +22,7 @@ from scratch_llm.chat import (
     Conversation,
     TokenEvent,
     UserMessage,
+    read_conversations,
     render_completion_prompt,
 )
 from scratch_llm.config import (
@@ -567,3 +568,46 @@ def test_reset_clears_completed_history_without_reloading_checkpoint() -> None:
     assert state.prompt_token_count == 0
     assert state.generated_token_count == 0
     assert calls == [(Path("fixture.pt"), "cpu")]
+
+
+def test_transcript_save_is_atomic_completed_only_and_reset_preserves_file(
+    tmp_path: Path,
+) -> None:
+    tokenizer = ByteTokenizer()
+    assistant_start = _assistant_start(tokenizer)
+    assistant_end = _assistant_end(tokenizer)
+    model = _TransitionModel({assistant_start: ord("A"), ord("A"): assistant_end})
+    engine, _ = _engine(model)
+    transcript = tmp_path / "chat.jsonl"
+    engine.append_user_message("Café")
+
+    with pytest.raises(ChatEngineError, match="completed conversation"):
+        engine.save_transcript(transcript)
+    assert not transcript.exists()
+
+    tuple(engine.generate_stream(GenerationConfig(temperature=0, max_new_tokens=2)))
+    engine.save_transcript(transcript)
+
+    assert read_conversations(transcript) == (
+        Conversation(messages=(UserMessage("Café"), AssistantMessage("A"))),
+    )
+    engine.append_user_message("第二")
+    tuple(engine.generate_stream(GenerationConfig(temperature=0, max_new_tokens=2)))
+    engine.save_transcript(transcript)
+    saved = transcript.read_bytes()
+    assert read_conversations(transcript) == (
+        Conversation(
+            messages=(
+                UserMessage("Café"),
+                AssistantMessage("A"),
+                UserMessage("第二"),
+                AssistantMessage("A"),
+            )
+        ),
+    )
+    engine.reset()
+    assert transcript.read_bytes() == saved
+    engine.append_user_message("unfinished")
+    with pytest.raises(ChatEngineError, match="completed conversation"):
+        engine.save_transcript(transcript)
+    assert transcript.read_bytes() == saved
