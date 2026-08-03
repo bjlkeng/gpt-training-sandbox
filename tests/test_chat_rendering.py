@@ -218,6 +218,31 @@ def test_multi_turn_rendering_preserves_order_and_masks_each_assistant() -> None
         assert rendered.loss_mask[start : start + len(response)] == (True, True)
 
 
+def test_training_render_preserves_a_trailing_user_turn_as_masked_context() -> None:
+    tokenizer = ByteTokenizer()
+    conversation = Conversation(
+        messages=(
+            UserMessage(content="u1"),
+            AssistantMessage(content="a1"),
+            UserMessage(content="u2"),
+        )
+    )
+
+    rendered = render_conversation(conversation, tokenizer)
+
+    assert tokenizer.decode(rendered.token_ids) == (
+        "<|bos|><|user_start|>u1<|user_end|>"
+        "<|assistant_start|>a1<|assistant_end|>"
+        "<|user_start|>u2<|user_end|>"
+    )
+    trailing_start = rendered.token_ids.index(
+        tokenizer.encode_special("<|user_start|>"),
+        rendered.token_ids.index(tokenizer.encode_special("<|assistant_end|>")) + 1,
+    )
+    assert not any(rendered.loss_mask[trailing_start:])
+    assert any(rendered.loss_mask[:trailing_start])
+
+
 def test_invalid_raw_conversation_fails_before_tokenizer_use() -> None:
     raw = {
         "schema_version": 1,

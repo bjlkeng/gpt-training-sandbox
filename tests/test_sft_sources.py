@@ -113,6 +113,26 @@ def test_smoltalk_preserves_exact_messages_and_optional_system() -> None:
     assert row["messages"][1] == {"role": "user", "content": "Hello"}  # type: ignore[index]
 
 
+def test_smoltalk_preserves_an_unmatched_trailing_user_message() -> None:
+    row = {
+        "messages": [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
+            {"role": "user", "content": "One more question"},
+        ]
+    }
+
+    conversation = normalize_smoltalk_row(row, context="smoltalk train row 220")
+
+    assert conversation == Conversation(
+        messages=(
+            UserMessage(content="Hello"),
+            AssistantMessage(content="Hi"),
+            UserMessage(content="One more question"),
+        )
+    )
+
+
 @pytest.mark.parametrize(
     "messages",
     [

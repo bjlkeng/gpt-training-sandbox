@@ -134,9 +134,7 @@ def normalize_smoltalk_row(
             if isinstance(conversation.messages[0], SystemMessage)
             else conversation.messages
         )
-        if len(non_system_messages) < 2 or not isinstance(
-            non_system_messages[-1], AssistantMessage
-        ):
+        if len(non_system_messages) < 2:
             raise SFTDatasetRowError(
                 "SmolTalk conversations must contain at least one complete "
                 "user/assistant turn"

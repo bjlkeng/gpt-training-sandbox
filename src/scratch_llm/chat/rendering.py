@@ -111,10 +111,6 @@ def render_conversation(
 
     normalized = parse_conversation(conversation)
     messages = _merge_leading_system(normalized)
-    if not isinstance(messages[-1], AssistantMessage):
-        raise ChatRenderingError(
-            "an SFT conversation must end with an assistant message"
-        )
     special = _special_token_ids(tokenizer)
     token_ids, loss_mask = _render_messages(messages, tokenizer, special)
     rendered = RenderedConversation(tuple(token_ids), tuple(loss_mask))
