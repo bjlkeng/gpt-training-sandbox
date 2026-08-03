@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 import scripts.web_chat as web_chat_script
+from scratch_llm.chat import ChatEventTracker
 from scratch_llm.config import GenerationConfig, WebConfig
 
 
@@ -253,3 +254,54 @@ def test_explicit_remote_bind_opt_in_reaches_uvicorn(
 
     assert result == 0
     assert calls == [(sentinel_app, {"host": "0.0.0.0", "port": 8000})]
+
+
+def test_tracking_config_is_owned_for_server_lifetime_and_injected_in_service(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: dict[str, object] = {}
+
+    def create_service(*_args: object, **kwargs: object) -> object:
+        calls["service"] = kwargs
+        return object()
+
+    def run_server(app: object, **_kwargs: object) -> None:
+        calls["app"] = app
+        service_factory = calls["service_factory"]
+        assert callable(service_factory)
+        service_factory()
+
+    def create_app(**kwargs: object) -> object:
+        calls["service_factory"] = kwargs["service_factory"]
+        return object()
+
+    monkeypatch.setattr(
+        web_chat_script,
+        "_load_web_runtime",
+        lambda: (create_app, create_service, run_server),
+    )
+
+    with pytest.warns(UserWarning, match="Privacy warning"):
+        result = web_chat_script.main(
+            [
+                "--checkpoint",
+                str(tmp_path / "catalog" / "model.pt"),
+                "--config",
+                str(PROJECT_ROOT / "configs" / "smoke.yaml"),
+                "--override",
+                f"run.output_dir={tmp_path / 'runs'}",
+                "--override",
+                "run.name=tracked-web-chat",
+                "--override",
+                "tracking.wandb.log_responses=true",
+                "--no-wandb",
+            ]
+        )
+
+    assert result == 0
+    service_arguments = calls["service"]
+    assert isinstance(service_arguments, dict)
+    assert isinstance(service_arguments["chat_tracking"], ChatEventTracker)
+    summary = tmp_path / "runs" / "tracked-web-chat" / "metrics" / "summary.json"
+    assert '"status": "completed"' in summary.read_text(encoding="utf-8")

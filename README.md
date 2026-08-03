@@ -101,6 +101,30 @@ checkpoint metadata—not raw prompts or responses. Raw token debug is local,
 explicit, and visible in the page, so treat it and exported transcripts as
 potentially sensitive files.
 
+The terminal and web chat commands do not create tracking output unless an
+optional `--config` (or another tracking config override) is supplied. With a
+config, completed-turn counts, timing, and opaque run/session/turn IDs go to the
+always-local JSONL tracker and any enabled W&B backend. Raw content remains off
+by default. The existing `tracking.wandb.log_prompts` and
+`tracking.wandb.log_responses` gates apply independently to every tracker
+backend despite their historical config nesting:
+
+```bash
+uv run python -m scripts.chat \
+  --checkpoint runs/my-sft-run/checkpoints/final.pt \
+  --config configs/smoke.yaml \
+  --override run.name=local-chat-observation \
+  --override tracking.wandb.log_prompts=true \
+  --override tracking.wandb.log_responses=false \
+  --no-wandb
+```
+
+Enabling either raw-content gate prints a privacy warning before the session.
+Each tracked record contains only the current completed turn; resets rotate the
+session identity, while cancelled, failed, and partial turns emit no content.
+Explicit terminal or browser transcript export is separate and continues to
+contain the complete committed conversation regardless of tracking policy.
+
 The controlled fixture is shown at desktop and narrow widths:
 
 ![Desktop local web chat with controlled fixture](docs/images/local-web-chat-desktop.png)

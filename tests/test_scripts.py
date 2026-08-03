@@ -63,6 +63,7 @@ CHECKPOINT_COMMANDS = (
     "scripts.chat",
     "scripts.web_chat",
 )
+CHAT_TRACKING_COMMANDS = ("scripts.chat", "scripts.web_chat")
 ROADMAP_COMMANDS = (
     CONFIG_COMMANDS
     + CHECKPOINT_COMMANDS
@@ -99,6 +100,18 @@ def test_config_commands_share_explicit_wandb_options(module: str) -> None:
     result = _run_module(module, "--help")
 
     assert result.returncode == 0, result.stderr
+    assert "--wandb" in result.stdout
+    assert "--no-wandb" in result.stdout
+    assert "--wandb-mode {online,offline,disabled}" in result.stdout
+
+
+@pytest.mark.parametrize("module", CHAT_TRACKING_COMMANDS)
+def test_chat_commands_share_optional_tracking_config_options(module: str) -> None:
+    result = _run_module(module, "--help")
+
+    assert result.returncode == 0, result.stderr
+    assert "--config" in result.stdout
+    assert "--override" in result.stdout
     assert "--wandb" in result.stdout
     assert "--no-wandb" in result.stdout
     assert "--wandb-mode {online,offline,disabled}" in result.stdout
