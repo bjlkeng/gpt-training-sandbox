@@ -24,7 +24,14 @@ def _blocked_web_environment(tmp_path: Path) -> dict[str, str]:
 import importlib.abc
 import sys
 
-BLOCKED = {"fastapi", "pydantic", "starlette", "uvicorn", "websockets"}
+BLOCKED = {
+    "fastapi",
+    "pydantic",
+    "selenium",
+    "starlette",
+    "uvicorn",
+    "websockets",
+}
 
 class BlockOptionalWebImports(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
@@ -67,7 +74,7 @@ def test_help_and_core_imports_do_not_require_web_extra(tmp_path: Path) -> None:
             "-c",
             (
                 "import scratch_llm; import scratch_llm.chat; "
-                "import scripts.chat; import scripts.web_chat"
+                "import scripts.chat; import scripts.web_chat; import scripts.web_smoke"
             ),
         ],
         cwd=PROJECT_ROOT,

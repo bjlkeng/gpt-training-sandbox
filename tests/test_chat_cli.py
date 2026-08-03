@@ -9,24 +9,11 @@ import subprocess
 import sys
 
 import pytest
-import torch
 
 import scripts.chat as chat_script
+from scripts._checkpoint_fixtures import create_tiny_sft_checkpoint
 from scratch_llm.chat import TokenEvent, read_conversations
-from scratch_llm.config import (
-    GPTConfig,
-    GenerationConfig,
-    ProjectConfig,
-    RunConfig,
-    SFTConfig,
-    TokenizerConfig,
-    TrainConfig,
-)
-from scratch_llm.model import GPT
-from scratch_llm.tokenization.tokenizer import VOCAB_SIZE, ByteTokenizer
-from scratch_llm.training.checkpoint import ExactTrainingState, save_checkpoint
-from scratch_llm.training.optim import build_lr_scheduler, build_optimizer
-from scratch_llm.training.rng_state import capture_training_rng_state
+from scratch_llm.config import GenerationConfig
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -269,70 +256,10 @@ def test_invalid_generation_override_is_actionable_without_traceback(
     assert "Traceback" not in error_output
 
 
-def _save_sft_checkpoint(path: Path) -> Path:
-    config = ProjectConfig(
-        run=RunConfig(device="cpu"),
-        tokenizer=TokenizerConfig(type="byte", vocab_size=VOCAB_SIZE),
-        model=GPTConfig(
-            vocab_size=VOCAB_SIZE,
-            seq_len=16,
-            n_layer=1,
-            n_head=1,
-            n_embd=8,
-            mlp_ratio=2,
-        ),
-        train=TrainConfig(
-            device_batch_size=1,
-            total_batch_size_tokens=16,
-            max_steps=1,
-            warmup_steps=0,
-            warmdown_ratio=0,
-        ),
-        sft=SFTConfig(
-            device_batch_size=1,
-            total_batch_size_tokens=16,
-            max_steps=1,
-            warmup_steps=0,
-            warmdown_ratio=0,
-            eval_every=1,
-            eval_batches=1,
-            save_every=1,
-            log_every=1,
-        ),
-        generation=GenerationConfig(temperature=0, top_k=1, max_new_tokens=2),
-    )
-    model = GPT(config.model)
-    with torch.no_grad():
-        for parameter in model.parameters():
-            parameter.zero_()
-    active_train = config.sft.to_train_config(config.model.seq_len)
-    optimizer = build_optimizer(model, active_train)
-    scheduler = build_lr_scheduler(optimizer, active_train)
-    return save_checkpoint(
-        path,
-        model=model,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        config=config,
-        step=0,
-        tokenizer=ByteTokenizer(),
-        continuation=ExactTrainingState(
-            loader_format="fixture_loader_v1",
-            loader_state={"format": "fixture_loader_v1", "position": 0},
-            rng_state=capture_training_rng_state("cpu"),
-            tracker_step=0,
-            total_training_time_seconds=0,
-            total_training_flops=0,
-        ),
-        training_stage="sft",
-        base_checkpoint_identity="sha256:" + "a" * 64,
-    )
-
-
 def test_one_shot_subprocess_uses_real_engine_and_writes_parseable_transcript(
     tmp_path: Path,
 ) -> None:
-    checkpoint = _save_sft_checkpoint(tmp_path / "sft.pt")
+    checkpoint = create_tiny_sft_checkpoint(tmp_path / "sft.pt")
     transcript = tmp_path / "chat.jsonl"
 
     result = subprocess.run(

@@ -68,6 +68,77 @@ Ruff is pinned in the development extra because formatter output is
 version-dependent. Update that pin and `uv.lock` together when intentionally
 adopting a new formatter version.
 
+## Local web chat
+
+Install the optional server dependencies and launch a supervised-finetuning
+checkpoint on the loopback-only default:
+
+```bash
+uv sync --extra web
+uv run --extra web python -m scripts.web_chat \
+  --checkpoint runs/my-sft-run/checkpoints/final.pt \
+  --device cpu
+```
+
+Open `http://127.0.0.1:8000`. The initial checkpoint must be a compatible SFT
+checkpoint. Other `.pt` checkpoints in the same directory appear in the local
+checkpoint selector and are validated before replacing the active session.
+The page can switch the server-owned prompt template, adjust temperature, top
+k, and maximum new tokens, stream or stop a response, reset the conversation,
+show per-turn latency/throughput and context usage, and expose exact token IDs
+only when Raw token debug is explicitly enabled.
+
+The server has no authentication or TLS. It binds only to `127.0.0.1` by
+default; do not expose it to an untrusted network. A non-loopback bind is
+rejected unless you acknowledge the exposure with `--allow-remote-bind`, for
+example `--host 0.0.0.0 --allow-remote-bind`.
+
+Chat content stays in the in-memory local session. Export JSONL downloads only
+the completed conversation using the fixed
+`scratch-llm-transcript.jsonl` filename; stopped and failed turns are rolled
+back. Ordinary web inspection metrics contain counts, timings, opaque IDs, and
+checkpoint metadata—not raw prompts or responses. Raw token debug is local,
+explicit, and visible in the page, so treat it and exported transcripts as
+potentially sensitive files.
+
+The controlled fixture is shown at desktop and narrow widths:
+
+![Desktop local web chat with controlled fixture](docs/images/local-web-chat-desktop.png)
+
+![Narrow local web chat with controlled fixture](docs/images/local-web-chat-narrow.png)
+
+Run the complete credential-free, CPU-only browser smoke with locally installed
+Firefox and geckodriver:
+
+```bash
+uv sync --extra dev --extra web
+uv run --extra dev --extra web python -m scripts.web_smoke \
+  --artifacts-dir runs/web-smoke \
+  --screenshots-dir docs/images
+```
+
+The command starts the actual web command on an ephemeral `127.0.0.1` port,
+uses two deterministic tiny checkpoints, audits browser traffic through a
+rejecting loopback proxy, validates streaming/metrics/stop/reset/settings/
+checkpoint/debug/export behavior, and shuts down the server process group.
+Logs, the validated JSONL response, and failure diagnostics remain in
+`runs/web-smoke/`; the screenshots above are regenerated from the same
+synthetic messages and contain no user data or credentials.
+
+The focused FastAPI and browser acceptance suite is:
+
+```bash
+uv run --extra dev --extra web pytest -q \
+  tests/test_web_app.py \
+  tests/test_web_session_api.py \
+  tests/test_websocket_api.py \
+  tests/test_web_inspection.py \
+  tests/test_web_frontend.py \
+  tests/test_web_chat_cli.py \
+  tests/test_chat_adapter_architecture.py \
+  tests/test_web_browser_smoke.py
+```
+
 ## Tests
 
 Run the full test suite from the repository root:

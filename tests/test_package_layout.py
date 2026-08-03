@@ -25,7 +25,7 @@ EXPECTED_CORE_DEPENDENCIES = {
 }
 EXPECTED_OPTIONAL_DEPENDENCIES = {
     "demo": {"gradio"},
-    "dev": {"httpx2", "matplotlib", "mypy", "pytest", "ruff"},
+    "dev": {"httpx2", "matplotlib", "mypy", "pytest", "ruff", "selenium"},
     "tokenizer-comparison": {"tiktoken"},
     "tracking": {"wandb"},
     "web": {"fastapi", "pydantic", "uvicorn", "websockets"},
