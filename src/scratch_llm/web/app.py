@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from contextlib import suppress
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
+from importlib.resources import files
 from typing import Literal, cast
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from scratch_llm.config import GenerationConfig, WebConfig
@@ -35,6 +35,11 @@ from scratch_llm.web.service import (
 
 
 API_VERSION: Literal["v1"] = "v1"
+_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; connect-src 'self' ws: wss:; "
+    "img-src 'self' data:; style-src 'self'; script-src 'self'; "
+    "base-uri 'none'; frame-ancestors 'none'"
+)
 
 
 class _ResponseModel(BaseModel):
@@ -277,6 +282,42 @@ def create_app(
     async def config() -> PublicConfigResponse:
         return public_config
 
+    @app.get("/", include_in_schema=False, response_class=Response)
+    async def index() -> Response:
+        return _asset_response(
+            "index.html",
+            media_type="text/html",
+            substitutions={
+                "{{max_text_bytes}}": str(MAX_TEXT_BYTES),
+                "{{temperature}}": str(generation_config.temperature),
+                "{{max_temperature}}": str(MAX_TEMPERATURE),
+                "{{top_k}}": (
+                    ""
+                    if generation_config.top_k is None
+                    else str(generation_config.top_k)
+                ),
+                "{{max_top_k}}": str(MAX_TOP_K),
+                "{{max_new_tokens}}": str(generation_config.max_new_tokens),
+                "{{max_generation_tokens}}": str(MAX_GENERATION_TOKENS),
+            },
+        )
+
+    @app.get(
+        "/assets/styles.css",
+        include_in_schema=False,
+        response_class=Response,
+    )
+    async def styles() -> Response:
+        return _asset_response("styles.css", media_type="text/css")
+
+    @app.get(
+        "/assets/app.js",
+        include_in_schema=False,
+        response_class=Response,
+    )
+    async def script() -> Response:
+        return _asset_response("app.js", media_type="text/javascript")
+
     @app.get("/api/checkpoints", response_model=CheckpointCatalogResponse)
     async def checkpoints(request: Request) -> CheckpointCatalogResponse:
         service = _session_service(request)
@@ -388,6 +429,26 @@ def create_app(
                 await websocket.close(code=1000)
 
     return app
+
+
+def _asset_response(
+    name: str,
+    *,
+    media_type: str,
+    substitutions: dict[str, str] | None = None,
+) -> Response:
+    content = files("scratch_llm.web.static").joinpath(name).read_text(encoding="utf-8")
+    for marker, value in (substitutions or {}).items():
+        content = content.replace(marker, value)
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Security-Policy": _CONTENT_SECURITY_POLICY,
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 def _session_service(request: Request) -> WebSessionService:
