@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, TypeAlias
 
+from scratch_llm._validation import require_positive_integer
 from scratch_llm.chat.conversation import (
     AssistantMessage,
     Conversation,
@@ -72,6 +73,9 @@ class CompletionPrompt:
 
     token_ids: tuple[int, ...]
     renderer_id: str = CHAT_RENDERER_ID
+    original_token_count: int = 0
+    dropped_turn_count: int = 0
+    truncated_user_token_count: int = 0
 
     def __post_init__(self) -> None:
         if not self.token_ids:
@@ -87,6 +91,28 @@ class CompletionPrompt:
             )
         if self.renderer_id != CHAT_RENDERER_ID:
             raise ChatRenderingError(f"renderer_id must equal {CHAT_RENDERER_ID!r}")
+        original_token_count = self.original_token_count or len(self.token_ids)
+        if original_token_count < len(self.token_ids):
+            raise ChatRenderingError(
+                "original_token_count cannot be smaller than the rendered prompt"
+            )
+        if (
+            not isinstance(self.dropped_turn_count, int)
+            or isinstance(self.dropped_turn_count, bool)
+            or self.dropped_turn_count < 0
+        ):
+            raise ChatRenderingError(
+                "dropped_turn_count must be a non-negative integer"
+            )
+        if (
+            not isinstance(self.truncated_user_token_count, int)
+            or isinstance(self.truncated_user_token_count, bool)
+            or self.truncated_user_token_count < 0
+        ):
+            raise ChatRenderingError(
+                "truncated_user_token_count must be a non-negative integer"
+            )
+        object.__setattr__(self, "original_token_count", original_token_count)
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,17 +150,89 @@ def render_conversation(
 def render_completion_prompt(
     conversation: ConversationInput,
     tokenizer: Tokenizer,
+    *,
+    max_token_count: int | None = None,
 ) -> CompletionPrompt:
-    """Render history ending in a user message and append one assistant start."""
+    """Render a completion prompt, optionally bounded by complete chat turns."""
 
     normalized = parse_conversation(conversation)
     messages = _merge_leading_system(normalized)
     if not isinstance(messages[-1], UserMessage):
         raise ChatRenderingError("completion conversation must end with a user message")
     special = _special_token_ids(tokenizer)
-    token_ids, _ = _render_messages(messages, tokenizer, special)
+    token_ids = _render_completion_messages(messages, tokenizer, special)
+    original_token_count = len(token_ids)
+    if max_token_count is None:
+        return CompletionPrompt(token_ids)
+    try:
+        max_token_count = require_positive_integer(
+            max_token_count,
+            name="max_token_count",
+        )
+    except (TypeError, ValueError) as error:
+        raise ChatRenderingError(str(error)) from error
+
+    bounded_messages = messages
+    dropped_turn_count = 0
+    while len(token_ids) > max_token_count and len(bounded_messages) > 1:
+        bounded_messages = bounded_messages[2:]
+        dropped_turn_count += 1
+        token_ids = _render_completion_messages(
+            bounded_messages,
+            tokenizer,
+            special,
+        )
+
+    truncated_user_token_count = 0
+    if len(token_ids) > max_token_count:
+        current_user = bounded_messages[-1]
+        if not isinstance(current_user, UserMessage):  # pragma: no cover
+            raise AssertionError("validated completion history must end with a user")
+        empty_prompt = _render_completion_messages(
+            (UserMessage(content=""),),
+            tokenizer,
+            special,
+        )
+        if len(empty_prompt) > max_token_count:
+            raise ChatRenderingError(
+                "max_token_count cannot fit the fixed chat controls and assistant start"
+            )
+        user_token_ids = tuple(tokenizer.encode(current_user.content))
+        available_user_tokens = max_token_count - len(empty_prompt)
+        retained_user_tokens = (
+            user_token_ids[-available_user_tokens:] if available_user_tokens else ()
+        )
+        truncated_user_token_count = len(user_token_ids) - len(retained_user_tokens)
+        token_ids = _render_completion_messages(
+            bounded_messages,
+            tokenizer,
+            special,
+            final_user_token_ids=retained_user_tokens,
+        )
+
+    return CompletionPrompt(
+        token_ids,
+        original_token_count=original_token_count,
+        dropped_turn_count=dropped_turn_count,
+        truncated_user_token_count=truncated_user_token_count,
+    )
+
+
+def _render_completion_messages(
+    messages: tuple[Message, ...],
+    tokenizer: Tokenizer,
+    special: Mapping[str, int],
+    *,
+    final_user_token_ids: Sequence[int] | None = None,
+) -> tuple[int, ...]:
+    token_ids, _ = _render_messages(
+        messages,
+        tokenizer,
+        special,
+        final_user_token_ids=final_user_token_ids,
+    )
     token_ids.append(special["<|assistant_start|>"])
-    return CompletionPrompt(tuple(token_ids))
+    return tuple(token_ids)
 
 
 def shift_sft_targets(
@@ -199,6 +297,8 @@ def _render_messages(
     messages: tuple[Message, ...],
     tokenizer: Tokenizer,
     special: Mapping[str, int],
+    *,
+    final_user_token_ids: Sequence[int] | None = None,
 ) -> tuple[list[int], list[bool]]:
     token_ids: list[int] = []
     loss_mask: list[bool] = []
@@ -209,10 +309,15 @@ def _render_messages(
         loss_mask.extend([supervised] * len(normalized))
 
     add(special["<|bos|>"], supervised=False)
-    for message in messages:
+    for index, message in enumerate(messages):
         if isinstance(message, UserMessage):
             add(special["<|user_start|>"], supervised=False)
-            add(tokenizer.encode(message.content), supervised=False)
+            user_token_ids = (
+                final_user_token_ids
+                if final_user_token_ids is not None and index == len(messages) - 1
+                else tokenizer.encode(message.content)
+            )
+            add(user_token_ids, supervised=False)
             add(special["<|user_end|>"], supervised=False)
             continue
         if not isinstance(message, AssistantMessage):

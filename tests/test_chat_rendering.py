@@ -319,6 +319,104 @@ def test_completion_prompt_requires_a_final_user_message() -> None:
         render_completion_prompt(_conversation(), ByteTokenizer())
 
 
+def test_bounded_completion_prompt_preserves_exact_fit_and_crops_one_token() -> None:
+    tokenizer = ByteTokenizer()
+    conversation = Conversation(messages=(UserMessage(content="abcd"),))
+    full = render_completion_prompt(conversation, tokenizer)
+
+    exact = render_completion_prompt(
+        conversation,
+        tokenizer,
+        max_token_count=len(full.token_ids),
+    )
+    cropped = render_completion_prompt(
+        conversation,
+        tokenizer,
+        max_token_count=len(full.token_ids) - 1,
+    )
+
+    assert exact.token_ids == full.token_ids
+    assert exact.original_token_count == len(full.token_ids)
+    assert exact.dropped_turn_count == 0
+    assert exact.truncated_user_token_count == 0
+    assert cropped.original_token_count == len(full.token_ids)
+    assert cropped.dropped_turn_count == 0
+    assert cropped.truncated_user_token_count == 1
+    assert tokenizer.decode(cropped.token_ids) == (
+        "<|bos|><|user_start|>bcd<|user_end|><|assistant_start|>"
+    )
+
+
+def test_bounded_completion_prompt_drops_oldest_complete_turns_first() -> None:
+    tokenizer = ByteTokenizer()
+    conversation = Conversation(
+        messages=(
+            UserMessage(content="old"),
+            AssistantMessage(content="old answer"),
+            UserMessage(content="new"),
+            AssistantMessage(content="new answer"),
+            UserMessage(content="current"),
+        )
+    )
+    newest_two_turns = Conversation(messages=conversation.messages[2:])
+    expected = render_completion_prompt(newest_two_turns, tokenizer)
+
+    bounded = render_completion_prompt(
+        conversation,
+        tokenizer,
+        max_token_count=len(expected.token_ids),
+    )
+
+    assert bounded.token_ids == expected.token_ids
+    assert bounded.dropped_turn_count == 1
+    assert bounded.truncated_user_token_count == 0
+    assert bounded.original_token_count > len(bounded.token_ids)
+
+
+def test_bounded_completion_prompt_only_left_crops_current_user_after_turns() -> None:
+    tokenizer = ByteTokenizer()
+    empty = render_completion_prompt(
+        Conversation(messages=(UserMessage(content=""),)),
+        tokenizer,
+    )
+    conversation = Conversation(
+        messages=(
+            UserMessage(content="first"),
+            AssistantMessage(content="A"),
+            UserMessage(content="second"),
+            AssistantMessage(content="B"),
+            UserMessage(content="abcdefghij"),
+        )
+    )
+
+    bounded = render_completion_prompt(
+        conversation,
+        tokenizer,
+        max_token_count=len(empty.token_ids) + 3,
+    )
+
+    assert bounded.dropped_turn_count == 2
+    assert bounded.truncated_user_token_count == 7
+    assert tokenizer.decode(bounded.token_ids) == (
+        "<|bos|><|user_start|>hij<|user_end|><|assistant_start|>"
+    )
+
+
+def test_bounded_completion_prompt_rejects_impossible_control_budget() -> None:
+    tokenizer = ByteTokenizer()
+    empty = render_completion_prompt(
+        Conversation(messages=(UserMessage(content=""),)),
+        tokenizer,
+    )
+
+    with pytest.raises(ChatRenderingError, match="fixed chat controls"):
+        render_completion_prompt(
+            Conversation(messages=(UserMessage(content="x"),)),
+            tokenizer,
+            max_token_count=len(empty.token_ids) - 1,
+        )
+
+
 def test_fixture_json_is_canonical_utf8_jsonl() -> None:
     root = Path(__file__).resolve().parents[1] / "data" / "fixtures" / "chat"
     for path in (root / "train.jsonl", root / "validation.jsonl"):
