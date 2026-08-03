@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>scratch-llm local chat</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="masthead">
+        <div>
+          <p class="eyebrow">Local checkpoint lab</p>
+          <h1>scratch-llm chat</h1>
+        </div>
+        <div class="runtime-readout">
+          <p id="connection-status" class="status" role="status" aria-live="polite">
+            Ready
+          </p>
+          <p id="context-status" class="context" aria-live="polite">
+            No checkpoint context available
+          </p>
+        </div>
+      </header>
+
+      <section
+        id="chat-log"
+        class="chat-log"
+        aria-label="Conversation"
+        aria-live="polite"
+        aria-relevant="additions text"
+      ></section>
+
+      <form id="chat-form" class="composer">
+        <label for="message-input">Message</label>
+        <textarea
+          id="message-input"
+          name="message"
+          rows="3"
+          maxlength="{{max_text_bytes}}"
+          autocomplete="off"
+          placeholder="Ask the loaded checkpoint something…"
+          required
+        ></textarea>
+
+        <fieldset class="settings">
+          <legend>Generation settings</legend>
+          <label for="temperature">
+            Temperature
+            <input
+              id="temperature"
+              name="temperature"
+              type="number"
+              min="0"
+              max="{{max_temperature}}"
+              step="0.05"
+              value="{{temperature}}"
+              inputmode="decimal"
+            >
+          </label>
+          <label for="top-k">
+            Top k
+            <input
+              id="top-k"
+              name="top_k"
+              type="number"
+              min="1"
+              max="{{max_top_k}}"
+              step="1"
+              value="{{top_k}}"
+              inputmode="numeric"
+            >
+          </label>
+          <label for="max-new-tokens">
+            Max new tokens
+            <input
+              id="max-new-tokens"
+              name="max_new_tokens"
+              type="number"
+              min="1"
+              max="{{max_generation_tokens}}"
+              step="1"
+              value="{{max_new_tokens}}"
+              inputmode="numeric"
+            >
+          </label>
+        </fieldset>
+
+        <div class="actions">
+          <button id="send-button" type="submit">Send</button>
+          <button id="stop-button" class="secondary" type="button" disabled>
+            Stop
+          </button>
+          <button id="reset-button" class="quiet" type="button">Reset</button>
+        </div>
+        <p class="hint">Enter sends. Shift+Enter adds a new line.</p>
+      </form>
+    </main>
+    <script type="module" src="/assets/app.js"></script>
+  </body>
+</html>
