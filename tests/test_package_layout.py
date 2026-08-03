@@ -25,7 +25,7 @@ EXPECTED_CORE_DEPENDENCIES = {
 }
 EXPECTED_OPTIONAL_DEPENDENCIES = {
     "demo": {"gradio"},
-    "dev": {"matplotlib", "mypy", "pytest", "ruff"},
+    "dev": {"httpx2", "matplotlib", "mypy", "pytest", "ruff"},
     "tokenizer-comparison": {"tiktoken"},
     "tracking": {"wandb"},
     "web": {"fastapi", "pydantic", "uvicorn", "websockets"},
@@ -118,6 +118,7 @@ EXPECTED_DOMAIN_MODULES = {
         "sft",
         "telemetry",
     },
+    "web": {"app"},
 }
 OBSOLETE_DOMAIN_MODULES = {
     "chat": {"datasets", "hub"},
