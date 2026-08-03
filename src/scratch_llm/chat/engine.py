@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Generator, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator
 import codecs
 from dataclasses import dataclass
 import math
@@ -304,12 +304,47 @@ class ChatEngine:
         self._generation_seconds: float | None = None
         self._completion_reason: CompletionReason | None = None
         self._stop_token_id: int | None = None
+        self._closed = False
 
     @property
     def default_generation_config(self) -> GenerationConfig:
         """Return a detached copy of the checkpoint's generation defaults."""
 
+        self._require_open()
         return _copy_generation_config(self._default_generation)
+
+    @property
+    def max_context_tokens(self) -> int:
+        """Return the loaded model's validated context-window size."""
+
+        self._require_open()
+        return self._max_seq_len
+
+    def tokenize(self, text: str) -> tuple[int, ...]:
+        """Encode ordinary text with the loaded checkpoint tokenizer."""
+
+        self._require_open()
+        return tuple(self._tokenizer.encode(text))
+
+    def detokenize(self, token_ids: Iterable[int]) -> str:
+        """Decode IDs with the loaded checkpoint tokenizer."""
+
+        self._require_open()
+        return self._tokenizer.decode(token_ids)
+
+    def close(self) -> None:
+        """Idempotently release accelerator resources owned by this engine."""
+
+        if self._closed:
+            return
+        if self._active:
+            raise ChatEngineError("cannot close while generation is active")
+        self._messages = ()
+        self._pending_prompt = None
+        try:
+            self._model.to("cpu")
+        finally:
+            self._closed = True
 
     def reset(self) -> None:
         """Clear conversation state without reloading the checkpoint."""
@@ -391,6 +426,7 @@ class ChatEngine:
     def get_state(self) -> ChatState:
         """Return an immutable snapshot with no live model or tensor values."""
 
+        self._require_open()
         generation_seconds = self._generation_seconds
         if self._active and self._generation_started_at is not None:
             generation_seconds = self._elapsed_since(self._generation_started_at)
@@ -588,8 +624,13 @@ class ChatEngine:
         self._stop_token_id = None
 
     def _require_inactive(self) -> None:
+        self._require_open()
         if self._active:
             raise ChatEngineError("a generation transaction is already active")
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise ChatEngineError("chat engine is closed")
 
     def _read_clock(self) -> float:
         value = self._clock()

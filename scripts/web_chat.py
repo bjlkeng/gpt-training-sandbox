@@ -19,6 +19,7 @@ COMMAND = "web_chat"
 WEB_INSTALL_COMMAND = "uv sync --extra web"
 
 _CreateApp: TypeAlias = Callable[..., object]
+_CreateService: TypeAlias = Callable[..., object]
 _RunServer: TypeAlias = Callable[..., None]
 
 
@@ -53,11 +54,12 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load_web_runtime() -> tuple[_CreateApp, _RunServer]:
+def _load_web_runtime() -> tuple[_CreateApp, _CreateService, _RunServer]:
     """Import optional server dependencies only for live execution."""
 
     try:
         app_module = importlib.import_module("scratch_llm.web.app")
+        service_module = importlib.import_module("scratch_llm.web.service")
         uvicorn_module = importlib.import_module("uvicorn")
     except ModuleNotFoundError as error:
         missing = error.name or "unknown"
@@ -67,6 +69,7 @@ def _load_web_runtime() -> tuple[_CreateApp, _RunServer]:
         ) from None
     return (
         cast(_CreateApp, getattr(app_module, "create_app")),
+        cast(_CreateService, getattr(service_module, "ChatSessionService")),
         cast(_RunServer, getattr(uvicorn_module, "run")),
     )
 
@@ -103,12 +106,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     web_config, generation_config = _resolve_configs(parser, arguments)
     try:
-        create_app, run_server = _load_web_runtime()
+        create_app, create_service, run_server = _load_web_runtime()
     except WebDependencyError as error:
         parser.error(str(error))
     app = create_app(
         web_config=web_config,
         generation_config=generation_config,
+        service_factory=lambda: create_service(
+            web_config.checkpoint_dir,
+            device=arguments.device,
+            initial_checkpoint_id=arguments.checkpoint.name,
+        ),
     )
     run_server(app, host=web_config.host, port=web_config.port)
     return 0

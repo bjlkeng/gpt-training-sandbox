@@ -118,7 +118,7 @@ EXPECTED_DOMAIN_MODULES = {
         "sft",
         "telemetry",
     },
-    "web": {"app"},
+    "web": {"app", "service"},
 }
 OBSOLETE_DOMAIN_MODULES = {
     "chat": {"datasets", "hub"},
