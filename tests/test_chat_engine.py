@@ -17,6 +17,7 @@ from scratch_llm.chat import (
     AssistantMessage,
     ChatEngine,
     ChatEngineError,
+    ChatRenderingError,
     ChatState,
     Conversation,
     TokenEvent,
@@ -129,6 +130,10 @@ def _assistant_start(tokenizer: ByteTokenizer) -> int:
 
 def _assistant_end(tokenizer: ByteTokenizer) -> int:
     return tokenizer.encode_special("<|assistant_end|>")
+
+
+def _bos(tokenizer: ByteTokenizer) -> int:
+    return tokenizer.get_bos_token_id()
 
 
 def test_engine_loads_sft_checkpoint_and_exposes_frozen_json_state() -> None:
@@ -293,6 +298,121 @@ def test_streaming_is_utf8_lossless_and_commits_one_normalized_turn() -> None:
         ("user", "Launch?"),
         ("assistant", "🚀"),
     )
+
+
+@pytest.mark.parametrize("stop_name", ["assistant_end", "bos"])
+def test_chat_stop_tokens_are_control_metadata_and_stop_immediately(
+    stop_name: str,
+) -> None:
+    tokenizer = ByteTokenizer()
+    stop_token_id = (
+        _assistant_end(tokenizer) if stop_name == "assistant_end" else _bos(tokenizer)
+    )
+    model = _TransitionModel({_assistant_start(tokenizer): stop_token_id})
+    engine, _ = _engine(model)
+    engine.append_user_message("stop")
+
+    events = tuple(
+        engine.generate_stream(GenerationConfig(temperature=0, max_new_tokens=8))
+    )
+
+    assert [event.type for event in events] == ["start", "complete"]
+    assert events[-1].token_ids == ()
+    assert events[-1].text_delta == ""
+    assert events[-1].completion_reason == "stop_token"
+    assert events[-1].stop_token_id == stop_token_id
+    assert events[-1].generated_token_count == 0
+    assert events[-1].sampled_token_count == 1
+    assert model.forward_calls == 1
+    assert engine.get_state().messages[-1] == AssistantMessage("")
+
+
+def test_chat_generation_passes_exact_stop_set_to_shared_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import scratch_llm.chat.engine as engine_module
+
+    tokenizer = ByteTokenizer()
+    model = _TransitionModel(
+        {_assistant_start(tokenizer): ord("A"), ord("A"): ord("A")}
+    )
+    engine, _ = _engine(model)
+    engine.append_user_message("hello")
+    observed: list[frozenset[int]] = []
+    real_stream = engine_module.stream_generate_sequence
+
+    def record_stop_set(*args: object, **kwargs: object):
+        observed.append(frozenset(kwargs["stop_token_ids"]))  # type: ignore[arg-type]
+        return real_stream(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(engine_module, "stream_generate_sequence", record_stop_set)
+
+    events = tuple(
+        engine.generate_stream(GenerationConfig(temperature=0, max_new_tokens=1))
+    )
+
+    assert events[-1].completion_reason == "max_new_tokens"
+    assert events[-1].stop_token_id is None
+    assert events[-1].generated_token_count == 1
+    assert events[-1].sampled_token_count == 1
+    assert model.forward_calls == 1
+    assert observed == [frozenset({_assistant_end(tokenizer), _bos(tokenizer)})]
+
+
+def test_engine_drops_turns_then_crops_current_user_without_losing_transcript() -> None:
+    tokenizer = ByteTokenizer()
+    assistant_start = _assistant_start(tokenizer)
+    assistant_end = _assistant_end(tokenizer)
+    model = _TransitionModel(
+        {assistant_start: ord("A"), ord("A"): assistant_end},
+        max_seq_len=13,
+    )
+    engine, _ = _engine(model)
+    for user_text in ("u1", "u2"):
+        engine.append_user_message(user_text)
+        tuple(engine.generate_stream(GenerationConfig(temperature=0, max_new_tokens=2)))
+
+    engine.append_user_message("abcdefghij")
+    pending = engine.get_state()
+
+    assert pending.prompt_token_count == model.max_seq_len
+    assert pending.dropped_turn_count == 2
+    assert pending.truncated_user_token_count == 1
+    assert [(message.role, message.content) for message in pending.messages] == [
+        ("user", "u1"),
+        ("assistant", "A"),
+        ("user", "u2"),
+        ("assistant", "A"),
+        ("user", "abcdefghij"),
+    ]
+    model.contexts.clear()
+    tuple(engine.generate_stream(GenerationConfig(temperature=0, max_new_tokens=2)))
+
+    assert all(context.shape[1] <= model.max_seq_len for context in model.contexts)
+    assert tokenizer.decode(model.contexts[0][0].tolist()) == (
+        "<|bos|><|user_start|>bcdefghij<|user_end|><|assistant_start|>"
+    )
+    assert engine.get_state().dropped_turn_count == 2
+    assert engine.get_state().truncated_user_token_count == 1
+    assert engine.get_state().messages[-1] == AssistantMessage("A")
+
+
+def test_impossible_fixed_control_budget_fails_before_engine_or_model_mutation() -> (
+    None
+):
+    tokenizer = ByteTokenizer()
+    model = _TransitionModel(
+        {_assistant_start(tokenizer): ord("A")},
+        max_seq_len=3,
+    )
+    engine, _ = _engine(model)
+    before = engine.get_state()
+
+    with pytest.raises(ChatRenderingError, match="fixed chat controls"):
+        engine.append_user_message("x")
+
+    assert engine.get_state() == before
+    assert model.forward_calls == 0
 
 
 def test_multi_turn_prompt_is_rendered_only_through_canonical_renderer() -> None:

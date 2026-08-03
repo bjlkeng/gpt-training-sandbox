@@ -78,6 +78,8 @@ class ChatState:
     prompt_token_count: int
     generated_token_count: int
     sampled_token_count: int
+    dropped_turn_count: int
+    truncated_user_token_count: int
     generation_seconds: float | None
     completion_reason: CompletionReason | None
     stop_token_id: int | None
@@ -104,6 +106,8 @@ class ChatState:
             "prompt_token_count": self.prompt_token_count,
             "generated_token_count": self.generated_token_count,
             "sampled_token_count": self.sampled_token_count,
+            "dropped_turn_count": self.dropped_turn_count,
+            "truncated_user_token_count": self.truncated_user_token_count,
             "generation_seconds": self.generation_seconds,
             "completion_reason": self.completion_reason,
             "stop_token_id": self.stop_token_id,
@@ -267,6 +271,7 @@ class ChatEngine:
             default_generation.validate()
             tokenizer_identity = tokenizer.get_identity()
             assistant_end_token_id = tokenizer.encode_special("<|assistant_end|>")
+            bos_token_id = tokenizer.get_bos_token_id()
             model.to(resolved_device)
             model.eval()
         except Exception as error:
@@ -281,6 +286,8 @@ class ChatEngine:
         self._tokenizer = tokenizer
         self._tokenizer_identity = tokenizer_identity
         self._assistant_end_token_id = assistant_end_token_id
+        self._bos_token_id = bos_token_id
+        self._max_seq_len = max_seq_len
         self._default_generation = _copy_generation_config(default_generation)
         self._clock = clock
         self._messages: tuple[_HistoryMessage, ...] = ()
@@ -291,6 +298,8 @@ class ChatEngine:
         self._prompt_token_count = 0
         self._generated_token_count = 0
         self._sampled_token_count = 0
+        self._dropped_turn_count = 0
+        self._truncated_user_token_count = 0
         self._generation_seconds: float | None = None
         self._completion_reason: CompletionReason | None = None
         self._stop_token_id: int | None = None
@@ -312,6 +321,8 @@ class ChatEngine:
         self._prompt_token_count = 0
         self._generated_token_count = 0
         self._sampled_token_count = 0
+        self._dropped_turn_count = 0
+        self._truncated_user_token_count = 0
         self._generation_seconds = None
         self._completion_reason = None
         self._stop_token_id = None
@@ -327,7 +338,11 @@ class ChatEngine:
         user_message = UserMessage(text)
         candidate_messages = (*self._messages, user_message)
         conversation = Conversation(messages=candidate_messages)
-        prompt = render_completion_prompt(conversation, self._tokenizer)
+        prompt = render_completion_prompt(
+            conversation,
+            self._tokenizer,
+            max_token_count=self._max_seq_len,
+        )
 
         self._messages = candidate_messages
         self._pending_prompt = prompt
@@ -336,6 +351,8 @@ class ChatEngine:
         self._prompt_token_count = len(prompt.token_ids)
         self._generated_token_count = 0
         self._sampled_token_count = 0
+        self._dropped_turn_count = prompt.dropped_turn_count
+        self._truncated_user_token_count = prompt.truncated_user_token_count
         self._generation_seconds = None
         self._completion_reason = None
         self._stop_token_id = None
@@ -388,6 +405,8 @@ class ChatEngine:
             prompt_token_count=self._prompt_token_count,
             generated_token_count=self._generated_token_count,
             sampled_token_count=self._sampled_token_count,
+            dropped_turn_count=self._dropped_turn_count,
+            truncated_user_token_count=self._truncated_user_token_count,
             generation_seconds=generation_seconds,
             completion_reason=self._completion_reason,
             stop_token_id=self._stop_token_id,
@@ -423,7 +442,7 @@ class ChatEngine:
             temperature=settings.temperature,
             top_k=settings.top_k,
             seed=settings.seed,
-            stop_token_ids={self._assistant_end_token_id},
+            stop_token_ids={self._assistant_end_token_id, self._bos_token_id},
         )
         interrupted_status: Literal["cancelled", "failed"] | None = None
         try:
