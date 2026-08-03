@@ -5,6 +5,7 @@ from __future__ import annotations
 import random
 
 import numpy as np
+import pytest
 import torch
 
 from scratch_llm.config import GPTConfig
@@ -13,6 +14,7 @@ from scratch_llm.generation import (
     GenerationBatchResult,
     GenerationComplete,
     generate,
+    generate_sequences,
     stream_generate_sequence,
 )
 from scratch_llm.model import GPT
@@ -198,6 +200,59 @@ def test_seeded_sampling_is_reproducible_without_using_global_rng_state() -> Non
 
     assert torch.equal(first, repeated)
     assert not torch.equal(first, different_seed)
+
+
+def test_explicit_row_seeds_match_independent_generation_streams() -> None:
+    sampling_logits = torch.full((32,), -torch.inf)
+    sampling_logits[20:22] = 0
+    model = _VariableLogitsModel(
+        {
+            10: sampling_logits,
+            20: sampling_logits,
+            21: sampling_logits,
+        }
+    )
+
+    batched = generate_sequences(
+        model,
+        torch.tensor([[10], [10]]),
+        max_new_tokens=6,
+        temperature=1,
+        row_seeds=(101, 202),
+    )
+    independent = tuple(
+        generate_sequences(
+            model,
+            torch.tensor([[10]]),
+            max_new_tokens=6,
+            temperature=1,
+            seed=seed,
+        ).sequences[0]
+        for seed in (101, 202)
+    )
+
+    assert batched.sequences == independent
+
+
+def test_explicit_row_seeds_require_one_seed_per_row_and_no_shared_seed() -> None:
+    model = _FixedLogitsModel(torch.zeros(32))
+    prompts = torch.tensor([[10], [10]])
+
+    with pytest.raises(ValueError, match="exactly 2"):
+        generate_sequences(
+            model,
+            prompts,
+            max_new_tokens=1,
+            row_seeds=(101,),
+        )
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        generate_sequences(
+            model,
+            prompts,
+            max_new_tokens=1,
+            seed=42,
+            row_seeds=(101, 202),
+        )
 
 
 def test_generated_ids_stay_in_vocab_and_byte_decode_without_error() -> None:

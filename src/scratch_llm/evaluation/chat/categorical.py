@@ -19,13 +19,13 @@ from scratch_llm._validation import (
 )
 from scratch_llm.chat.conversation import Conversation, UserMessage
 from scratch_llm.chat.rendering import CHAT_RENDERER_ID, render_completion_prompt
+from scratch_llm.evaluation.chat.protocol import CHAT_EVAL_REFERENCE_COMMIT
 from scratch_llm.tokenization.tokenizer import Tokenizer
 from scratch_llm.utils import get_device
 
 
 CHAT_CATEGORICAL_PROTOCOL_ID: Final = "nanochat_chat_categorical_v1"
 CHAT_CATEGORICAL_PROTOCOL_VERSION: Final = 1
-CHAT_EVAL_REFERENCE_COMMIT: Final = "92d63d4e8bb4df75c3b71618f31ddde2378b2bcd"
 CHAT_CATEGORICAL_REFERENCE_FILES: Final[Mapping[str, str]] = MappingProxyType(
     {
         "scripts/chat_eval.py": (

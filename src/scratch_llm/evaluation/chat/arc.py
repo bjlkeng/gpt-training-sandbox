@@ -7,8 +7,6 @@ from pathlib import Path
 from typing import Final
 
 import numpy as np
-import pyarrow as pa  # type: ignore[import-untyped]
-import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
 from scratch_llm._validation import (
     require_non_empty_string,
@@ -20,12 +18,13 @@ from scratch_llm.data.hub import (
     HubDatasetSpec,
     load_hub_parquet_cache,
 )
+from scratch_llm.evaluation.chat.cache import read_cached_parquet_rows
 from scratch_llm.evaluation.chat.categorical import (
-    CHAT_EVAL_REFERENCE_COMMIT,
     CategoricalExample,
     CategoricalTask,
     render_multiple_choice_prompt,
 )
+from scratch_llm.evaluation.chat.protocol import CHAT_EVAL_REFERENCE_COMMIT
 from scratch_llm.identity import canonical_json_identity
 
 
@@ -157,7 +156,7 @@ def build_arc_task(cache: CachedHubParquetDataset) -> CategoricalTask:
         raise ArcDatasetError(
             f"cache spec does not match the pinned {task_name} source contract"
         )
-    rows = _read_cache_rows(cache)
+    rows = read_cached_parquet_rows(cache)
     permutation = tuple(
         int(index)
         for index in np.random.default_rng(ARC_SHUFFLE_SEED).permutation(len(rows))
@@ -198,27 +197,6 @@ def load_arc_task(
 
     spec = get_arc_dataset_spec(task_name)
     return build_arc_task(load_hub_parquet_cache(spec, cache_root))
-
-
-def _read_cache_rows(
-    cache: CachedHubParquetDataset,
-) -> tuple[Mapping[str, object], ...]:
-    try:
-        tables = tuple(
-            pq.read_table(path, columns=list(cache.spec.required_columns))
-            for path in cache.shard_paths
-        )
-        table = tables[0] if len(tables) == 1 else pa.concat_tables(tables)
-        raw_rows = table.to_pylist()
-    except (OSError, pa.ArrowException) as error:
-        raise ArcDatasetError(f"could not read cached ARC parquet: {error}") from error
-    if len(raw_rows) != cache.row_count:
-        raise ArcDatasetError(
-            f"read {len(raw_rows)} ARC rows but manifest records {cache.row_count}"
-        )
-    if not all(isinstance(row, Mapping) for row in raw_rows):
-        raise ArcDatasetError("cached ARC parquet contains a non-object row")
-    return tuple(raw_rows)
 
 
 def _task_name_for_subset(subset: str) -> str:
