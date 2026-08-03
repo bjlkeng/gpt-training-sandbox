@@ -2,11 +2,26 @@ import assert from "node:assert/strict";
 import {readFile} from "node:fs/promises";
 import test from "node:test";
 
-const source = await readFile(
+const inspectionSource = await readFile(
+  new URL("../../src/scratch_llm/web/static/inspection.js", import.meta.url),
+  "utf8",
+);
+const inspectionModuleUrl = `data:text/javascript;base64,${Buffer.from(inspectionSource).toString("base64")}`;
+const {
+  downloadTranscript,
+  formatMetrics,
+  loadCheckpoint,
+  populateSelect,
+  renderDebug,
+  selectRenderer,
+} = await import(inspectionModuleUrl);
+
+const rawAppSource = await readFile(
   new URL("../../src/scratch_llm/web/static/app.js", import.meta.url),
   "utf8",
 );
-const moduleUrl = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
+const appSource = rawAppSource.replace("./inspection.js", inspectionModuleUrl);
+const moduleUrl = `data:text/javascript;base64,${Buffer.from(appSource).toString("base64")}`;
 const {
   applyControlState,
   applyServerEvent,
@@ -33,10 +48,11 @@ test("settings are bounded and serialized exactly once", () => {
     top_k: 7,
     max_new_tokens: 32,
   });
-  assert.deepEqual(buildGenerateMessage("hello", settings), {
+  assert.deepEqual(buildGenerateMessage("hello", settings, true), {
     protocol_version: "v1",
     type: "generate",
     message: "hello",
+    debug: true,
     settings,
   });
   for (const values of [
@@ -288,6 +304,18 @@ test("controller reconnects after a disconnect and stop is sent once", () => {
     "send-button",
     "stop-button",
     "reset-button",
+    "checkpoint-select",
+    "load-checkpoint-button",
+    "renderer-select",
+    "apply-renderer-button",
+    "export-button",
+    "debug-enabled",
+    "debug-output",
+    "generated-token-metric",
+    "prefill-metric",
+    "decode-metric",
+    "throughput-metric",
+    "memory-metric",
   ];
   const elements = Object.fromEntries(ids.map((id) => [id, new FakeElement()]));
   Object.assign(elements.temperature, {value: "0.25", min: "0", max: "10"});
@@ -349,6 +377,8 @@ test("controller reconnects after a disconnect and stop is sent once", () => {
     WebSocketImpl: FakeSocket,
     locationRef: {protocol: "http:", host: "localhost:8000"},
   });
+  controller.sessionReady = true;
+  controller.transition("idle");
   elements["message-input"].value = "first";
   controller.submit();
   const first = FakeSocket.instances[0];
@@ -371,4 +401,191 @@ test("controller reconnects after a disconnect and stop is sent once", () => {
   controller.stop();
   assert.equal(second.sent.length, 2);
   assert.deepEqual(second.sent[1], {protocol_version: "v1", type: "stop"});
+});
+
+
+test("metrics and raw debug values are formatted from terminal server data", () => {
+  assert.deepEqual(
+    formatMetrics({
+      generated_tokens: 3,
+      prefill_latency_seconds: 0.125,
+      decode_latency_per_sampled_token_seconds: 0.02,
+      tokens_per_second: 40,
+      peak_memory_mib: 512.5,
+    }),
+    {
+      generatedTokens: "3",
+      prefill: "125.0 ms",
+      decode: "20.0 ms/token",
+      throughput: "40.00 tok/s",
+      memory: "512.5 MiB",
+    },
+  );
+  assert.deepEqual(formatMetrics(null), {
+    generatedTokens: "—",
+    prefill: "—",
+    decode: "—",
+    throughput: "—",
+    memory: "—",
+  });
+
+  const output = {textContent: ""};
+  renderDebug(
+    output,
+    {
+      prompt_token_ids: [1, 2],
+      generated_token_ids: [3],
+      completion_reason: "stop_token",
+      stop_token_id: 264,
+    },
+    {
+      context: {
+        prompt_tokens: 2,
+        max_tokens: 64,
+        dropped_turns: 1,
+        truncated_user_tokens: 4,
+      },
+    },
+  );
+  assert.match(output.textContent, /"prompt_token_ids"/);
+  assert.match(output.textContent, /"dropped_turns": 1/);
+});
+
+
+test("server catalogs populate safe options without HTML parsing", () => {
+  const children = [];
+  const select = {
+    value: "",
+    replaceChildren() {
+      children.length = 0;
+    },
+    appendChild(child) {
+      children.push(child);
+    },
+  };
+  const documentRef = {
+    createElement(tag) {
+      assert.equal(tag, "option");
+      return {value: "", textContent: ""};
+    },
+  };
+
+  populateSelect(
+    select,
+    [{id: "safe.pt", name: "<img src=x onerror=alert(1)>"}],
+    "safe.pt",
+    documentRef,
+  );
+
+  assert.equal(children[0].textContent, "<img src=x onerror=alert(1)>");
+  assert.equal(children[0].value, "safe.pt");
+  assert.equal(select.value, "safe.pt");
+});
+
+
+test("checkpoint and renderer mutations commit UI only after acknowledgement", async () => {
+  let resolveLoad;
+  const pending = new Promise((resolve) => {
+    resolveLoad = resolve;
+  });
+  const commits = [];
+  const loading = loadCheckpoint(() => pending, "model.pt", (payload) => {
+    commits.push(["checkpoint", payload.state]);
+  });
+  await Promise.resolve();
+  assert.deepEqual(commits, []);
+  resolveLoad({
+    ok: true,
+    async json() {
+      return {state: {status: "ready", checkpoint_id: "model.pt"}};
+    },
+  });
+  await loading;
+  assert.deepEqual(commits, [
+    ["checkpoint", {status: "ready", checkpoint_id: "model.pt"}],
+  ]);
+
+  await assert.rejects(
+    loadCheckpoint(
+      async () => ({
+        ok: false,
+        async json() {
+          return {error: {message: "load failed"}};
+        },
+      }),
+      "broken.pt",
+      () => commits.push(["unexpected"]),
+    ),
+    /load failed/,
+  );
+  assert.equal(commits.length, 1);
+
+  await selectRenderer(
+    async () => ({
+      ok: true,
+      async json() {
+        return {state: {renderer_id: "canonical"}, history_reset: false};
+      },
+    }),
+    "canonical",
+    (payload) => commits.push(["renderer", payload.history_reset]),
+  );
+  assert.deepEqual(commits.at(-1), ["renderer", false]);
+});
+
+
+test("transcript download uses the fixed endpoint and server filename", async () => {
+  const requests = [];
+  const anchors = [];
+  const documentRef = {
+    body: {
+      appendChild(anchor) {
+        anchors.push(anchor);
+      },
+    },
+    createElement(tag) {
+      assert.equal(tag, "a");
+      return {
+        click() {
+          this.clicked = true;
+        },
+        remove() {
+          this.removed = true;
+        },
+      };
+    },
+  };
+  const urlApi = {
+    createObjectURL() {
+      return "blob:local";
+    },
+    revokeObjectURL(value) {
+      this.revoked = value;
+    },
+  };
+  await downloadTranscript(
+    async (...args) => {
+      requests.push(args);
+      return {
+        ok: true,
+        headers: {
+          get() {
+            return 'attachment; filename="scratch-llm-transcript.jsonl"';
+          },
+        },
+        async blob() {
+          return {size: 10};
+        },
+      };
+    },
+    documentRef,
+    urlApi,
+  );
+
+  assert.equal(requests[0][0], "/api/transcript");
+  assert.equal(anchors[0].download, "scratch-llm-transcript.jsonl");
+  assert.equal(anchors[0].href, "blob:local");
+  assert.equal(anchors[0].clicked, true);
+  assert.equal(anchors[0].removed, true);
+  assert.equal(urlApi.revoked, "blob:local");
 });

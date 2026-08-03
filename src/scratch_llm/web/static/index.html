@@ -24,6 +24,56 @@
         </div>
       </header>
 
+      <section class="inspection" aria-label="Session and inspection controls">
+        <div class="selectors">
+          <div class="selector-group">
+            <label for="checkpoint-select">Checkpoint</label>
+            <div class="inline-control">
+              <select id="checkpoint-select" disabled>
+                <option>Discovering local checkpoints…</option>
+              </select>
+              <button id="load-checkpoint-button" class="quiet" type="button" disabled>
+                Load
+              </button>
+            </div>
+          </div>
+          <div class="selector-group">
+            <label for="renderer-select">Prompt template</label>
+            <div class="inline-control">
+              <select id="renderer-select" disabled>
+                <option>Discovering server renderers…</option>
+              </select>
+              <button id="apply-renderer-button" class="quiet" type="button" disabled>
+                Apply
+              </button>
+            </div>
+          </div>
+          <div class="inspection-actions">
+            <button id="export-button" class="quiet" type="button" disabled>
+              Export JSONL
+            </button>
+            <details class="debug-panel">
+              <summary>Raw token debug</summary>
+              <label for="debug-enabled">
+                <input id="debug-enabled" type="checkbox">
+                Include exact prompt and generated token IDs on the next turn
+              </label>
+              <pre id="debug-output">Enable raw token debug before sending a message.</pre>
+            </details>
+          </div>
+        </div>
+
+        <div class="metrics" aria-label="Last completed turn metrics">
+          <dl>
+            <div><dt>Generated</dt><dd id="generated-token-metric">—</dd></div>
+            <div><dt>Prefill</dt><dd id="prefill-metric">—</dd></div>
+            <div><dt>Decode</dt><dd id="decode-metric">—</dd></div>
+            <div><dt>Throughput</dt><dd id="throughput-metric">—</dd></div>
+            <div><dt>Peak CUDA</dt><dd id="memory-metric">—</dd></div>
+          </dl>
+        </div>
+      </section>
+
       <section
         id="chat-log"
         class="chat-log"

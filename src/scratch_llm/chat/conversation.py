@@ -370,13 +370,19 @@ def conversation_to_json(conversation: Conversation) -> str:
     )
 
 
+def conversation_to_jsonl_bytes(conversation: Conversation) -> bytes:
+    """Serialize one canonical conversation record as UTF-8 JSONL bytes."""
+
+    return f"{conversation_to_json(conversation)}\n".encode("utf-8")
+
+
 def write_conversation_jsonl(
     conversation: Conversation,
     path: str | PathLike[str],
 ) -> Path:
     """Atomically replace a one-record canonical conversation JSONL file."""
 
-    return atomic_write(path, f"{conversation_to_json(conversation)}\n")
+    return atomic_write(path, conversation_to_jsonl_bytes(conversation))
 
 
 def _reject_non_standard_number(value: str) -> object:
@@ -398,6 +404,7 @@ __all__ = [
     "UserMessage",
     "conversation_to_dict",
     "conversation_to_json",
+    "conversation_to_jsonl_bytes",
     "parse_conversation",
     "read_conversations",
     "write_conversation_jsonl",

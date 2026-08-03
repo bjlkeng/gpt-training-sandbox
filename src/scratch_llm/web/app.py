@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager, suppress
 from importlib.resources import files
 from typing import Literal, cast
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -40,6 +40,11 @@ _CONTENT_SECURITY_POLICY = (
     "img-src 'self' data:; style-src 'self'; script-src 'self'; "
     "base-uri 'none'; frame-ancestors 'none'"
 )
+_ASSET_MEDIA_TYPES = {
+    "app.js": "text/javascript",
+    "inspection.js": "text/javascript",
+    "styles.css": "text/css",
+}
 
 
 class _ResponseModel(BaseModel):
@@ -81,6 +86,9 @@ class PublicCapabilities(_ResponseModel):
     tokenizer: Literal[True] = True
     streaming: Literal[True] = True
     cancellation: Literal[True] = True
+    metrics: Literal[True] = True
+    transcript_export: Literal[True] = True
+    inspection: Literal[True] = True
 
 
 class PublicConfigResponse(_ResponseModel):
@@ -123,6 +131,7 @@ class GenerateRequest(_RequestModel):
     protocol_version: Literal["v1"]
     type: Literal["generate"]
     message: str = Field(max_length=MAX_TEXT_BYTES)
+    debug: bool = False
     settings: GenerationSettingsRequest = Field(
         default_factory=GenerationSettingsRequest
     )
@@ -144,6 +153,21 @@ class CheckpointCatalogResponse(_ResponseModel):
     checkpoints: tuple[CheckpointResponse, ...]
 
 
+class RendererResponse(_ResponseModel):
+    id: str
+    name: str
+
+
+class RendererCatalogResponse(_ResponseModel):
+    api_version: Literal["v1"] = API_VERSION
+    active_renderer_id: str | None
+    renderers: tuple[RendererResponse, ...]
+
+
+class SelectRendererRequest(_RequestModel):
+    renderer_id: str = Field(min_length=1, max_length=MAX_CATALOG_ID_BYTES)
+
+
 class ContextStateResponse(_ResponseModel):
     prompt_tokens: int
     max_tokens: int
@@ -160,6 +184,12 @@ class SessionStateResponse(_ResponseModel):
     tokenizer_identity: str | None
     renderer_id: str | None
     context: ContextStateResponse | None
+
+
+class RendererSelectionResponse(_ResponseModel):
+    api_version: Literal["v1"] = API_VERSION
+    state: SessionStateResponse
+    history_reset: bool
 
 
 class SessionResponse(_ResponseModel):
@@ -302,21 +332,12 @@ def create_app(
             },
         )
 
-    @app.get(
-        "/assets/styles.css",
-        include_in_schema=False,
-        response_class=Response,
-    )
-    async def styles() -> Response:
-        return _asset_response("styles.css", media_type="text/css")
-
-    @app.get(
-        "/assets/app.js",
-        include_in_schema=False,
-        response_class=Response,
-    )
-    async def script() -> Response:
-        return _asset_response("app.js", media_type="text/javascript")
+    @app.get("/assets/{name}", include_in_schema=False, response_class=Response)
+    async def asset(name: str) -> Response:
+        media_type = _ASSET_MEDIA_TYPES.get(name)
+        if media_type is None:
+            raise HTTPException(status_code=404)
+        return _asset_response(name, media_type=media_type)
 
     @app.get("/api/checkpoints", response_model=CheckpointCatalogResponse)
     async def checkpoints(request: Request) -> CheckpointCatalogResponse:
@@ -327,6 +348,35 @@ def create_app(
                 CheckpointResponse(**entry.to_dict())
                 for entry in service.list_checkpoints()
             ),
+        )
+
+    @app.get("/api/session", response_model=SessionResponse)
+    async def session(request: Request) -> SessionResponse:
+        return _session_response(_session_service(request).get_state())
+
+    @app.get("/api/renderers", response_model=RendererCatalogResponse)
+    async def renderers(request: Request) -> RendererCatalogResponse:
+        service = _session_service(request)
+        return RendererCatalogResponse(
+            active_renderer_id=service.get_state().renderer_id,
+            renderers=tuple(
+                RendererResponse(id=renderer_id, name=renderer_id)
+                for renderer_id in service.list_renderers()
+            ),
+        )
+
+    @app.post(
+        "/api/select_renderer",
+        response_model=RendererSelectionResponse,
+    )
+    async def select_renderer(
+        payload: SelectRendererRequest,
+        request: Request,
+    ) -> RendererSelectionResponse:
+        selection = _session_service(request).select_renderer(payload.renderer_id)
+        return RendererSelectionResponse(
+            state=SessionStateResponse.model_validate(selection.state.to_dict()),
+            history_reset=selection.history_reset,
         )
 
     @app.post("/api/load_checkpoint", response_model=SessionResponse)
@@ -340,6 +390,20 @@ def create_app(
     @app.post("/api/reset", response_model=SessionResponse)
     async def reset(request: Request) -> SessionResponse:
         return _session_response(_session_service(request).reset())
+
+    @app.get("/api/transcript", response_class=Response)
+    async def transcript(request: Request) -> Response:
+        return Response(
+            content=_session_service(request).export_transcript(),
+            media_type="application/x-ndjson",
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Disposition": (
+                    'attachment; filename="scratch-llm-transcript.jsonl"'
+                ),
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     @app.post("/api/tokenize", response_model=TokenizeResponse)
     async def tokenize(
@@ -391,6 +455,7 @@ def create_app(
                     max_new_tokens=settings.max_new_tokens,
                     seed=settings.seed,
                 ),
+                include_debug=request.debug,
             )
         except WebServiceError as error:
             await websocket.send_json(
@@ -501,6 +566,9 @@ def _terminal_payload(terminal: GenerationTerminal) -> dict[str, object]:
             "failed": "error",
         }[terminal.outcome],
         "state": terminal.state.to_dict(),
+        "metrics": None if terminal.metrics is None else terminal.metrics.to_dict(),
+        "aggregate": terminal.aggregate.to_dict(),
+        "debug": None if terminal.debug is None else terminal.debug.to_dict(),
     }
     if terminal.completion_event is not None:
         payload["event"] = terminal.completion_event.to_dict()
@@ -529,6 +597,10 @@ __all__ = [
     "PublicConfigResponse",
     "PublicGenerationConfig",
     "PublicRuntimeConfig",
+    "RendererCatalogResponse",
+    "RendererResponse",
+    "RendererSelectionResponse",
+    "SelectRendererRequest",
     "SessionResponse",
     "SessionStateResponse",
     "StopRequest",

@@ -22,6 +22,7 @@ from scratch_llm.tokenization.tokenizer import Tokenizer
 
 
 CHAT_RENDERER_ID: Final = "scratch_llm_chat_renderer_v1"
+SUPPORTED_CHAT_RENDERER_IDS: Final = (CHAT_RENDERER_ID,)
 IGNORE_INDEX: Final = -1
 _SPECIAL_TOKENS: Final = (
     "<|bos|>",
@@ -346,6 +347,7 @@ def _render_messages(
 __all__ = [
     "CHAT_RENDERER_ID",
     "IGNORE_INDEX",
+    "SUPPORTED_CHAT_RENDERER_IDS",
     "ChatRenderingError",
     "CompletionPrompt",
     "RenderedConversation",

@@ -10,7 +10,13 @@ import time
 
 import pytest
 
-from scratch_llm.chat import CHAT_RENDERER_ID, ChatState
+from scratch_llm.chat import (
+    CHAT_RENDERER_ID,
+    AssistantMessage,
+    ChatState,
+    Conversation,
+    conversation_to_jsonl_bytes,
+)
 from scratch_llm.tokenization.tokenizer import ByteTokenizer
 from scratch_llm.web.service import (
     MAX_CATALOG_ID_BYTES,
@@ -41,6 +47,7 @@ class FakeEngine:
         self.tokenize_calls = 0
         self.detokenize_calls = 0
         self.close_calls = 0
+        self.pending_prompt_token_ids: tuple[int, ...] = ()
 
     def get_state(self) -> ChatState:
         return ChatState(
@@ -66,6 +73,18 @@ class FakeEngine:
         self.reset_calls += 1
         self.chat_status = "idle"
         self.messages = ()
+
+    def get_pending_prompt_token_ids(self) -> tuple[int, ...]:
+        return self.pending_prompt_token_ids
+
+    def export_transcript_bytes(self) -> bytes:
+        if (
+            self.chat_status != "completed"
+            or not self.messages
+            or not isinstance(self.messages[-1], AssistantMessage)
+        ):
+            raise RuntimeError("completed conversation required")
+        return conversation_to_jsonl_bytes(Conversation(messages=self.messages))
 
     def tokenize(self, text: str) -> tuple[int, ...]:
         self.tokenize_calls += 1
@@ -224,8 +243,9 @@ def test_failed_load_preserves_the_previous_conversation_and_sanitizes_error(
     assert raised.value.code == "checkpoint_load_failed"
     assert "secret loader detail" not in str(raised.value)
     assert str(root) not in str(raised.value)
-    assert service.status == "failed"
+    assert service.status == "ready"
     assert previous.close_calls == 0
+    assert service.tokenize("still usable") == tuple(b"still usable")
 
     reset_state = service.reset()
 

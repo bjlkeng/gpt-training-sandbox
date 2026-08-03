@@ -21,6 +21,7 @@ from scratch_llm.chat.conversation import (
     AssistantMessage,
     Conversation,
     UserMessage,
+    conversation_to_jsonl_bytes,
     write_conversation_jsonl,
 )
 from scratch_llm.chat.rendering import (
@@ -476,9 +477,25 @@ class ChatEngine:
             stop_token_id=self._stop_token_id,
         )
 
+    def get_pending_prompt_token_ids(self) -> tuple[int, ...]:
+        """Return the exact renderer-owned prompt IDs for explicit inspection."""
+
+        self._require_open()
+        if self._pending_prompt is None:
+            raise ChatEngineError("no completion prompt is pending")
+        return self._pending_prompt.token_ids
+
     def save_transcript(self, path: str | PathLike[str]) -> Path:
         """Atomically save the complete canonical conversation as JSONL."""
 
+        return write_conversation_jsonl(self._completed_conversation(), path)
+
+    def export_transcript_bytes(self) -> bytes:
+        """Return the complete canonical conversation without choosing a path."""
+
+        return conversation_to_jsonl_bytes(self._completed_conversation())
+
+    def _completed_conversation(self) -> Conversation:
         self._require_inactive()
         if (
             self._status != "completed"
@@ -486,10 +503,7 @@ class ChatEngine:
             or not isinstance(self._messages[-1], AssistantMessage)
         ):
             raise ChatEngineError("transcript export requires a completed conversation")
-        return write_conversation_jsonl(
-            Conversation(messages=self._messages),
-            path,
-        )
+        return Conversation(messages=self._messages)
 
     def _run_generation(
         self,
