@@ -2,21 +2,31 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
+from contextlib import suppress
 from contextlib import asynccontextmanager
 from typing import Literal, cast
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from scratch_llm.config import GenerationConfig, WebConfig
 from scratch_llm.web.service import (
     MAX_CATALOG_ID_BYTES,
+    MAX_GENERATION_TOKENS,
+    MAX_SEED,
     MAX_TEXT_BYTES,
+    MAX_TEMPERATURE,
+    MAX_TOP_K,
     MAX_TOKEN_IDS,
+    MIN_SEED,
     ChatSessionService,
+    GenerationLease,
+    GenerationOverrides,
+    GenerationTerminal,
     PublicSessionState,
     WebService,
     WebServiceError,
@@ -64,6 +74,8 @@ class PublicCapabilities(_ResponseModel):
     config: Literal[True] = True
     checkpoint_sessions: Literal[True] = True
     tokenizer: Literal[True] = True
+    streaming: Literal[True] = True
+    cancellation: Literal[True] = True
 
 
 class PublicConfigResponse(_ResponseModel):
@@ -89,6 +101,31 @@ class TokenizeRequest(_RequestModel):
 
 class DetokenizeRequest(_RequestModel):
     token_ids: list[int] = Field(max_length=MAX_TOKEN_IDS)
+
+
+class GenerationSettingsRequest(_RequestModel):
+    temperature: float | None = Field(default=None, ge=0, le=MAX_TEMPERATURE)
+    top_k: int | None = Field(default=None, ge=1, le=MAX_TOP_K)
+    max_new_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        le=MAX_GENERATION_TOKENS,
+    )
+    seed: int | None = Field(default=None, ge=MIN_SEED, le=MAX_SEED)
+
+
+class GenerateRequest(_RequestModel):
+    protocol_version: Literal["v1"]
+    type: Literal["generate"]
+    message: str = Field(max_length=MAX_TEXT_BYTES)
+    settings: GenerationSettingsRequest = Field(
+        default_factory=GenerationSettingsRequest
+    )
+
+
+class StopRequest(_RequestModel):
+    protocol_version: Literal["v1"]
+    type: Literal["stop"]
 
 
 class CheckpointResponse(_ResponseModel):
@@ -285,6 +322,71 @@ def create_app(
             token_count=len(payload.token_ids),
         )
 
+    @app.websocket("/ws/generate")
+    async def generate(websocket: WebSocket) -> None:
+        await websocket.accept()
+        try:
+            raw_request = await websocket.receive_json()
+            request = GenerateRequest.model_validate(raw_request)
+        except WebSocketDisconnect:
+            return
+        except (TypeError, ValueError, ValidationError):
+            await websocket.send_json(
+                _socket_error_payload(
+                    code="invalid_request",
+                    message="generation request is invalid",
+                )
+            )
+            await websocket.close(code=1008)
+            return
+
+        settings = request.settings
+        try:
+            lease = await _session_service_from_websocket(websocket).start_generation(
+                request.message,
+                GenerationOverrides(
+                    temperature=settings.temperature,
+                    top_k=settings.top_k,
+                    max_new_tokens=settings.max_new_tokens,
+                    seed=settings.seed,
+                ),
+            )
+        except WebServiceError as error:
+            await websocket.send_json(
+                _socket_error_payload(
+                    code=error.code,
+                    message=error.public_message,
+                    busy=error.code == "busy",
+                )
+            )
+            await websocket.close(code=1008)
+            return
+
+        stop_listener = asyncio.create_task(_listen_for_stop(websocket, lease))
+        try:
+            async for item in lease:
+                if isinstance(item, GenerationTerminal):
+                    await websocket.send_json(_terminal_payload(item))
+                else:
+                    await websocket.send_json(
+                        {
+                            "protocol_version": API_VERSION,
+                            "type": item.type,
+                            "event": item.to_dict(),
+                        }
+                    )
+        except (RuntimeError, WebSocketDisconnect):
+            lease.cancel()
+        finally:
+            stop_listener.cancel()
+            with suppress(asyncio.CancelledError, RuntimeError, WebSocketDisconnect):
+                await stop_listener
+            if not lease.done:
+                lease.cancel()
+            await lease.wait()
+            with suppress(RuntimeError, WebSocketDisconnect):
+                await websocket.close(code=1000)
+
     return app
 
 
@@ -292,10 +394,61 @@ def _session_service(request: Request) -> WebSessionService:
     return cast(WebSessionService, request.app.state.service)
 
 
+def _session_service_from_websocket(websocket: WebSocket) -> WebSessionService:
+    return cast(WebSessionService, websocket.app.state.service)
+
+
 def _session_response(state: PublicSessionState) -> SessionResponse:
     return SessionResponse(
         state=SessionStateResponse.model_validate(state.to_dict()),
     )
+
+
+async def _listen_for_stop(
+    websocket: WebSocket,
+    lease: GenerationLease,
+) -> None:
+    try:
+        while True:
+            raw_request = await websocket.receive_json()
+            StopRequest.model_validate(raw_request)
+            lease.cancel()
+            return
+    except (TypeError, ValueError, ValidationError, WebSocketDisconnect):
+        lease.cancel()
+
+
+def _socket_error_payload(
+    *,
+    code: str,
+    message: str,
+    busy: bool = False,
+) -> dict[str, object]:
+    return {
+        "protocol_version": API_VERSION,
+        "type": "busy" if busy else "error",
+        "error": {"code": code, "message": message},
+    }
+
+
+def _terminal_payload(terminal: GenerationTerminal) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "protocol_version": API_VERSION,
+        "type": {
+            "completed": "done",
+            "cancelled": "cancelled",
+            "failed": "error",
+        }[terminal.outcome],
+        "state": terminal.state.to_dict(),
+    }
+    if terminal.completion_event is not None:
+        payload["event"] = terminal.completion_event.to_dict()
+    if terminal.error_code is not None and terminal.error_message is not None:
+        payload["error"] = {
+            "code": terminal.error_code,
+            "message": terminal.error_message,
+        }
+    return payload
 
 
 __all__ = [
@@ -307,6 +460,8 @@ __all__ = [
     "DetokenizeResponse",
     "ErrorDetail",
     "ErrorResponse",
+    "GenerateRequest",
+    "GenerationSettingsRequest",
     "HealthResponse",
     "LoadCheckpointRequest",
     "PublicCapabilities",
@@ -315,6 +470,7 @@ __all__ = [
     "PublicRuntimeConfig",
     "SessionResponse",
     "SessionStateResponse",
+    "StopRequest",
     "TokenizeRequest",
     "TokenizeResponse",
     "WebService",

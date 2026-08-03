@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 import sys
 from typing import TextIO
 
-from scratch_llm.chat import ChatEngine, ChatEngineError, TokenEvent
+from scratch_llm.chat import (
+    ChatEngine,
+    ChatEngineError,
+    close_token_stream,
+)
 from scratch_llm.config import GenerationConfig
 from scripts._common import (
     add_generation_arguments,
@@ -38,12 +42,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _close_iterator(events: Iterator[TokenEvent]) -> None:
-    close = getattr(events, "close", None)
-    if callable(close):
-        close()
-
-
 def _generate_turn(
     engine: ChatEngine,
     settings: GenerationConfig,
@@ -66,7 +64,7 @@ def _generate_turn(
                 output_stream.flush()
             completed = completed or event.type == "complete"
     finally:
-        _close_iterator(events)
+        close_token_stream(events)
     if not completed:
         raise ChatEngineError("chat generation ended without a completion event")
     output_stream.write("\n")

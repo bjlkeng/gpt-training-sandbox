@@ -545,6 +545,38 @@ def test_iterator_close_restores_rng_and_mode_and_rolls_back_assistant() -> None
         ("user", "hello")
     ]
 
+    engine.rollback_last_turn()
+
+    assert engine.get_state().status == "idle"
+    assert engine.get_state().messages == ()
+
+
+def test_pending_turn_rollback_preserves_earlier_completed_history() -> None:
+    tokenizer = ByteTokenizer()
+    assistant_start = _assistant_start(tokenizer)
+    assistant_end = _assistant_end(tokenizer)
+    model = _TransitionModel({assistant_start: ord("A"), ord("A"): assistant_end})
+    engine, _ = _engine(model)
+    engine.append_user_message("first")
+    tuple(engine.generate_stream(GenerationConfig(temperature=0, max_new_tokens=2)))
+    before = engine.get_state().messages
+    engine.append_user_message("cancel me")
+
+    engine.rollback_last_turn(include_completed=True)
+
+    state = engine.get_state()
+    assert state.status == "completed"
+    assert state.messages == before
+    assert state.prompt_token_count == 0
+
+    engine.append_user_message("completed at cancellation boundary")
+    tuple(engine.generate_stream(GenerationConfig(temperature=0, max_new_tokens=2)))
+    engine.rollback_last_turn(include_completed=True)
+
+    assert engine.get_state().messages == before
+    with pytest.raises(ChatEngineError, match="latest chat turn"):
+        engine.rollback_last_turn()
+
 
 def test_generation_failure_restores_state_and_allows_retry() -> None:
     tokenizer = ByteTokenizer()

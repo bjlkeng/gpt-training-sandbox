@@ -11,6 +11,7 @@ from scratch_llm.config import (
     ConfigValidationError,
     GenerationConfig,
     ProjectConfig,
+    apply_generation_overrides,
     load_config,
 )
 from scratch_llm.run import RunConflictError, RunPaths, prepare_run
@@ -124,12 +125,13 @@ def resolve_generation_arguments(
             "checkpoint generation defaults must be a GenerationConfig, "
             f"got {type(defaults).__name__}"
         )
-    values = defaults.to_dict()
-    for field in ("max_new_tokens", "temperature", "top_k", "seed"):
-        override = getattr(arguments, field)
-        if override is not None:
-            values[field] = override
-    return GenerationConfig(**values)
+    return apply_generation_overrides(
+        defaults,
+        {
+            field: getattr(arguments, field)
+            for field in ("max_new_tokens", "temperature", "top_k", "seed")
+        },
+    )
 
 
 def run_config_stub(

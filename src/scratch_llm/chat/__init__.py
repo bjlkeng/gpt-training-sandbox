@@ -37,6 +37,7 @@ from scratch_llm.chat.engine import (
     ChatStatus,
     TokenEvent,
     TokenEventType,
+    close_token_stream,
 )
 
 __all__ = [
@@ -66,6 +67,7 @@ __all__ = [
     "UserMessage",
     "conversation_to_dict",
     "conversation_to_json",
+    "close_token_stream",
     "parse_conversation",
     "read_conversations",
     "render_completion_prompt",
