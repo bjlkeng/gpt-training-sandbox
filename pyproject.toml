@@ -25,7 +25,7 @@ tracking = ["wandb"]
 tokenizer-comparison = ["tiktoken"]
 web = ["fastapi", "pydantic", "uvicorn", "websockets"]
 demo = ["gradio"]
-dev = ["matplotlib", "mypy", "pytest", "ruff==0.15.22"]
+dev = ["httpx2", "matplotlib", "mypy", "pytest", "ruff==0.15.22"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/scratch_llm", "scripts"]

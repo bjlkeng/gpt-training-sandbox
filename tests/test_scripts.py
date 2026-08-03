@@ -63,7 +63,6 @@ CHECKPOINT_COMMANDS = (
     "scripts.chat",
     "scripts.web_chat",
 )
-UNIMPLEMENTED_CHECKPOINT_COMMANDS = ("scripts.web_chat",)
 ROADMAP_COMMANDS = (
     CONFIG_COMMANDS
     + CHECKPOINT_COMMANDS
@@ -451,10 +450,6 @@ def test_failed_pretrain_still_closes_valid_local_tracking_outputs(
         *(
             (module, ("--config", str(SMOKE_CONFIG)))
             for module in UNIMPLEMENTED_CONFIG_COMMANDS
-        ),
-        *(
-            (module, ("--checkpoint", "runs/missing/checkpoints/last.pt"))
-            for module in UNIMPLEMENTED_CHECKPOINT_COMMANDS
         ),
     ],
 )
