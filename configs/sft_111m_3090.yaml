@@ -24,6 +24,11 @@ tracking:
 data:
   profile: nanochat_climbmix
   base_dir: data
+  parquet_dir: data/parquet/base_data_climbmix
+  tokenized_dir: data/tokenized_37
+  loader_strategy: packed
+  num_pretrain_train_shards: 37
+  always_use_final_shard_for_val: true
 
 tokenizer:
   type: regex_byte_bpe

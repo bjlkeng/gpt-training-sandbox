@@ -219,6 +219,10 @@ def test_sft_111m_3090_experiment_preset_matches_the_base_and_weighted_mix() -> 
     assert config.tracking.wandb.log_model_artifacts is False
     assert config.tracking.wandb.log_dataset_artifacts is False
     assert config.tracking.wandb.log_tokenizer_artifacts is False
+    assert config.data.loader_strategy == "packed"
+    assert config.data.tokenized_dir == "data/tokenized_37"
+    assert config.data.num_pretrain_train_shards == 37
+    assert config.data.always_use_final_shard_for_val is True
     assert config.model.seq_len == 1_024
     assert config.model.n_layer == 12
     assert config.model.n_head == 12
