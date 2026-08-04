@@ -55,6 +55,11 @@ model:
   use_flash_attention: false
   use_kv_cache: false
 
+# eval_base reads its BPB protocol shape from train, including for SFT checkpoints.
+train:
+  device_batch_size: 8
+  eval_tokens: 1048576
+
 sft:
   base_checkpoint: null
   train_sources:

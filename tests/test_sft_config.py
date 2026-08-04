@@ -223,6 +223,8 @@ def test_sft_111m_3090_experiment_preset_matches_the_base_and_weighted_mix() -> 
     assert config.data.tokenized_dir == "data/tokenized_37"
     assert config.data.num_pretrain_train_shards == 37
     assert config.data.always_use_final_shard_for_val is True
+    assert config.train.device_batch_size == 8
+    assert config.train.eval_tokens == 1_048_576
     assert config.model.seq_len == 1_024
     assert config.model.n_layer == 12
     assert config.model.n_head == 12
