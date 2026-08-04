@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Generator
+from collections.abc import Collection, Generator, Sequence
 from dataclasses import dataclass
 import random
 from typing import Literal, TypeAlias, overload
@@ -210,6 +210,7 @@ def generate_sequences(
     temperature: float = 1.0,
     top_k: int | None = None,
     seed: int | None = None,
+    row_seeds: Sequence[int] | None = None,
     stop_token_ids: Collection[int] = (),
 ) -> GenerationBatchResult:
     """Generate variable-length rows with independent finished-row tracking."""
@@ -222,6 +223,7 @@ def generate_sequences(
         temperature=temperature,
         top_k=top_k,
         seed=seed,
+        row_seeds=row_seeds,
         stop_token_ids=stop_token_ids,
     ):
         if isinstance(event, GenerationBatchResult):
@@ -262,6 +264,7 @@ def stream_generate_sequence(
         temperature=temperature,
         top_k=top_k,
         seed=seed,
+        row_seeds=None,
         stop_token_ids=stop_token_ids,
     )
     try:
@@ -289,6 +292,7 @@ def _stream_generate_batch(
     temperature: float,
     top_k: int | None,
     seed: int | None,
+    row_seeds: Sequence[int] | None,
     stop_token_ids: Collection[int],
 ) -> Generator[_BatchGenerationStep | GenerationBatchResult, None, None]:
     """Yield batch sampling steps and one final result from a single loop."""
@@ -327,6 +331,12 @@ def _stream_generate_batch(
         top_k = require_positive_integer(top_k, name="top_k")
     if seed is not None:
         seed = require_integer(seed, name="seed")
+    normalized_row_seeds = _normalize_row_seeds(
+        row_seeds,
+        batch_size=token_ids.shape[0],
+    )
+    if seed is not None and normalized_row_seeds is not None:
+        raise ValueError("seed and row_seeds are mutually exclusive")
     normalized_stop_ids = _normalize_stop_token_ids(stop_token_ids)
 
     generated_rows = [row.clone() for row in token_ids]
@@ -351,6 +361,7 @@ def _stream_generate_batch(
         token_ids.device,
         batch_size=token_ids.shape[0],
         seed=seed,
+        row_seeds=normalized_row_seeds,
         caller_torch_rng_state=torch_rng_state,
     )
     try:
@@ -485,9 +496,12 @@ def _row_generators(
     *,
     batch_size: int,
     seed: int | None,
+    row_seeds: tuple[int, ...] | None,
     caller_torch_rng_state: torch.Tensor,
 ) -> tuple[torch.Generator, ...]:
-    if seed is None:
+    if row_seeds is not None:
+        resolved_seeds = row_seeds
+    elif seed is None:
         seed_source = torch.Generator(device="cpu")
         seed_source.set_state(caller_torch_rng_state)
         resolved_seed = int(
@@ -499,15 +513,35 @@ def _row_generators(
                 generator=seed_source,
             ).item()
         )
+        resolved_seeds = (resolved_seed,) * batch_size
     else:
-        resolved_seed = seed
+        resolved_seeds = (seed,) * batch_size
 
     generators = []
-    for _ in range(batch_size):
+    for resolved_seed in resolved_seeds:
         generator = torch.Generator(device=device)
         generator.manual_seed(resolved_seed)
         generators.append(generator)
     return tuple(generators)
+
+
+def _normalize_row_seeds(
+    row_seeds: Sequence[int] | None,
+    *,
+    batch_size: int,
+) -> tuple[int, ...] | None:
+    if row_seeds is None:
+        return None
+    if isinstance(row_seeds, (str, bytes)) or not isinstance(row_seeds, Sequence):
+        raise TypeError("row_seeds must be a sequence of integers")
+    if len(row_seeds) != batch_size:
+        raise ValueError(
+            f"row_seeds must contain exactly {batch_size} values, got {len(row_seeds)}"
+        )
+    return tuple(
+        require_integer(value, name=f"row_seeds[{index}]")
+        for index, value in enumerate(row_seeds)
+    )
 
 
 def _normalize_stop_token_ids(
