@@ -10,6 +10,13 @@ from scratch_llm.evaluation.chat.categorical import (
     evaluate_categorical_task,
     render_multiple_choice_prompt,
 )
+from scratch_llm.evaluation.chat.diagnostics import (
+    CodeFenceCategory,
+    CodePromptDiagnostic,
+    FixedSFTDiagnostics,
+    JSONPromptDiagnostic,
+    compute_fixed_sft_diagnostics,
+)
 from scratch_llm.evaluation.chat.generative import (
     CHAT_GENERATIVE_PROTOCOL_ID,
     CHAT_GENERATIVE_PROTOCOL_VERSION,
@@ -42,13 +49,18 @@ __all__ = [
     "CategoricalExample",
     "CategoricalTask",
     "CategoricalTaskResult",
+    "CodeFenceCategory",
+    "CodePromptDiagnostic",
+    "FixedSFTDiagnostics",
     "GenerativeEvaluationConfig",
     "GenerativeEvaluationError",
     "GenerativeProblem",
     "GenerativeTask",
     "GenerativeTaskResult",
     "GSM8KProblem",
+    "JSONPromptDiagnostic",
     "build_gsm8k_task",
+    "compute_fixed_sft_diagnostics",
     "derive_generative_sample_seed",
     "evaluate_categorical_task",
     "evaluate_generative_task",
