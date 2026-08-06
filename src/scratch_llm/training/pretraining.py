@@ -628,8 +628,8 @@ def _last_metric_step(path: Path) -> int | None:
             step = record.get("step")
             if not isinstance(step, int) or isinstance(step, bool):
                 raise ValueError("metric step must be an integer")
-            if last_step is not None and step <= last_step:
-                raise ValueError("metric steps must be strictly increasing")
+            if last_step is not None and step < last_step:
+                raise ValueError("metric steps must be monotonically non-decreasing")
             last_step = step
     except (OSError, ValueError, json.JSONDecodeError) as error:
         raise PretrainingError(f"invalid metrics file {path}: {error}") from error
