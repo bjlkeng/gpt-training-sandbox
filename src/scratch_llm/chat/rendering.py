@@ -42,6 +42,24 @@ class ChatRenderingError(ValueError):
     """A valid conversation cannot be used at the requested render boundary."""
 
 
+def render_multiple_choice_prompt(
+    question: str,
+    labels: Sequence[str],
+    choices: Sequence[str],
+) -> str:
+    """Render the shared letter-after-choice prompt used by SFT and evaluation."""
+
+    if len(labels) != len(choices) or not labels:
+        raise ChatRenderingError(
+            "labels and choices must have the same non-zero length"
+        )
+    prompt = f"Multiple Choice question: {question}\n"
+    prompt += "".join(
+        f"- {choice}={label}\n" for label, choice in zip(labels, choices, strict=True)
+    )
+    return prompt + "\nRespond only with the letter of the correct answer."
+
+
 @dataclass(frozen=True, slots=True)
 class RenderedConversation:
     """Immutable token IDs aligned one-for-one with assistant loss flags."""
@@ -354,5 +372,6 @@ __all__ = [
     "ShiftedSFTSequence",
     "render_completion_prompt",
     "render_conversation",
+    "render_multiple_choice_prompt",
     "shift_sft_targets",
 ]

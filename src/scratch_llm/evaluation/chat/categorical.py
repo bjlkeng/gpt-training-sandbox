@@ -18,7 +18,11 @@ from scratch_llm._validation import (
     require_positive_integer,
 )
 from scratch_llm.chat.conversation import Conversation, UserMessage
-from scratch_llm.chat.rendering import CHAT_RENDERER_ID, render_completion_prompt
+from scratch_llm.chat.rendering import (
+    CHAT_RENDERER_ID,
+    render_completion_prompt,
+    render_multiple_choice_prompt,
+)
 from scratch_llm.evaluation.chat.protocol import CHAT_EVAL_REFERENCE_COMMIT
 from scratch_llm.tokenization.tokenizer import Tokenizer
 from scratch_llm.utils import get_device
@@ -43,24 +47,6 @@ class CategoricalEvaluationError(ValueError):
     """A categorical task or model output cannot be scored safely."""
 
 
-def render_multiple_choice_prompt(
-    question: str,
-    labels: tuple[str, ...],
-    choices: tuple[str, ...],
-) -> str:
-    """Render the pinned letter-after-choice categorical chat prompt."""
-
-    if len(labels) != len(choices) or not labels:
-        raise CategoricalEvaluationError(
-            "labels and choices must have the same non-zero length"
-        )
-    prompt = f"Multiple Choice question: {question}\n"
-    prompt += "".join(
-        f"- {choice}={label}\n" for label, choice in zip(labels, choices, strict=True)
-    )
-    return prompt + "\nRespond only with the letter of the correct answer."
-
-
 @dataclass(frozen=True, slots=True)
 class CategoricalExample:
     """One user-only prompt with its declared answer-letter choices."""
@@ -70,6 +56,7 @@ class CategoricalExample:
     answer: str
     source_row: int
     identity: str
+    group: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.conversation, Conversation):
@@ -92,6 +79,8 @@ class CategoricalExample:
         try:
             require_non_negative_integer(self.source_row, name="source_row")
             require_non_empty_string(self.identity, name="identity")
+            if self.group is not None:
+                require_non_empty_string(self.group, name="group")
         except (TypeError, ValueError) as error:
             raise CategoricalEvaluationError(str(error)) from error
 
@@ -129,6 +118,48 @@ class CategoricalTask:
         source_rows = tuple(example.source_row for example in self.examples)
         if len(set(source_rows)) != len(source_rows):
             raise CategoricalEvaluationError("example source rows must be unique")
+        grouped = tuple(example.group is not None for example in self.examples)
+        if any(grouped) and not all(grouped):
+            raise CategoricalEvaluationError(
+                "categorical task examples must be either all grouped or all ungrouped"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class CategoricalGroupResult:
+    """Passed and evaluated counts for one optional categorical task group."""
+
+    name: str
+    passed_count: int
+    evaluated_count: int
+
+    def __post_init__(self) -> None:
+        try:
+            require_non_empty_string(self.name, name="name")
+            require_non_negative_integer(self.passed_count, name="passed_count")
+            require_positive_integer(self.evaluated_count, name="evaluated_count")
+        except (TypeError, ValueError) as error:
+            raise CategoricalEvaluationError(str(error)) from error
+        if self.passed_count > self.evaluated_count:
+            raise CategoricalEvaluationError(
+                "group passed_count must not exceed evaluated_count"
+            )
+
+    @property
+    def accuracy(self) -> float:
+        """Return group accuracy derived from exact integer counts."""
+
+        return self.passed_count / self.evaluated_count
+
+    def to_dict(self) -> dict[str, object]:
+        """Return stable JSON-compatible group counts."""
+
+        return {
+            "accuracy": self.accuracy,
+            "evaluated": self.evaluated_count,
+            "name": self.name,
+            "passed": self.passed_count,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +178,7 @@ class CategoricalTaskResult:
     evaluated_count: int
     available_count: int
     elapsed_seconds: float
+    groups: tuple[CategoricalGroupResult, ...] = ()
     renderer_identity: str = CHAT_RENDERER_ID
 
     def __post_init__(self) -> None:
@@ -197,6 +229,25 @@ class CategoricalTaskResult:
                 raise CategoricalEvaluationError(str(error)) from error
         else:
             raise CategoricalEvaluationError("run_kind must be 'bounded' or 'full'")
+        if not isinstance(self.groups, tuple) or any(
+            not isinstance(group, CategoricalGroupResult) for group in self.groups
+        ):
+            raise TypeError("groups must be a tuple of CategoricalGroupResult values")
+        group_names = tuple(group.name for group in self.groups)
+        if group_names != tuple(sorted(group_names)) or len(set(group_names)) != len(
+            group_names
+        ):
+            raise CategoricalEvaluationError(
+                "groups must have unique names in sorted order"
+            )
+        if self.groups and (
+            sum(group.passed_count for group in self.groups) != self.passed_count
+            or sum(group.evaluated_count for group in self.groups)
+            != self.evaluated_count
+        ):
+            raise CategoricalEvaluationError(
+                "group counts must reconcile with overall counts"
+            )
 
     @property
     def accuracy(self) -> float:
@@ -215,6 +266,7 @@ class CategoricalTaskResult:
                 "passed": self.passed_count,
             },
             "elapsed_seconds": self.elapsed_seconds,
+            "groups": [group.to_dict() for group in self.groups],
             "identities": {
                 "checkpoint": self.checkpoint_identity,
                 "dataset": self.dataset_identity,
@@ -300,6 +352,7 @@ def evaluate_categorical_task(
     bos_token_id = tokenizer.get_bos_token_id()
     modes = tuple((module, module.training) for module in model.modules())
     passed_count = 0
+    group_counts: dict[str, tuple[int, int]] = {}
     started_at = clock()
     try:
         model.eval()
@@ -323,9 +376,17 @@ def evaluate_categorical_task(
                             "model produced non-finite categorical candidate logits"
                         )
                     predicted_index = int(candidate_logits.argmax().item())
-                    passed_count += int(
-                        example.labels[predicted_index] == example.answer
-                    )
+                    passed = int(example.labels[predicted_index] == example.answer)
+                    passed_count += passed
+                    if example.group is not None:
+                        group_passed, group_evaluated = group_counts.get(
+                            example.group,
+                            (0, 0),
+                        )
+                        group_counts[example.group] = (
+                            group_passed + passed,
+                            group_evaluated + 1,
+                        )
     finally:
         for module, training in modes:
             module.training = training
@@ -343,6 +404,14 @@ def evaluate_categorical_task(
         evaluated_count=len(examples),
         available_count=len(task.examples),
         elapsed_seconds=elapsed_seconds,
+        groups=tuple(
+            CategoricalGroupResult(
+                name=name,
+                passed_count=counts[0],
+                evaluated_count=counts[1],
+            )
+            for name, counts in sorted(group_counts.items())
+        ),
     )
 
 
@@ -414,6 +483,7 @@ __all__ = [
     "CHAT_EVAL_REFERENCE_COMMIT",
     "CategoricalEvaluationError",
     "CategoricalExample",
+    "CategoricalGroupResult",
     "CategoricalRunKind",
     "CategoricalTask",
     "CategoricalTaskResult",

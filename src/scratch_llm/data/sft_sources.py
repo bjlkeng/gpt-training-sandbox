@@ -28,6 +28,7 @@ from scratch_llm.chat.conversation import (
     UserMessage,
     parse_conversation,
 )
+from scratch_llm.chat.rendering import render_multiple_choice_prompt
 from scratch_llm.data.hub import CachedHubParquetDataset, HubDatasetSpec
 from scratch_llm.identity import canonical_json_identity
 
@@ -169,12 +170,7 @@ def normalize_mmlu_row(
         ):
             raise SFTDatasetRowError("answer must be an integer in [0, 3]")
 
-        prompt = f"Multiple Choice question: {question}\n"
-        prompt += "".join(
-            f"- {choice}={letter}\n"
-            for letter, choice in zip(_MMLU_LETTERS, choices, strict=True)
-        )
-        prompt += "\nRespond only with the letter of the correct answer."
+        prompt = render_multiple_choice_prompt(question, _MMLU_LETTERS, choices)
         return Conversation(
             messages=(
                 UserMessage(content=prompt),
