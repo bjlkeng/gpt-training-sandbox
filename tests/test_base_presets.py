@@ -204,15 +204,20 @@ def test_111m_3090_experiment_preset_is_exact_and_metrics_focused() -> None:
     assert config.train.warmdown_ratio == pytest.approx(0.5)
     assert config.train.eval_every == 500
     assert config.train.save_every == 1_000
-    assert derive_grad_accum_steps(
-        device_batch_size=config.train.device_batch_size,
-        seq_len=config.model.seq_len,
-        total_batch_size_tokens=config.train.total_batch_size_tokens,
-    ) == 8
+    assert (
+        derive_grad_accum_steps(
+            device_batch_size=config.train.device_batch_size,
+            seq_len=config.model.seq_len,
+            total_batch_size_tokens=config.train.total_batch_size_tokens,
+        )
+        == 8
+    )
 
     model = GPT(config.model)
     assert count_parameters(model) == 110_906_112
-    assert config.train.max_steps * config.train.total_batch_size_tokens == 1_966_080_000
+    assert (
+        config.train.max_steps * config.train.total_batch_size_tokens == 1_966_080_000
+    )
 
 
 def test_readme_documents_the_preset_boundary_and_3090_smoke_commands() -> None:
