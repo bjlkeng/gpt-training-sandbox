@@ -95,6 +95,16 @@ def test_every_roadmap_command_has_dependency_light_help(module: str) -> None:
     assert "Traceback" not in result.stderr
 
 
+def test_eval_chat_help_requires_explicit_unsafe_code_execution_opt_in() -> None:
+    result = _run_module("scripts.eval_chat", "--help")
+
+    assert result.returncode == 0, result.stderr
+    assert "--allow-generated-code-execution" in result.stdout
+    assert "not safe for malicious or adversarial code" in " ".join(
+        result.stdout.split()
+    )
+
+
 @pytest.mark.parametrize("module", CONFIG_COMMANDS)
 def test_config_commands_share_explicit_wandb_options(module: str) -> None:
     result = _run_module(module, "--help")

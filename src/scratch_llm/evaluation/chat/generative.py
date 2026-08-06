@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 import hashlib
 import json
+import re
 from typing import Final, Literal, TypeAlias
 
 import torch
@@ -35,11 +36,36 @@ CHAT_GENERATIVE_PROTOCOL_VERSION: Final = 1
 GENERATIVE_SEED_STRATEGY: Final = "sha256_order_problem_sample_v1"
 _MAX_SEED: Final = 2**63 - 1
 GenerativeRunKind: TypeAlias = Literal["bounded", "full"]
-GenerativeScorer: TypeAlias = Callable[["GenerativeProblem", str], bool]
+_SCORE_OUTCOME = re.compile(r"[a-z][a-z0-9_]*")
 
 
 class GenerativeEvaluationError(ValueError):
     """A generative task, completion, or result cannot be scored safely."""
+
+
+@dataclass(frozen=True, slots=True)
+class GenerativeScore:
+    """One boolean score with an optional normalized, content-free outcome."""
+
+    passed: bool
+    outcome: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.passed, bool):
+            raise TypeError("passed must be a boolean")
+        if self.outcome is not None and (
+            not isinstance(self.outcome, str)
+            or _SCORE_OUTCOME.fullmatch(self.outcome) is None
+        ):
+            raise GenerativeEvaluationError(
+                "outcome must use lowercase letters, digits, and underscores"
+            )
+
+
+GenerativeScorer: TypeAlias = Callable[
+    ["GenerativeProblem", str],
+    bool | GenerativeScore,
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +174,7 @@ class GenerativeSampleResult:
     completion_reason: CompletionReason
     stop_token_id: int | None
     completion_identity: str
+    score_outcome: str | None = None
 
     def __post_init__(self) -> None:
         require_non_negative_integer(self.problem_index, name="problem_index")
@@ -184,11 +211,18 @@ class GenerativeSampleResult:
             self.completion_identity,
             name="completion_identity",
         )
+        if self.score_outcome is not None and (
+            not isinstance(self.score_outcome, str)
+            or _SCORE_OUTCOME.fullmatch(self.score_outcome) is None
+        ):
+            raise GenerativeEvaluationError(
+                "score_outcome must use lowercase letters, digits, and underscores"
+            )
 
     def to_dict(self) -> dict[str, object]:
         """Return stable metadata without raw completion content."""
 
-        return {
+        payload: dict[str, object] = {
             "completion_identity": self.completion_identity,
             "completion_reason": self.completion_reason,
             "generated_token_count": self.generated_token_count,
@@ -198,6 +232,9 @@ class GenerativeSampleResult:
             "seed": self.seed,
             "stop_token_id": self.stop_token_id,
         }
+        if self.score_outcome is not None:
+            payload["score_outcome"] = self.score_outcome
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,6 +299,7 @@ class GenerativeTaskResult:
     bos_token_id: int
     config: GenerativeEvaluationConfig
     problems: tuple[GenerativeProblemResult, ...]
+    scoring_identity: str | None = None
     renderer_identity: str = CHAT_RENDERER_ID
 
     def __post_init__(self) -> None:
@@ -291,6 +329,14 @@ class GenerativeTaskResult:
             raise GenerativeEvaluationError(
                 f"renderer_identity must equal {CHAT_RENDERER_ID!r}"
             )
+        if self.scoring_identity is not None:
+            try:
+                require_non_empty_string(
+                    self.scoring_identity,
+                    name="scoring_identity",
+                )
+            except (TypeError, ValueError) as error:
+                raise GenerativeEvaluationError(str(error)) from error
         if not isinstance(self.config, GenerativeEvaluationConfig):
             raise TypeError("config must be a GenerativeEvaluationConfig")
         if not isinstance(self.problems, tuple) or not self.problems:
@@ -341,6 +387,15 @@ class GenerativeTaskResult:
                 raise GenerativeEvaluationError(str(error)) from error
         else:
             raise GenerativeEvaluationError("run_kind must be 'bounded' or 'full'")
+        has_outcomes = any(
+            sample.score_outcome is not None
+            for problem in self.problems
+            for sample in problem.samples
+        )
+        if has_outcomes and self.scoring_identity is None:
+            raise GenerativeEvaluationError(
+                "scoring_identity is required when samples record score outcomes"
+            )
 
     @property
     def evaluated_count(self) -> int:
@@ -388,10 +443,23 @@ class GenerativeTaskResult:
             ),
         }
 
+    @property
+    def score_outcome_counts(self) -> dict[str, int]:
+        """Return stable counts for normalized task-specific scoring outcomes."""
+
+        counts: dict[str, int] = {}
+        for problem in self.problems:
+            for sample in problem.samples:
+                if sample.score_outcome is not None:
+                    counts[sample.score_outcome] = (
+                        counts.get(sample.score_outcome, 0) + 1
+                    )
+        return dict(sorted(counts.items()))
+
     def to_dict(self) -> dict[str, object]:
         """Return the complete result without raw prompts or completions."""
 
-        return {
+        payload: dict[str, object] = {
             "accuracy": self.accuracy,
             "counts": {
                 "available_problems": self.available_count,
@@ -428,6 +496,12 @@ class GenerativeTaskResult:
             },
             "task_name": self.task_name,
         }
+        if self.scoring_identity is not None:
+            payload["scoring"] = {
+                "identity": self.scoring_identity,
+                "outcome_counts": self.score_outcome_counts,
+            }
+        return payload
 
 
 def derive_generative_sample_seed(
@@ -485,6 +559,7 @@ def evaluate_generative_task(
     config: GenerativeEvaluationConfig,
     max_problems: int | None,
     device: str | torch.device,
+    scoring_identity: str | None = None,
 ) -> GenerativeTaskResult:
     """Generate one seeded sample batch per problem and apply pass-any scoring."""
 
@@ -507,6 +582,11 @@ def evaluate_generative_task(
             max_problems = require_positive_integer(
                 max_problems,
                 name="max_problems",
+            )
+        if scoring_identity is not None:
+            scoring_identity = require_non_empty_string(
+                scoring_identity,
+                name="scoring_identity",
             )
     except (TypeError, ValueError) as error:
         raise GenerativeEvaluationError(str(error)) from error
@@ -569,14 +649,20 @@ def evaluate_generative_task(
                 )
             completion = tokenizer.decode(sequence.generated_token_ids)
             try:
-                passed = score_completion(problem, completion)
+                score = score_completion(problem, completion)
             except Exception as error:
                 raise GenerativeEvaluationError(
                     f"{task.name} problem {problem_index} scoring failed: {error}"
                 ) from error
-            if not isinstance(passed, bool):
+            if isinstance(score, bool):
+                passed = score
+                score_outcome = None
+            elif isinstance(score, GenerativeScore):
+                passed = score.passed
+                score_outcome = score.outcome
+            else:
                 raise GenerativeEvaluationError(
-                    "score_completion must return a boolean"
+                    "score_completion must return a boolean or GenerativeScore"
                 )
             sample_results.append(
                 GenerativeSampleResult(
@@ -591,6 +677,7 @@ def evaluate_generative_task(
                     completion_identity=canonical_json_identity(
                         {"generated_token_ids": list(sequence.generated_token_ids)}
                     ),
+                    score_outcome=score_outcome,
                 )
             )
         immutable_samples = tuple(sample_results)
@@ -617,6 +704,7 @@ def evaluate_generative_task(
         bos_token_id=bos_token_id,
         config=config,
         problems=tuple(problem_results),
+        scoring_identity=scoring_identity,
     )
 
 
@@ -654,6 +742,7 @@ __all__ = [
     "GenerativeProblem",
     "GenerativeProblemResult",
     "GenerativeRunKind",
+    "GenerativeScore",
     "GenerativeSampleResult",
     "GenerativeScorer",
     "GenerativeTask",

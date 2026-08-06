@@ -21,6 +21,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Checkpoint to evaluate once chat evaluation is implemented.",
     )
+    parser.add_argument(
+        "--allow-generated-code-execution",
+        action="store_true",
+        help=(
+            "Explicitly allow local HumanEval generated-code execution. The "
+            "resource-limited subprocess is not safe for malicious or adversarial "
+            "code."
+        ),
+    )
     return parser
 
 
