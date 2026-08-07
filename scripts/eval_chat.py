@@ -17,6 +17,7 @@ from scratch_llm.evaluation.chat.reporting import (
     ChatTaskResult,
     normalize_chat_task_names,
 )
+from scratch_llm.evaluation.chat.tracking import track_completed_chat_evaluation
 from scratch_llm.evaluation.sft_sampling import FixedSFTSamplingConfig
 from scratch_llm.run import RunConflictError
 from scratch_llm.training.checkpoint import CheckpointError
@@ -188,6 +189,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 run_dir=paths.run_dir,
                 executor=executor,
                 progress=_print_task_progress,
+            )
+            track_completed_chat_evaluation(
+                output.completed,
+                report_path=output.report_path,
+                tracker=tracker,
+                run_dir=paths.run_dir,
             )
     except (
         ChatEvaluationError,

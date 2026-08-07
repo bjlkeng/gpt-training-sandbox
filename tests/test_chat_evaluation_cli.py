@@ -22,6 +22,13 @@ from scratch_llm.training.checkpoint import load_checkpoint_metadata
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_ALL_TASKS = (
+    "ARC-Easy",
+    "ARC-Challenge",
+    "MMLU",
+    "GSM8K",
+    "HumanEval",
+)
 
 
 def _publish_cache(
@@ -146,6 +153,11 @@ def _run(*arguments: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _tracking_records(output_dir: Path, run_name: str) -> list[dict[str, object]]:
+    path = output_dir / run_name / "metrics" / "metrics.jsonl"
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
 def test_cpu_cli_full_filtered_bounded_failure_refusal_and_deterministic_rerun(
     tmp_path: Path,
 ) -> None:
@@ -200,10 +212,46 @@ def test_cpu_cli_full_filtered_bounded_failure_refusal_and_deterministic_rerun(
         "PRIVATE_TEST",
     ):
         assert private not in serialized
+    records = _tracking_records(output_dir, "chat-eval-full")
+    metric_records = [
+        record for record in records if record["record_type"] == "metrics"
+    ]
+    artifact_records = [
+        record for record in records if record["record_type"] == "artifact"
+    ]
+    expected_full_metrics = {
+        "sft/chatcore_metric": payload["chatcore"]["chatcore_metric"],
+        "sft/chatcore_cat": payload["chatcore"]["chatcore_cat"],
+        **{
+            f"sft/chatcore/{task['score']['task_name']}": task["score"][
+                "centered_score"
+            ]
+            for task in payload["tasks"]
+        },
+    }
+    assert [record["metrics"] for record in metric_records] == [expected_full_metrics]
+    assert artifact_records[0]["path"] == "metrics/chat_eval.json"
+    summary = json.loads(
+        (output_dir / "chat-eval-full" / "metrics" / "summary.json").read_text()
+    )
+    assert summary["latest_metrics"] == expected_full_metrics
+    tracking_text = json.dumps(records)
+    for private in (
+        "PRIVATE_ARC_QUESTION",
+        "PRIVATE_MMLU_QUESTION",
+        "PRIVATE_GSM8K_QUESTION",
+        "PRIVATE_HUMANEVAL_PROMPT",
+        "PRIVATE_REFERENCE",
+        "PRIVATE_TEST",
+    ):
+        assert private not in tracking_text
 
     repeated = _run(*common, "--allow-generated-code-execution")
     assert repeated.returncode == 0, repeated.stderr
     assert report_path.read_bytes() == original
+    repeated_records = _tracking_records(output_dir, "chat-eval-full")
+    assert sum(record["record_type"] == "metrics" for record in repeated_records) == 1
+    assert sum(record["record_type"] == "artifact" for record in repeated_records) == 1
 
     filtered = _run(
         *common,
@@ -219,6 +267,14 @@ def test_cpu_cli_full_filtered_bounded_failure_refusal_and_deterministic_rerun(
     assert filtered_payload["scope"]["kind"] == "partial"
     assert filtered_payload["scope"]["bounded"] is False
     assert filtered_payload["chatcore"]["chatcore_metric"] is None
+    filtered_metrics = next(
+        record["metrics"]
+        for record in _tracking_records(output_dir, "chat-eval-filtered")
+        if record["record_type"] == "metrics"
+    )
+    assert set(filtered_metrics) == {"sft/chatcore/partial/ARC-Easy"}
+    assert "sft/chatcore_metric" not in filtered_metrics
+    assert "sft/chatcore_cat" not in filtered_metrics
 
     bounded = _run(
         *common,
@@ -238,6 +294,16 @@ def test_cpu_cli_full_filtered_bounded_failure_refusal_and_deterministic_rerun(
     )
     assert bounded_payload["chatcore"]["chatcore_metric"] is None
     assert bounded_payload["chatcore"]["chatcore_cat"] is None
+    bounded_metrics = next(
+        record["metrics"]
+        for record in _tracking_records(output_dir, "chat-eval-bounded")
+        if record["record_type"] == "metrics"
+    )
+    assert set(bounded_metrics) == {
+        f"sft/chatcore/bounded/{task_name}" for task_name in _ALL_TASKS
+    }
+    assert "sft/chatcore_metric" not in bounded_metrics
+    assert "sft/chatcore_cat" not in bounded_metrics
 
     empty_cache = tmp_path / "empty-cache"
     empty_cache.mkdir()
@@ -257,6 +323,15 @@ def test_cpu_cli_full_filtered_bounded_failure_refusal_and_deterministic_rerun(
     assert failed.returncode != 0
     assert "Traceback" not in failed.stderr
     assert not (output_dir / "chat-eval-failed" / "metrics" / "chat_eval.json").exists()
+    failed_records = _tracking_records(output_dir, "chat-eval-failed")
+    assert not any(
+        record["record_type"] in {"metrics", "artifact"} for record in failed_records
+    )
+    failed_summary = json.loads(
+        (output_dir / "chat-eval-failed" / "metrics" / "summary.json").read_text()
+    )
+    assert failed_summary["status"] == "failed"
+    assert failed_summary["latest_metrics"] == {}
 
 
 def test_cli_dry_run_validates_scope_and_bounds_without_checkpoint_or_cache(
