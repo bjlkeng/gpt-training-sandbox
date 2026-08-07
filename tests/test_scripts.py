@@ -51,6 +51,7 @@ UNIMPLEMENTED_CONFIG_COMMANDS = tuple(
     not in {
         "scripts.benchmark_pretrain",
         "scripts.eval_base",
+        "scripts.eval_chat",
         "scripts.pretrain",
         "scripts.prepare_data",
         "scripts.eval_tokenizer",

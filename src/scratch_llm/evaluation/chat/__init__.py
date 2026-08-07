@@ -91,6 +91,23 @@ from scratch_llm.evaluation.chat.mmlu import (
     normalize_mmlu_eval_row,
 )
 from scratch_llm.evaluation.chat.protocol import CHAT_EVAL_REFERENCE_COMMIT
+from scratch_llm.evaluation.chat.pipeline import (
+    ChatEvaluationRun,
+    ChatTaskProgress,
+    evaluate_checkpoint_chat_model,
+)
+from scratch_llm.evaluation.chat.reporting import (
+    CHAT_EVALUATION_REPORT_FORMAT,
+    CHAT_EVALUATION_REPORT_FORMAT_VERSION,
+    CHAT_EVALUATION_REPORT_RELATIVE_PATH,
+    ChatEvaluationError,
+    ChatEvaluationReportConflictError,
+    ChatEvaluationSettings,
+    ChatTaskResult,
+    CompletedChatEvaluation,
+    normalize_chat_task_names,
+    write_chat_evaluation_report,
+)
 
 
 __all__ = [
@@ -102,6 +119,9 @@ __all__ = [
     "CHAT_CATEGORICAL_PROTOCOL_ID",
     "CHAT_CATEGORICAL_PROTOCOL_VERSION",
     "CHAT_EVAL_REFERENCE_COMMIT",
+    "CHAT_EVALUATION_REPORT_FORMAT",
+    "CHAT_EVALUATION_REPORT_FORMAT_VERSION",
+    "CHAT_EVALUATION_REPORT_RELATIVE_PATH",
     "CHAT_GENERATIVE_PROTOCOL_ID",
     "CHAT_GENERATIVE_PROTOCOL_VERSION",
     "CategoricalEvaluationError",
@@ -114,11 +134,18 @@ __all__ = [
     "ChatCoreRunKind",
     "ChatCoreTaskName",
     "ChatCoreTaskResult",
+    "ChatEvaluationError",
+    "ChatEvaluationReportConflictError",
+    "ChatEvaluationRun",
+    "ChatEvaluationSettings",
+    "ChatTaskProgress",
+    "ChatTaskResult",
     "CodeExecutionResult",
     "CodeExecutionStatus",
     "CodeExecutor",
     "CodeFenceCategory",
     "CodePromptDiagnostic",
+    "CompletedChatEvaluation",
     "FixedSFTDiagnostics",
     "GenerativeEvaluationConfig",
     "GenerativeEvaluationError",
@@ -155,6 +182,7 @@ __all__ = [
     "evaluate_categorical_task",
     "evaluate_generative_task",
     "evaluate_humaneval_task",
+    "evaluate_checkpoint_chat_model",
     "extract_gsm8k_answer",
     "extract_humaneval_program",
     "extract_leading_imports",
@@ -166,7 +194,9 @@ __all__ = [
     "load_mmlu_task",
     "normalize_mmlu_eval_row",
     "normalize_humaneval_row",
+    "normalize_chat_task_names",
     "render_multiple_choice_prompt",
     "score_gsm8k_completion",
     "score_humaneval_completion",
+    "write_chat_evaluation_report",
 ]
