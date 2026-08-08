@@ -804,6 +804,23 @@ uses the corresponding rectangular causal mask; SDPA uses `is_causal` for
 prefill and an explicit rectangular mask for one-token decode. Cached execution
 is accepted only in eval mode under `no_grad`/`inference_mode`.
 
+The shared generation API owns both execution policies. Pass `mode="naive"`
+or `mode="cached"` for an explicit comparison; leaving `mode=None` selects
+`model.use_kv_cache` from the checkpoint configuration. That single policy
+reaches `scripts.sample`, fixed base/SFT sampling, `ChatEngine`, terminal chat,
+and the local web service without duplicating a sampler or cache loop. Cached
+generation supports one sequence per request, prefills the exact cropped
+prompt once, and sends only the last visible token to every later model call.
+Sampling, per-row RNG, stop-token omission, stream events, cancellation, and
+mode/RNG restoration remain shared with the naive path.
+
+Because this first cache is bounded and does not evict committed entries, the
+cropped prompt plus at most `max_new_tokens - 1` decode inputs must fit within
+`model.max_seq_len`. Cached batched requests and requests that cannot fit are
+rejected before model mode, RNG state, or cache storage is mutated. Each
+single-sequence generation allocates its own cache and logically resets it on
+completion, iterator close, or failure.
+
 For an opt-in long-context kernel-only comparison that writes elapsed time and
 CUDA peak allocated/reserved memory without downloading anything or enforcing
 a noisy performance threshold:

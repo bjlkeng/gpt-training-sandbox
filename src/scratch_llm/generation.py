@@ -1,4 +1,4 @@
-"""Shared no-cache autoregressive generation for decoder-only models."""
+"""Shared naive and KV-cached autoregressive generation."""
 
 from __future__ import annotations
 
@@ -20,6 +20,8 @@ from scratch_llm._validation import (
 
 
 CompletionReason = Literal["stop_token", "max_new_tokens"]
+GenerationMode = Literal["naive", "cached"]
+_GENERATION_MODES = frozenset({"naive", "cached"})
 _INTEGER_DTYPES = frozenset(
     {
         torch.uint8,
@@ -151,6 +153,7 @@ def generate(
     top_k: int | None = None,
     seed: int | None = None,
     stop_token_ids: None = None,
+    mode: GenerationMode | None = None,
 ) -> torch.Tensor: ...
 
 
@@ -164,6 +167,7 @@ def generate(
     top_k: int | None = None,
     seed: int | None = None,
     stop_token_ids: Collection[int],
+    mode: GenerationMode | None = None,
 ) -> GenerationBatchResult: ...
 
 
@@ -176,6 +180,7 @@ def generate(
     top_k: int | None = None,
     seed: int | None = None,
     stop_token_ids: Collection[int] | None = None,
+    mode: GenerationMode | None = None,
 ) -> torch.Tensor | GenerationBatchResult:
     """Generate tokens, returning stop metadata when a stop set is explicit.
 
@@ -192,6 +197,7 @@ def generate(
         top_k=top_k,
         seed=seed,
         stop_token_ids=() if stop_token_ids is None else stop_token_ids,
+        mode=mode,
     )
     if stop_token_ids is not None:
         return result
@@ -212,6 +218,7 @@ def generate_sequences(
     seed: int | None = None,
     row_seeds: Sequence[int] | None = None,
     stop_token_ids: Collection[int] = (),
+    mode: GenerationMode | None = None,
 ) -> GenerationBatchResult:
     """Generate variable-length rows with independent finished-row tracking."""
 
@@ -225,6 +232,7 @@ def generate_sequences(
         seed=seed,
         row_seeds=row_seeds,
         stop_token_ids=stop_token_ids,
+        mode=mode,
     ):
         if isinstance(event, GenerationBatchResult):
             result = event
@@ -242,6 +250,7 @@ def stream_generate_sequence(
     top_k: int | None = None,
     seed: int | None = None,
     stop_token_ids: Collection[int] = (),
+    mode: GenerationMode | None = None,
 ) -> Generator[GenerationStreamEvent, None, None]:
     """Incrementally generate one row using the shared batch sampling loop.
 
@@ -266,6 +275,7 @@ def stream_generate_sequence(
         seed=seed,
         row_seeds=None,
         stop_token_ids=stop_token_ids,
+        mode=mode,
     )
     try:
         for event in batch_stream:
@@ -294,6 +304,7 @@ def _stream_generate_batch(
     seed: int | None,
     row_seeds: Sequence[int] | None,
     stop_token_ids: Collection[int],
+    mode: GenerationMode | None,
 ) -> Generator[_BatchGenerationStep | GenerationBatchResult, None, None]:
     """Yield batch sampling steps and one final result from a single loop."""
 
@@ -338,6 +349,27 @@ def _stream_generate_batch(
     if seed is not None and normalized_row_seeds is not None:
         raise ValueError("seed and row_seeds are mutually exclusive")
     normalized_stop_ids = _normalize_stop_token_ids(stop_token_ids)
+    resolved_mode = _resolve_generation_mode(model, mode)
+    cache_factory = None
+    if resolved_mode == "cached":
+        if token_ids.shape[0] != 1:
+            raise ValueError(
+                "cached generation requires exactly one batch row; "
+                f"received {token_ids.shape[0]}"
+            )
+        prompt_context_length = min(token_ids.shape[1], max_seq_len)
+        required_positions = prompt_context_length + max_new_tokens - 1
+        if required_positions > max_seq_len:
+            raise ValueError(
+                "cached generation would exceed cache capacity: cropped prompt "
+                f"length {prompt_context_length} plus {max_new_tokens - 1} "
+                f"decode positions exceeds model.max_seq_len {max_seq_len}"
+            )
+        cache_factory = getattr(model, "create_kv_cache", None)
+        if not callable(cache_factory):
+            raise TypeError(
+                "cached generation requires model.create_kv_cache(batch_size, capacity)"
+            )
 
     generated_rows = [row.clone() for row in token_ids]
     prompt_token_ids = tuple(
@@ -364,19 +396,34 @@ def _stream_generate_batch(
         row_seeds=normalized_row_seeds,
         caller_torch_rng_state=torch_rng_state,
     )
+    cache: object | None = None
     try:
         model.eval()
-        for _ in range(max_new_tokens):
+        if cache_factory is not None:
+            cache = cache_factory(batch_size=1, capacity=max_seq_len)
+            if not callable(getattr(cache, "reset", None)):
+                raise TypeError("model.create_kv_cache must return a resettable cache")
+        for generation_step in range(max_new_tokens):
             active_indices = [
                 index for index, is_finished in enumerate(finished) if not is_finished
             ]
             if not active_indices:
                 break
             with torch.inference_mode():
-                context = torch.stack(
-                    [generated_rows[index][-max_seq_len:] for index in active_indices]
+                if resolved_mode == "cached" and generation_step > 0:
+                    context = generated_rows[0][-1:].unsqueeze(0)
+                else:
+                    context = torch.stack(
+                        [
+                            generated_rows[index][-max_seq_len:]
+                            for index in active_indices
+                        ]
+                    )
+                logits = (
+                    model(context)
+                    if resolved_mode == "naive"
+                    else model(context, kv_cache=cache)
                 )
-                logits = model(context)
                 if not isinstance(logits, torch.Tensor):
                     raise TypeError(
                         "model must return a Tensor of next-token logits, "
@@ -455,13 +502,34 @@ def _stream_generate_batch(
             sampled_token_counts=sampled_token_counts,
         )
     finally:
-        for module, training_mode in module_modes:
-            module.training = training_mode
-        random.setstate(python_rng_state)
-        np.random.set_state(numpy_rng_state)
-        torch.random.set_rng_state(torch_rng_state)
-        if cuda_rng_states is not None:
-            torch.cuda.set_rng_state_all(list(cuda_rng_states))
+        try:
+            if cache is not None:
+                cache.reset()  # type: ignore[attr-defined]
+        finally:
+            for module, training_mode in module_modes:
+                module.training = training_mode
+            random.setstate(python_rng_state)
+            np.random.set_state(numpy_rng_state)
+            torch.random.set_rng_state(torch_rng_state)
+            if cuda_rng_states is not None:
+                torch.cuda.set_rng_state_all(list(cuda_rng_states))
+
+
+def _resolve_generation_mode(
+    model: nn.Module,
+    mode: GenerationMode | None,
+) -> GenerationMode:
+    if mode is not None:
+        if not isinstance(mode, str) or mode not in _GENERATION_MODES:
+            raise ValueError("mode must be 'naive', 'cached', or None")
+        return mode  # type: ignore[return-value]
+    config = getattr(model, "config", None)
+    if config is None or not hasattr(config, "use_kv_cache"):
+        return "naive"
+    use_kv_cache = getattr(config, "use_kv_cache")
+    if not isinstance(use_kv_cache, bool):
+        raise TypeError("model.config.use_kv_cache must be a boolean")
+    return "cached" if use_kv_cache else "naive"
 
 
 def _build_batch_result(
@@ -576,6 +644,7 @@ __all__ = [
     "GeneratedSequence",
     "GenerationBatchResult",
     "GenerationComplete",
+    "GenerationMode",
     "GenerationStreamEvent",
     "generate",
     "generate_sequences",
