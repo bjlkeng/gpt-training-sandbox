@@ -26,6 +26,7 @@ from scratch_llm.data.loaders import create_token_loader
 from scratch_llm.model import GPT
 from scratch_llm.diagnostics.oom import PretrainingOOMError, diagnose_out_of_memory
 from scratch_llm.training.optim import build_lr_scheduler, build_optimizer
+from scratch_llm.training.precision import PrecisionPolicy, build_precision_policy
 from scratch_llm.training.pretraining import (
     PreparedPretrainingBatchIterator,
     load_production_tokenizer,
@@ -70,6 +71,7 @@ def run_benchmark_training_steps(
     collect_memory: Callable[[str | torch.device], AcceleratorMemorySnapshot] = (
         collect_accelerator_memory
     ),
+    precision: PrecisionPolicy | None = None,
 ) -> BenchmarkStepExecution:
     """Run warmup plus timed work through the shared optimizer-step boundary."""
 
@@ -83,6 +85,11 @@ def run_benchmark_training_steps(
             "warmup_steps + timed_steps cannot exceed train.max_steps; "
             f"got {total_steps} > {config.train.max_steps}"
         )
+    active_precision = (
+        build_precision_policy(dtype=config.train.dtype, device=config.run.device)
+        if precision is None
+        else precision
+    )
     reset_results: list[bool] = []
     collected_snapshots: list[AcceleratorMemorySnapshot] = []
 
@@ -121,6 +128,7 @@ def run_benchmark_training_steps(
         clock=clock,
         reset_memory_peak=record_reset,
         collect_memory=record_collection,
+        precision=active_precision,
     )
     if len(reset_results) != total_steps:
         raise RuntimeError(
@@ -168,8 +176,9 @@ def execute_production_throughput_benchmark(
     """Load immutable production artifacts and execute the bounded protocol."""
 
     validate_production_pretraining_config(config)
-    set_seed(config.run.seed)
     device = get_device(config.run.device)
+    precision = build_precision_policy(dtype=config.train.dtype, device=device)
+    set_seed(config.run.seed)
     tokenizer = load_production_tokenizer(config)
     with ExitStack() as resources:
         reader = resources.enter_context(
@@ -203,6 +212,7 @@ def execute_production_throughput_benchmark(
                 scheduler=scheduler,
                 warmup_steps=warmup_steps,
                 timed_steps=timed_steps,
+                precision=precision,
             )
         except torch.OutOfMemoryError as error:
             optimizer.zero_grad(set_to_none=True)
