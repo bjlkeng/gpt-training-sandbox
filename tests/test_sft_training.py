@@ -24,6 +24,7 @@ from scratch_llm.config import (
     SFTSourceConfig,
     TokenizerConfig,
     TrainConfig,
+    TrainDType,
 )
 from scratch_llm.evaluation.sft_sampling import (
     FixedSFTSamplingConfig,
@@ -313,11 +314,14 @@ def test_gradient_accumulation_preserves_the_exact_sft_token_budget(
     assert telemetry.supervised_target_tokens > 0
 
 
+@pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
 def test_exact_sft_resume_matches_uninterrupted_training(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    dtype: TrainDType,
 ) -> None:
     config = _config(tmp_path, run_name="sft-uninterrupted")
+    config.sft.dtype = dtype
     base = _base_checkpoint(tmp_path, config)
     fresh_clock = count()
     monkeypatch.setattr(training_loop, "perf_counter", lambda: float(next(fresh_clock)))
@@ -325,6 +329,7 @@ def test_exact_sft_resume_matches_uninterrupted_training(
     resume_checkpoint = uninterrupted.paths.checkpoints_dir / "step_000002.pt"
 
     resumed_config = _config(tmp_path, run_name="sft-resumed")
+    resumed_config.sft.dtype = dtype
     resumed_config.sft.base_checkpoint = str(base)
     resumed_clock = count()
     monkeypatch.setattr(
@@ -351,6 +356,8 @@ def test_exact_sft_resume_matches_uninterrupted_training(
         _assert_nested_equal(resumed_payload[field], uninterrupted_payload[field])
     assert resumed_payload["continuation"] == uninterrupted_payload["continuation"]
     assert resumed_payload["validation"] == uninterrupted_payload["validation"]
+    assert resumed_payload["precision"] == uninterrupted_payload["precision"]
+    assert resumed_payload["precision"]["dtype"] == dtype
     assert resumed.initial_step == 2
     assert resumed.final_step == 4
     assert resumed.base_checkpoint_identity == file_identity(base)

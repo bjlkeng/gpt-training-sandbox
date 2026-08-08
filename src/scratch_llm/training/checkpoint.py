@@ -42,6 +42,11 @@ from scratch_llm.training.rng_state import (
     TrainingRNGState,
     preserve_global_rng_state,
 )
+from scratch_llm.training.precision import (
+    PrecisionCheckpointState,
+    PrecisionError,
+    legacy_float32_precision_state,
+)
 from scratch_llm.tokenization.tokenizer import (
     BYTE_VOCAB_SIZE,
     NANOCHAT_SPECIAL_TOKENS,
@@ -60,7 +65,8 @@ ValidationCheckpointMetadata: TypeAlias = (
     ValidationCheckpointState | SFTValidationCheckpointState
 )
 
-CHECKPOINT_FORMAT_VERSION = 6
+CHECKPOINT_FORMAT_VERSION = 7
+_STAGE_CHECKPOINT_FORMAT_VERSION = 6
 _TRACKING_CHECKPOINT_FORMAT_VERSION = 5
 _VALIDATION_CHECKPOINT_FORMAT_VERSION = 4
 _EXACT_CHECKPOINT_FORMAT_VERSION = 3
@@ -72,6 +78,7 @@ _SUPPORTED_CHECKPOINT_FORMAT_VERSIONS = frozenset(
         _EXACT_CHECKPOINT_FORMAT_VERSION,
         _VALIDATION_CHECKPOINT_FORMAT_VERSION,
         _TRACKING_CHECKPOINT_FORMAT_VERSION,
+        _STAGE_CHECKPOINT_FORMAT_VERSION,
         CHECKPOINT_FORMAT_VERSION,
     }
 )
@@ -93,6 +100,7 @@ _CURRENT_CHECKPOINT_KEYS = _TRACKING_CHECKPOINT_KEYS | {
     "base_checkpoint_identity",
     "training_stage",
 }
+_PRECISION_CHECKPOINT_KEYS = _CURRENT_CHECKPOINT_KEYS | {"precision"}
 _CONTINUATION_KEYS = frozenset(
     {
         "loader_format",
@@ -121,6 +129,7 @@ class ModelCheckpoint:
     tracking: TrackingState | None
     training_stage: TrainingStage
     base_checkpoint_identity: str | None
+    precision: PrecisionCheckpointState | None
 
 
 @dataclass(frozen=True)
@@ -142,6 +151,7 @@ class CheckpointMetadata:
     tracking: TrackingState | None
     training_stage: TrainingStage
     base_checkpoint_identity: str | None
+    precision: PrecisionCheckpointState | None
 
 
 @dataclass(frozen=True)
@@ -269,6 +279,7 @@ class _DecodedCheckpoint:
     tracking: TrackingState | None
     training_stage: TrainingStage
     base_checkpoint_identity: str | None
+    precision: PrecisionCheckpointState | None
 
 
 def _validate_training_stage(value: object) -> TrainingStage:
@@ -507,6 +518,7 @@ def save_checkpoint(
     tracking: TrackingState | None = None,
     training_stage: TrainingStage = "pretrain",
     base_checkpoint_identity: str | None = None,
+    precision: PrecisionCheckpointState | None = None,
 ) -> Path:
     """Atomically save legacy state or an exact current continuation."""
 
@@ -562,6 +574,28 @@ def save_checkpoint(
         raise ValueError("tracking metadata requires an exact continuation")
     if training_stage == "sft" and continuation is None:
         raise ValueError("SFT checkpoints require an exact continuation")
+    active_train = _training_config_for_stage(config, training_stage)
+    if continuation is None and precision is not None:
+        raise ValueError("precision state requires an exact continuation")
+    if continuation is not None:
+        if precision is None:
+            if active_train.dtype != "float32":
+                raise ValueError(
+                    f"{active_train.dtype} checkpoints require explicit runtime "
+                    "precision state"
+                )
+            model_device = next(model.parameters()).device
+            precision = legacy_float32_precision_state(model_device)
+        if not isinstance(precision, PrecisionCheckpointState):
+            raise TypeError(
+                "precision must be a PrecisionCheckpointState or None, got "
+                f"{type(precision).__name__}"
+            )
+        if precision.dtype != active_train.dtype:
+            raise ValueError(
+                "checkpoint precision dtype does not match the active training "
+                f"config: {precision.dtype!r} != {active_train.dtype!r}"
+            )
     format_version = (
         CHECKPOINT_FORMAT_VERSION
         if continuation is not None
@@ -582,6 +616,9 @@ def save_checkpoint(
         payload["tracking"] = None if tracking is None else tracking.to_dict()
         payload["training_stage"] = training_stage
         payload["base_checkpoint_identity"] = base_checkpoint_identity
+        if precision is None:  # pragma: no cover - exact branch constructs it.
+            raise AssertionError("exact checkpoint lost precision state")
+        payload["precision"] = precision.to_dict()
     return _atomic_torch_save(payload, Path(path))
 
 
@@ -766,6 +803,8 @@ def _load_checkpoint(
             f"{sorted(_SUPPORTED_CHECKPOINT_FORMAT_VERSIONS)}"
         )
     if format_version == CHECKPOINT_FORMAT_VERSION:
+        expected_keys = _PRECISION_CHECKPOINT_KEYS
+    elif format_version == _STAGE_CHECKPOINT_FORMAT_VERSION:
         expected_keys = _CURRENT_CHECKPOINT_KEYS
     elif format_version == _TRACKING_CHECKPOINT_FORMAT_VERSION:
         expected_keys = _TRACKING_CHECKPOINT_KEYS
@@ -786,14 +825,16 @@ def _load_checkpoint(
     try:
         training_stage = (
             _validate_training_stage(payload["training_stage"])
-            if format_version == CHECKPOINT_FORMAT_VERSION
+            if format_version
+            in {CHECKPOINT_FORMAT_VERSION, _STAGE_CHECKPOINT_FORMAT_VERSION}
             else "pretrain"
         )
         base_checkpoint_identity = _validate_stage_provenance(
             training_stage,
             (
                 payload["base_checkpoint_identity"]
-                if format_version == CHECKPOINT_FORMAT_VERSION
+                if format_version
+                in {CHECKPOINT_FORMAT_VERSION, _STAGE_CHECKPOINT_FORMAT_VERSION}
                 else None
             ),
         )
@@ -819,6 +860,32 @@ def _load_checkpoint(
         config,
         format_version=format_version,
     )
+    try:
+        if format_version == CHECKPOINT_FORMAT_VERSION:
+            precision: PrecisionCheckpointState | None = (
+                PrecisionCheckpointState.from_dict(payload["precision"])
+            )
+        elif format_version in {
+            _EXACT_CHECKPOINT_FORMAT_VERSION,
+            _VALIDATION_CHECKPOINT_FORMAT_VERSION,
+            _TRACKING_CHECKPOINT_FORMAT_VERSION,
+            _STAGE_CHECKPOINT_FORMAT_VERSION,
+        }:
+            if active_train.dtype != "float32":
+                raise PrecisionError(
+                    "pre-AMP exact checkpoints must use float32 precision"
+                )
+            precision = legacy_float32_precision_state(config.run.device)
+        else:
+            precision = None
+        if precision is not None and precision.dtype != active_train.dtype:
+            raise PrecisionError(
+                "checkpoint precision dtype does not match its training config"
+            )
+    except (RuntimeError, TypeError, ValueError, PrecisionError) as error:
+        raise CheckpointError(
+            f"checkpoint contains invalid precision state: {error}"
+        ) from error
     continuation = (
         ExactTrainingState.from_dict(payload["continuation"])
         if format_version
@@ -826,6 +893,7 @@ def _load_checkpoint(
             _EXACT_CHECKPOINT_FORMAT_VERSION,
             _VALIDATION_CHECKPOINT_FORMAT_VERSION,
             _TRACKING_CHECKPOINT_FORMAT_VERSION,
+            _STAGE_CHECKPOINT_FORMAT_VERSION,
             CHECKPOINT_FORMAT_VERSION,
         }
         else None
@@ -838,6 +906,7 @@ def _load_checkpoint(
         has_validation = format_version in {
             _VALIDATION_CHECKPOINT_FORMAT_VERSION,
             _TRACKING_CHECKPOINT_FORMAT_VERSION,
+            _STAGE_CHECKPOINT_FORMAT_VERSION,
             CHECKPOINT_FORMAT_VERSION,
         }
         if not has_validation or payload["validation"] is None:
@@ -856,6 +925,7 @@ def _load_checkpoint(
             if format_version
             not in {
                 _TRACKING_CHECKPOINT_FORMAT_VERSION,
+                _STAGE_CHECKPOINT_FORMAT_VERSION,
                 CHECKPOINT_FORMAT_VERSION,
             }
             or payload["tracking"] is None
@@ -874,6 +944,7 @@ def _load_checkpoint(
         tracking=tracking,
         training_stage=training_stage,
         base_checkpoint_identity=base_checkpoint_identity,
+        precision=precision,
     )
 
 
@@ -906,6 +977,7 @@ def load_model_checkpoint(
             tracking=checkpoint.tracking,
             training_stage=checkpoint.training_stage,
             base_checkpoint_identity=checkpoint.base_checkpoint_identity,
+            precision=checkpoint.precision,
         )
 
 
@@ -915,6 +987,7 @@ def load_training_checkpoint(
     device: str | torch.device = "cpu",
     allow_non_exact_resume: bool = False,
     expected_stage: TrainingStage | None = None,
+    expected_precision: PrecisionCheckpointState | None = None,
 ) -> TrainingCheckpoint:
     """Reconstruct train-mode model, optimizer, and scheduler state for resume."""
 
@@ -922,12 +995,35 @@ def load_training_checkpoint(
         raise TypeError("allow_non_exact_resume must be a boolean")
     if expected_stage is not None:
         expected_stage = _validate_training_stage(expected_stage)
+    if expected_precision is not None and not isinstance(
+        expected_precision,
+        PrecisionCheckpointState,
+    ):
+        raise TypeError("expected_precision must be a PrecisionCheckpointState or None")
     checkpoint = _load_checkpoint(path, device=device)
     if expected_stage is not None and checkpoint.training_stage != expected_stage:
         raise CheckpointError(
             "checkpoint training stage does not match requested resume: "
             f"expected {expected_stage!r}, got {checkpoint.training_stage!r}"
         )
+    if expected_precision is not None:
+        actual = checkpoint.precision
+        expected_descriptor = (
+            expected_precision.dtype,
+            expected_precision.device_type,
+            expected_precision.scaler_enabled,
+        )
+        actual_descriptor = (
+            None
+            if actual is None
+            else (actual.dtype, actual.device_type, actual.scaler_enabled)
+        )
+        if actual_descriptor != expected_descriptor:
+            raise CheckpointError(
+                "checkpoint precision policy is incompatible with the requested "
+                f"runtime: checkpoint={actual_descriptor}, "
+                f"requested={expected_descriptor}"
+            )
     if checkpoint.continuation is None and not allow_non_exact_resume:
         raise CheckpointError(
             "exact training resume requires checkpoint format version 3 or newer; "
@@ -967,6 +1063,7 @@ def load_training_checkpoint(
             continuation=checkpoint.continuation,
             training_stage=checkpoint.training_stage,
             base_checkpoint_identity=checkpoint.base_checkpoint_identity,
+            precision=checkpoint.precision,
         )
 
 
@@ -983,6 +1080,7 @@ def load_checkpoint_metadata(
         tracking=checkpoint.tracking,
         training_stage=checkpoint.training_stage,
         base_checkpoint_identity=checkpoint.base_checkpoint_identity,
+        precision=checkpoint.precision,
     )
 
 

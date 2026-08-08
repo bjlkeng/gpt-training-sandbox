@@ -75,6 +75,11 @@ from scratch_llm.training.loop import (
     run_training_steps,
 )
 from scratch_llm.training.optim import build_lr_scheduler, build_optimizer
+from scratch_llm.training.precision import (
+    PrecisionError,
+    PrecisionPolicy,
+    build_precision_policy,
+)
 from scratch_llm.training.rng_state import (
     capture_training_rng_state,
     restore_training_rng_state,
@@ -115,6 +120,7 @@ class _SFTRuntime:
     tokenizer: Tokenizer
     optimizer: Optimizer
     scheduler: LRScheduler
+    precision: PrecisionPolicy
     base_checkpoint_identity: str
     initial_step: int
     initial_total_training_time_seconds: float
@@ -217,8 +223,12 @@ def run_sft_training(
         validation_runner=validation_runner,
         sample_runner=sample_runner,
     )
-    set_seed(config.run.seed)
     device = get_device(config.run.device)
+    try:
+        precision = build_precision_policy(dtype=config.sft.dtype, device=device)
+    except PrecisionError as error:
+        raise SFTTrainingError(f"invalid SFT precision policy: {error}") from error
+    set_seed(config.run.seed)
     metrics_path = paths.run_dir / config.tracking.jsonl.path
     active_base_checkpoint = _resolve_base_checkpoint(
         config,
@@ -231,6 +241,7 @@ def run_sft_training(
         metrics_path=metrics_path,
         tracker=tracker,
         device=device,
+        precision=precision,
         base_checkpoint=active_base_checkpoint,
         resume_from=resume_from,
         allow_tracking_fork=allow_tracking_fork,
@@ -348,6 +359,7 @@ def run_sft_training(
             ),
             peak_flops_basis=peak_flops_basis_from_config(train_config),
             metrics_adapter=sft_training_metrics,
+            precision=runtime.precision,
         )
     except torch.OutOfMemoryError as error:
         try:
@@ -447,8 +459,6 @@ def _validate_request(
         raise SFTTrainingError(
             "base checkpoint initialization and SFT resume are mutually exclusive"
         )
-    if config.sft.dtype != "float32":
-        raise SFTTrainingError("SFT currently supports sft.dtype='float32' only")
     if config.sft.compile:
         raise SFTTrainingError("SFT does not support sft.compile yet")
     if config.sft.activation_checkpointing:
@@ -524,6 +534,7 @@ def _initialize_runtime(
     metrics_path: Path,
     tracker: Tracker,
     device: torch.device,
+    precision: PrecisionPolicy,
     base_checkpoint: Path | None,
     resume_from: str | Path | None,
     allow_tracking_fork: bool,
@@ -558,6 +569,7 @@ def _initialize_runtime(
             tokenizer=base.tokenizer,
             optimizer=optimizer,
             scheduler=build_lr_scheduler(optimizer, train_config),
+            precision=precision,
             base_checkpoint_identity=base_identity,
             initial_step=0,
             initial_total_training_time_seconds=0.0,
@@ -571,8 +583,15 @@ def _initialize_runtime(
         resume_from,
         device=device,
         expected_stage="sft",
+        expected_precision=precision.checkpoint_state(),
     )
     _validate_resume_config(config, checkpoint.config)
+    if checkpoint.precision is None:  # pragma: no cover - SFT resume is exact.
+        raise SFTTrainingError("SFT resume checkpoint has no precision state")
+    try:
+        precision.load_checkpoint_state(checkpoint.precision)
+    except PrecisionError as error:
+        raise SFTTrainingError(f"could not restore precision state: {error}") from error
     _validate_tokenizer_contract(config, checkpoint.tokenizer)
     if checkpoint.base_checkpoint_identity is None:  # pragma: no cover - stage check.
         raise SFTTrainingError("SFT checkpoint lost base-checkpoint provenance")
@@ -610,6 +629,7 @@ def _initialize_runtime(
         tokenizer=checkpoint.tokenizer,
         optimizer=checkpoint.optimizer,
         scheduler=checkpoint.scheduler,
+        precision=precision,
         base_checkpoint_identity=checkpoint.base_checkpoint_identity,
         initial_step=checkpoint.step,
         initial_total_training_time_seconds=(
@@ -838,6 +858,7 @@ class _SFTCheckpointLifecycle:
             tracking=self._runtime.checkpoint_tracking_state,
             training_stage="sft",
             base_checkpoint_identity=self._runtime.base_checkpoint_identity,
+            precision=self._runtime.precision.checkpoint_state(),
         )
         self._register(saved, role=role, step=step)
         return saved

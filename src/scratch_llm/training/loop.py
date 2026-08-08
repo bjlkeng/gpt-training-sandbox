@@ -29,6 +29,7 @@ from scratch_llm.config import ProjectConfig
 from scratch_llm.data.loaders import NextTokenDataset
 from scratch_llm.model import GPT
 from scratch_llm.training.optim import build_lr_scheduler, build_optimizer
+from scratch_llm.training.precision import PrecisionPolicy
 from scratch_llm.tokenization.tokenizer import (
     NANOCHAT_SPECIAL_TOKENS,
     ByteTokenizer,
@@ -83,6 +84,7 @@ class OptimizerStepResult:
 
     loss: float
     grad_norm: float
+    optimizer_step_applied: bool = True
     telemetry: TrainingStepTelemetry | None = None
 
     @property
@@ -119,6 +121,7 @@ def run_optimizer_step(
     *,
     grad_accum_steps: int,
     grad_clip: float,
+    precision: PrecisionPolicy | None = None,
 ) -> OptimizerStepResult:
     """Accumulate scaled losses, clip gradients, update once, and clear gradients.
 
@@ -135,6 +138,11 @@ def run_optimizer_step(
         name="grad_accum_steps",
     )
     grad_clip = require_positive_real(grad_clip, name="grad_clip")
+    if precision is not None and not isinstance(precision, PrecisionPolicy):
+        raise TypeError(
+            "precision must be a PrecisionPolicy or None, got "
+            f"{type(precision).__name__}"
+        )
 
     loss_iterator = iter(micro_losses)
     loss_sum: Tensor | None = None
@@ -160,7 +168,11 @@ def run_optimizer_step(
 
             detached_loss = micro_loss.detach()
             loss_sum = detached_loss if loss_sum is None else loss_sum + detached_loss
-            (micro_loss / grad_accum_steps).backward()
+            scaled_loss = micro_loss / grad_accum_steps
+            if precision is None:
+                scaled_loss.backward()
+            else:
+                precision.backward(scaled_loss)
     except Exception:
         optimizer.zero_grad(set_to_none=True)
         raise
@@ -168,15 +180,24 @@ def run_optimizer_step(
     parameters = [
         parameter for group in optimizer.param_groups for parameter in group["params"]
     ]
-    grad_norm = clip_grad_norm_(parameters, grad_clip)
-    optimizer.step()
-    optimizer.zero_grad(set_to_none=True)
+    try:
+        if precision is not None:
+            precision.unscale_(optimizer)
+        grad_norm = clip_grad_norm_(parameters, grad_clip)
+        optimizer_step_applied = (
+            True if precision is None else precision.step_and_update(optimizer)
+        )
+        if precision is None:
+            optimizer.step()
+    finally:
+        optimizer.zero_grad(set_to_none=True)
 
     if loss_sum is None:  # pragma: no cover - positive steps make this unreachable.
         raise RuntimeError("optimizer step completed without a loss")
     return OptimizerStepResult(
         loss=float((loss_sum / grad_accum_steps).item()),
         grad_norm=float(grad_norm.item()),
+        optimizer_step_applied=optimizer_step_applied,
     )
 
 
@@ -285,6 +306,7 @@ def run_training_steps(
         ]
         | None
     ) = None,
+    precision: PrecisionPolicy | None = None,
 ) -> list[OptimizerStepResult]:
     """Train to ``max_steps`` and call ``on_step`` after each completed step."""
 
@@ -315,6 +337,11 @@ def run_training_steps(
         )
     if metrics_adapter is not None and not callable(metrics_adapter):
         raise TypeError("metrics_adapter must be callable or None")
+    if precision is not None and not isinstance(precision, PrecisionPolicy):
+        raise TypeError(
+            "precision must be a PrecisionPolicy or None, got "
+            f"{type(precision).__name__}"
+        )
     if peak_flops_basis is not None and not isinstance(
         peak_flops_basis,
         PeakFlopsBasis,
@@ -374,7 +401,9 @@ def run_training_steps(
             f"scheduler step {initial_step} exceeds max_steps target {max_steps}"
         )
 
-    for step in range(initial_step + 1, max_steps + 1):
+    consecutive_skipped_attempts = 0
+    while scheduler.last_epoch < max_steps:
+        step = scheduler.last_epoch + 1
         base_learning_rate = float(scheduler.base_lrs[0])
         learning_rate_multiplier = (
             float(scheduler.get_last_lr()[0]) / base_learning_rate
@@ -409,10 +438,17 @@ def run_training_steps(
                     raise ValueError(
                         "training received an all-ignored microbatch before forward"
                     )
-                loss = model(
-                    inputs.to(resolved_device),
-                    targets.to(resolved_device),
-                )
+                if precision is None:
+                    loss = model(
+                        inputs.to(resolved_device),
+                        targets.to(resolved_device),
+                    )
+                else:
+                    with precision.autocast():
+                        loss = model(
+                            inputs.to(resolved_device),
+                            targets.to(resolved_device),
+                        )
                 processed_model_tokens += inputs.numel()
                 supervised_target_tokens += batch_supervised_targets
                 yield loss
@@ -422,12 +458,22 @@ def run_training_steps(
             micro_losses(),
             grad_accum_steps=grad_accum_steps,
             grad_clip=grad_clip,
+            precision=precision,
         )
-        scheduler.step()
         step_finished_at = require_finite_real(active_clock(), name="clock finish")
         step_duration = step_finished_at - step_started_at
         if step_duration <= 0:
             raise ValueError("measured optimizer-step duration must be positive")
+        if not result.optimizer_step_applied:
+            consecutive_skipped_attempts += 1
+            if consecutive_skipped_attempts >= 100:
+                raise RuntimeError(
+                    "GradScaler skipped 100 consecutive non-finite optimizer "
+                    "attempts without completing a training step"
+                )
+            continue
+        consecutive_skipped_attempts = 0
+        scheduler.step()
         total_training_time_seconds += step_duration
         total_processed_model_tokens += processed_model_tokens
         if flops_estimate is not None:

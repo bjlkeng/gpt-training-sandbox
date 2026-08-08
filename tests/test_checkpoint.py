@@ -17,6 +17,7 @@ from torch.utils.data import DataLoader
 from scratch_llm.training import checkpoint
 from scratch_llm.training.best_checkpoint import ValidationCheckpointState
 from scratch_llm.training.checkpoint import (
+    CHECKPOINT_FORMAT_VERSION,
     CheckpointError,
     ExactTrainingState,
     load_model_checkpoint,
@@ -35,6 +36,7 @@ from scratch_llm.data.loaders import NextTokenDataset
 from scratch_llm.model import GPT
 from scratch_llm.training.optim import build_lr_scheduler, build_optimizer
 from scratch_llm.training.rng_state import capture_training_rng_state
+from scratch_llm.training.precision import PrecisionCheckpointState
 from scratch_llm.tokenization.tokenizer import (
     BYTE_VOCAB_SIZE,
     SPECIAL_TOKENS,
@@ -333,6 +335,99 @@ def test_malformed_exact_state_fails_before_model_or_rng_mutation(
     torch.testing.assert_close(torch.get_rng_state(), torch_state, rtol=0, atol=0)
 
 
+def test_exact_checkpoint_round_trips_versioned_precision_state(
+    tmp_path: Path,
+) -> None:
+    config, tokenizer, model, optimizer, scheduler, _ = _checkpoint_state()
+    continuation = ExactTrainingState(
+        loader_format="test_loader",
+        loader_state={"format": "test_loader", "position": 0},
+        rng_state=capture_training_rng_state("cpu"),
+        tracker_step=0,
+        total_training_time_seconds=0.0,
+        total_training_flops=0.0,
+    )
+    precision = PrecisionCheckpointState(
+        dtype="float32",
+        device_type="cpu",
+        scaler_enabled=False,
+        scaler_state=None,
+    )
+
+    checkpoint_path = save_checkpoint(
+        tmp_path / "precision.pt",
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        config=config,
+        step=0,
+        tokenizer=tokenizer,
+        continuation=continuation,
+        precision=precision,
+    )
+
+    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    loaded = load_training_checkpoint(
+        checkpoint_path,
+        expected_precision=precision,
+    )
+    assert payload["format_version"] == CHECKPOINT_FORMAT_VERSION
+    assert payload["precision"] == precision.to_dict()
+    assert loaded.precision == precision
+
+
+def test_resume_rejects_incompatible_precision_before_model_restore(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, tokenizer, model, optimizer, scheduler, _ = _checkpoint_state()
+    continuation = ExactTrainingState(
+        loader_format="test_loader",
+        loader_state={"format": "test_loader", "position": 0},
+        rng_state=capture_training_rng_state("cpu"),
+        tracker_step=0,
+        total_training_time_seconds=0.0,
+        total_training_flops=0.0,
+    )
+    checkpoint_path = save_checkpoint(
+        tmp_path / "float32.pt",
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        config=config,
+        step=0,
+        tokenizer=tokenizer,
+        continuation=continuation,
+        precision=PrecisionCheckpointState(
+            dtype="float32",
+            device_type="cpu",
+            scaler_enabled=False,
+            scaler_state=None,
+        ),
+    )
+    model_restored = False
+
+    def record_model_restore(*args: Any, **kwargs: Any) -> None:
+        nonlocal model_restored
+        model_restored = True
+        raise AssertionError("model restoration must not run")
+
+    monkeypatch.setattr(checkpoint, "_restore_model", record_model_restore)
+
+    with pytest.raises(CheckpointError, match="precision policy is incompatible"):
+        load_training_checkpoint(
+            checkpoint_path,
+            expected_precision=PrecisionCheckpointState(
+                dtype="bfloat16",
+                device_type="cpu",
+                scaler_enabled=False,
+                scaler_state=None,
+            ),
+        )
+
+    assert model_restored is False
+
+
 def test_current_format_round_trips_stage_validation_tracking_and_exact_state(
     tmp_path: Path,
 ) -> None:
@@ -389,6 +484,7 @@ def test_current_format_round_trips_stage_validation_tracking_and_exact_state(
     payload["format_version"] = 5
     del payload["training_stage"]
     del payload["base_checkpoint_identity"]
+    del payload["precision"]
     format_five = tmp_path / "format-five.pt"
     torch.save(payload, format_five)
     legacy = load_training_checkpoint(format_five, expected_stage="pretrain")
@@ -424,6 +520,7 @@ def test_format_four_checkpoint_remains_exact_without_tracking_state(
     del payload["tracking"]
     del payload["training_stage"]
     del payload["base_checkpoint_identity"]
+    del payload["precision"]
     previous = tmp_path / "format-four.pt"
     torch.save(payload, previous)
 
@@ -461,6 +558,7 @@ def test_format_three_exact_checkpoint_remains_resumable_without_validation(
     del payload["tracking"]
     del payload["training_stage"]
     del payload["base_checkpoint_identity"]
+    del payload["precision"]
     previous = tmp_path / "format-three.pt"
     torch.save(payload, previous)
 
