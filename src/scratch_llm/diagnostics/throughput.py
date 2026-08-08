@@ -23,7 +23,7 @@ from scratch_llm._validation import (
 )
 from scratch_llm.diagnostics.accelerator_memory import AcceleratorMemorySnapshot
 from scratch_llm.config import ProjectConfig
-from scratch_llm.identity import project_config_identity
+from scratch_llm.identity import canonical_json_identity, project_config_identity
 from scratch_llm.diagnostics.resource_estimation import (
     compare_memory_estimate,
     estimate_training_resources,
@@ -69,6 +69,7 @@ class BenchmarkExecution:
     attention_selection: AttentionBackendSelection | None = None
     compile_selection: CompileSelection | None = None
     activation_checkpoint_selection: ActivationCheckpointSelection | None = None
+    precision_selection: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.steps, tuple) or not self.steps:
@@ -113,6 +114,17 @@ class BenchmarkExecution:
             raise TypeError(
                 "activation_checkpoint_selection must be an "
                 "ActivationCheckpointSelection or None"
+            )
+        if self.precision_selection is not None:
+            object.__setattr__(
+                self,
+                "precision_selection",
+                MappingProxyType(
+                    _json_object(
+                        dict(self.precision_selection),
+                        label="precision_selection",
+                    )
+                ),
             )
 
 
@@ -183,10 +195,13 @@ def build_throughput_benchmark(
         "code": dict(execution.code_identity),
         "config": project_config_identity(config),
         "cuda": dict(execution.cuda_identity),
+        "data": canonical_json_identity(config.data.to_dict()),
         "hardware": dict(execution.hardware_identity),
         "manifest": execution.manifest_identity,
+        "model": canonical_json_identity(config.model.parameter_compatibility_dict()),
         "pytorch": dict(execution.pytorch_identity),
         "tokenizer": execution.tokenizer_identity,
+        "workload": _training_workload_identity(config),
     }
     protocol = {
         "excluded_work": [
@@ -232,10 +247,12 @@ def build_throughput_benchmark(
             effective=config.train.activation_checkpointing,
         )
     )
+    precision_selection = _precision_selection(config, execution.precision_selection)
     optimization_state = {
         "activation_checkpointing": activation_checkpoint_selection.to_dict(),
         "attention": selection.to_dict(),
         "compile": compile_selection.to_dict(),
+        "precision": precision_selection,
     }
     protocol_identity = _payload_identity(
         {
@@ -484,6 +501,52 @@ def _payload_identity(value: object) -> str:
         sort_keys=True,
     ).encode("utf-8")
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _precision_selection(
+    config: ProjectConfig,
+    observed: Mapping[str, object] | None,
+) -> dict[str, object]:
+    expected = {
+        "autocast_enabled": config.train.dtype != "float32",
+        "device_type": config.run.device.partition(":")[0],
+        "effective_dtype": config.train.dtype,
+        "requested_dtype": config.train.dtype,
+        "scaler_enabled": config.train.dtype == "float16",
+    }
+    if observed is None:
+        return expected
+    normalized = _json_object(dict(observed), label="precision_selection")
+    if normalized != expected:
+        raise ValueError(
+            "benchmark precision selection does not match the requested runtime: "
+            f"expected {expected}, got {normalized}"
+        )
+    return normalized
+
+
+def _training_workload_identity(config: ProjectConfig) -> str:
+    model = config.model.to_dict()
+    model.pop("attention_backend")
+    train = config.train.to_dict()
+    for field_name in (
+        "activation_checkpointing",
+        "compile",
+        "dtype",
+    ):
+        train.pop(field_name)
+    return canonical_json_identity(
+        {
+            "data": config.data.to_dict(),
+            "model": model,
+            "run": {
+                "device": config.run.device,
+                "seed": config.run.seed,
+            },
+            "tokenizer": config.tokenizer.to_dict(),
+            "train": train,
+        }
+    )
 
 
 __all__ = [

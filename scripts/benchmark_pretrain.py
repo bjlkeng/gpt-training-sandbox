@@ -113,6 +113,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "Attention fallback reason: "
                 f"{attention_preflight.selection.fallback_reason}"
             )
+            print(f"Requested precision dtype: {config.train.dtype}")
+            print(f"Effective precision dtype: {config.train.dtype}")
             print(f"Requested torch.compile: {config.train.compile}")
             print(
                 "Effective torch.compile: "
@@ -169,6 +171,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     assert isinstance(compile_state, dict)
     activation_checkpointing = optimization_state["activation_checkpointing"]
     assert isinstance(activation_checkpointing, dict)
+    precision = optimization_state["precision"]
+    assert isinstance(precision, dict)
     print(f"Run directory: {paths.run_dir}")
     print(f"Report: {artifacts.report_path}")
     print(f"Tokens/sec: {measurements['tokens_per_second']}")
@@ -177,6 +181,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"Requested attention backend: {attention['requested_backend']}")
     print(f"Effective attention backend: {attention['effective_backend']}")
     print(f"Attention fallback reason: {attention['fallback_reason']}")
+    print(f"Requested precision dtype: {precision['requested_dtype']}")
+    print(f"Effective precision dtype: {precision['effective_dtype']}")
+    print(f"Autocast enabled: {precision['autocast_enabled']}")
+    print(f"GradScaler enabled: {precision['scaler_enabled']}")
     print(f"Requested torch.compile: {compile_state['requested']}")
     print(f"Effective torch.compile: {compile_state['effective']}")
     print(f"Compile duration seconds: {compile_state['compile_duration_seconds']}")
