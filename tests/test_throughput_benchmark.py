@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 import torch
 
+from scratch_llm.attention_backends import AttentionBackendSelection
 from scratch_llm.diagnostics.accelerator_memory import AcceleratorMemorySnapshot
 from scratch_llm.config import (
     GPTConfig,
@@ -67,7 +68,10 @@ def _config(tmp_path: Path, *, name: str = "benchmark") -> ProjectConfig:
 
 
 def _execution(
-    config: ProjectConfig, *, durations: tuple[float, ...]
+    config: ProjectConfig,
+    *,
+    durations: tuple[float, ...],
+    attention_selection: AttentionBackendSelection | None = None,
 ) -> BenchmarkExecution:
     flops = estimate_gpt_training_flops(config.model)
     basis = PeakFlopsBasis(1_000_000.0, "fake peak")
@@ -121,6 +125,7 @@ def _execution(
         cuda_identity={"available": True, "runtime_version": "fixture"},
         pytorch_identity={"version": "fixture"},
         code_identity={"commit": "abc123", "tracked_dirty": False},
+        attention_selection=attention_selection,
     )
 
 
@@ -169,6 +174,8 @@ def test_timed_aggregate_excludes_warmup_and_preserves_shared_telemetry(
     assert payload["optimization_state"]["attention"] == {
         "effective_backend": "manual",
         "fallback_reason": None,
+        "provider": None,
+        "provider_version": None,
         "requested_backend": "manual",
     }
     assert payload["resource_estimate"]["memory"]["classification"] == (
@@ -178,6 +185,39 @@ def test_timed_aggregate_excludes_warmup_and_preserves_shared_telemetry(
         payload["resource_estimate_delta"]["observed"]["peak_allocated_bytes"]
         == 4 * _MIB
     )
+
+
+def test_actual_attention_fallback_enters_report_and_protocol_identity(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    execution = _execution(config, durations=(1.0, 2.0))
+    direct = build_throughput_benchmark(
+        config,
+        execution=execution,
+        warmup_steps=1,
+        timed_steps=1,
+    )
+    fallback_selection = AttentionBackendSelection(
+        requested_backend="flash",
+        effective_backend="sdpa",
+        fallback_reason="flash_dependency_unavailable",
+    )
+    fallback = build_throughput_benchmark(
+        config,
+        execution=_execution(
+            config,
+            durations=(1.0, 2.0),
+            attention_selection=fallback_selection,
+        ),
+        warmup_steps=1,
+        timed_steps=1,
+    )
+
+    assert fallback.payload["optimization_state"]["attention"] == (
+        fallback_selection.to_dict()
+    )
+    assert fallback.protocol_identity != direct.protocol_identity
 
 
 def test_atomic_report_failure_preserves_prior_complete_report(

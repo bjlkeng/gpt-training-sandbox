@@ -7,6 +7,10 @@ from torch import nn
 from torch.nn import functional as F
 
 from scratch_llm.attention import CausalSelfAttention
+from scratch_llm.attention_backends import (
+    AttentionBackendSelection,
+    FlashProviderLoader,
+)
 from scratch_llm.config import GPTConfig
 
 
@@ -52,12 +56,20 @@ class MLP(nn.Module):
 class Block(nn.Module):
     """Pre-LayerNorm transformer block with attention and MLP residuals."""
 
-    def __init__(self, config: GPTConfig) -> None:
+    def __init__(
+        self,
+        config: GPTConfig,
+        *,
+        flash_provider_loader: FlashProviderLoader | None = None,
+    ) -> None:
         super().__init__()
         config.validate()
 
         self.ln_1 = nn.LayerNorm(config.n_embd, bias=config.bias)
-        self.attn = CausalSelfAttention(config)
+        self.attn = CausalSelfAttention(
+            config,
+            flash_provider_loader=flash_provider_loader,
+        )
         self.ln_2 = nn.LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
@@ -74,7 +86,12 @@ class Block(nn.Module):
 class GPT(nn.Module):
     """Decoder-only GPT assembled from learned embeddings and transformer blocks."""
 
-    def __init__(self, config: GPTConfig) -> None:
+    def __init__(
+        self,
+        config: GPTConfig,
+        *,
+        flash_provider_loader: FlashProviderLoader | None = None,
+    ) -> None:
         super().__init__()
         config.validate()
 
@@ -83,11 +100,30 @@ class GPT(nn.Module):
         self.token_embedding = nn.Embedding(config.vocab_size, config.n_embd)
         self.position_embedding = nn.Embedding(config.seq_len, config.n_embd)
         self.embedding_dropout = nn.Dropout(config.dropout)
-        self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layer)])
+        self.blocks = nn.ModuleList(
+            [
+                Block(config, flash_provider_loader=flash_provider_loader)
+                for _ in range(config.n_layer)
+            ]
+        )
         self.ln_f = nn.LayerNorm(config.n_embd, bias=config.bias)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         if config.tie_weights:
             self.lm_head.weight = self.token_embedding.weight
+
+    def attention_backend_selection(self) -> AttentionBackendSelection:
+        """Return the common backend outcome observed by all decoder blocks."""
+
+        selections: set[AttentionBackendSelection] = set()
+        for block in self.blocks:
+            if not isinstance(
+                block, Block
+            ):  # pragma: no cover - constructor invariant.
+                raise RuntimeError("decoder block list contains a non-block module")
+            selections.add(block.attn.last_backend_selection)
+        if len(selections) != 1:  # pragma: no cover - identical blocks share facts.
+            raise RuntimeError("decoder blocks observed mixed attention backends")
+        return next(iter(selections))
 
     def forward(
         self,

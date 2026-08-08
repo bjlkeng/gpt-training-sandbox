@@ -30,6 +30,8 @@ model:
   bias: false
   tie_weights: true
   attention_backend: manual
+  attention_fallback_policy: allow
+  flash_attention_provider: auto
 
 sft:
   base_checkpoint: null
