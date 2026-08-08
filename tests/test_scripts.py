@@ -72,6 +72,7 @@ ROADMAP_COMMANDS = (
     + CHECKPOINT_COMMANDS
     + (
         "scripts.compare_runs",
+        "scripts.compare_training_benchmarks",
         "scripts.data_stats",
         "scripts.download_climbmix",
         "scripts.prepare_sft_data",
@@ -173,6 +174,8 @@ def test_pretraining_benchmark_dry_run_is_gpu_and_artifact_free(
     assert "Timed steps: 2" in result.stdout
     assert "Requested attention backend: manual" in result.stdout
     assert "Effective attention backend: manual" in result.stdout
+    assert "Requested precision dtype: float32" in result.stdout
+    assert "Effective precision dtype: float32" in result.stdout
     assert not (
         tmp_path
         / "runs"
