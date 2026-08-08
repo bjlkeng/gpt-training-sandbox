@@ -36,6 +36,10 @@ from scratch_llm.training.compilation import (
     format_compile_selection,
     warmup_compiled_training,
 )
+from scratch_llm.training.activation_checkpointing import (
+    configure_activation_checkpointing,
+    format_activation_checkpoint_selection,
+)
 from scratch_llm.training.precision import PrecisionPolicy, build_precision_policy
 from scratch_llm.training.pretraining import (
     PreparedPretrainingBatchIterator,
@@ -222,6 +226,14 @@ def execute_production_throughput_benchmark(
         model = GPT(config.model).to(device)
         optimizer = build_optimizer(model, config.train)
         scheduler = build_lr_scheduler(optimizer, config.train)
+        activation_checkpoint_selection = configure_activation_checkpointing(
+            model,
+            enabled=config.train.activation_checkpointing,
+        )
+        if progress is not None:
+            progress(
+                format_activation_checkpoint_selection(activation_checkpoint_selection)
+            )
         compile_runtime = build_compile_runtime(
             model,
             config.train,
@@ -276,6 +288,7 @@ def execute_production_throughput_benchmark(
             code_identity=collect_code_identity(repository_root),
             attention_selection=model.attention_backend_selection(),
             compile_selection=compile_runtime.selection,
+            activation_checkpoint_selection=activation_checkpoint_selection,
         )
 
 

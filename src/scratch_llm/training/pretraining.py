@@ -33,6 +33,10 @@ from scratch_llm.training.best_checkpoint import (
     advance_validation_state,
     base_validation_identity,
 )
+from scratch_llm.training.activation_checkpointing import (
+    configure_activation_checkpointing,
+    format_activation_checkpoint_selection,
+)
 from scratch_llm.tokenization.bpe import RegexBPETokenizer
 from scratch_llm.training.checkpoint import (
     ExactTrainingState,
@@ -510,13 +514,6 @@ class PreparedPretrainingBatchIterator(Iterator[tuple[Tensor, Tensor]]):
         )
 
 
-def _validate_training_runtime_config(config: ProjectConfig) -> None:
-    if config.train.activation_checkpointing:
-        raise PretrainingError(
-            "pretraining does not support train.activation_checkpointing yet"
-        )
-
-
 def _validate_tiny_text_config(config: ProjectConfig) -> None:
     config.validate()
     if config.tokenizer.type != "byte":
@@ -531,7 +528,6 @@ def _validate_tiny_text_config(config: ProjectConfig) -> None:
         raise PretrainingError(
             "tiny-text pretraining requires the ByteTokenizer special-token order"
         )
-    _validate_training_runtime_config(config)
 
 
 def validate_production_pretraining_config(config: ProjectConfig) -> None:
@@ -546,7 +542,6 @@ def validate_production_pretraining_config(config: ProjectConfig) -> None:
         )
     if config.tokenizer.artifact_dir is None:
         raise PretrainingError("production pretraining requires tokenizer.artifact_dir")
-    _validate_training_runtime_config(config)
 
 
 def load_production_tokenizer(config: ProjectConfig) -> RegexBPETokenizer:
@@ -782,6 +777,14 @@ def _run_pretraining_impl(
             tracking_state=tracking_state,
             allow_tracking_fork=allow_tracking_fork,
         )
+        activation_checkpoint_selection = configure_activation_checkpointing(
+            runtime.model,
+            enabled=config.train.activation_checkpointing,
+        )
+        if progress is not None:
+            progress(
+                format_activation_checkpoint_selection(activation_checkpoint_selection)
+            )
         compile_runtime = build_compile_runtime(
             runtime.model,
             config.train,

@@ -29,6 +29,9 @@ from scratch_llm.config import GPTConfig, ProjectConfig
 from scratch_llm.data.loaders import NextTokenDataset
 from scratch_llm.model import GPT
 from scratch_llm.training.compilation import build_compile_runtime
+from scratch_llm.training.activation_checkpointing import (
+    configure_activation_checkpointing,
+)
 from scratch_llm.training.optim import build_lr_scheduler, build_optimizer
 from scratch_llm.training.precision import PrecisionPolicy
 from scratch_llm.tokenization.tokenizer import (
@@ -611,6 +614,10 @@ def train_tiny_text(
         generator=data_generator,
     )
     model = GPT(config.model).to(device)
+    configure_activation_checkpointing(
+        model,
+        enabled=config.train.activation_checkpointing,
+    )
     optimizer = build_optimizer(model, config.train)
     scheduler = build_lr_scheduler(optimizer, config.train)
     compile_runtime = build_compile_runtime(model, config.train)

@@ -253,6 +253,38 @@ def _run_module(module: str, *arguments: str) -> subprocess.CompletedProcess[str
     )
 
 
+def test_production_pretraining_enables_runtime_only_activation_checkpointing(
+    tmp_path: Path,
+) -> None:
+    _tokenizer, artifact_dir, tokenized_dir = _write_production_inputs(tmp_path)
+    config = _production_config(
+        tmp_path,
+        artifact_dir=artifact_dir,
+        tokenized_dir=tokenized_dir,
+        run_name="activation-checkpointed",
+        max_steps=2,
+    )
+    config.train.activation_checkpointing = True
+    progress: list[str] = []
+
+    result = run_pretraining(
+        config,
+        paths=prepare_run(config),
+        tracker=NullTracker(),
+        progress=progress.append,
+    )
+
+    loaded = load_model_checkpoint(result.checkpoint_path)
+    assert result.final_step == 2
+    assert loaded.config.train.activation_checkpointing is True
+    assert loaded.model.activation_checkpointing is False
+    assert not any("_checkpoint" in key for key in loaded.model.state_dict())
+    assert any(
+        "Activation checkpointing: requested=True effective=True" in message
+        for message in progress
+    )
+
+
 def _assert_nested_state_equal(actual: Any, expected: Any) -> None:
     if isinstance(expected, torch.Tensor):
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
