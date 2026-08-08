@@ -272,6 +272,7 @@ class TrainingMemoryEstimate:
     logits_loss_workspace_bytes: int
     allocator_headroom_bytes: int
     compiled_graph_requested: bool = False
+    activation_checkpointing_requested: bool = False
 
     def __post_init__(self) -> None:
         if self.dtype not in _DTYPE_BYTES:
@@ -299,6 +300,8 @@ class TrainingMemoryEstimate:
         _bounded_signed_64(self.total_bytes, name="memory total bytes")
         if not isinstance(self.compiled_graph_requested, bool):
             raise TypeError("compiled_graph_requested must be a boolean")
+        if not isinstance(self.activation_checkpointing_requested, bool):
+            raise TypeError("activation_checkpointing_requested must be a boolean")
 
     @property
     def component_bytes(self) -> Mapping[str, int]:
@@ -334,7 +337,13 @@ class TrainingMemoryEstimate:
     def to_dict(self) -> dict[str, Any]:
         return {
             "assumptions": {
-                "activation_checkpointing": False,
+                "activation_checkpointing_requested": (
+                    self.activation_checkpointing_requested
+                ),
+                "activation_checkpointing_memory": (
+                    "not credited in this conservative estimate; use observed "
+                    "accelerator peak memory"
+                ),
                 "activation_formula": (
                     "(8 + 2 * mlp_ratio) saved hidden-width values per "
                     "token/layer at configured dtype, float32 materialized "
@@ -704,11 +713,6 @@ def estimate_training_resources(
     if not isinstance(config, ProjectConfig):
         raise TypeError(f"config must be a ProjectConfig, got {type(config).__name__}")
     config.validate()
-    if config.train.activation_checkpointing:
-        raise ValueError(
-            "resource estimation does not model activation checkpointing; "
-            "disable train.activation_checkpointing"
-        )
     model = estimate_gpt_model_size(config.model)
     tokens = estimate_token_budget(
         device_batch_size=config.train.device_batch_size,
@@ -958,6 +962,7 @@ def _estimate_training_memory(
         logits_loss_workspace_bytes=logits_loss_workspace_bytes,
         allocator_headroom_bytes=allocator_headroom_bytes,
         compiled_graph_requested=config.train.compile,
+        activation_checkpointing_requested=config.train.activation_checkpointing,
     )
 
 

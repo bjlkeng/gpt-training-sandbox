@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 from torch.nn import functional as F
+from torch.utils.checkpoint import checkpoint
 
 from scratch_llm.attention import CausalSelfAttention
 from scratch_llm.attention_backends import (
@@ -97,6 +98,7 @@ class GPT(nn.Module):
 
         self.config = config
         self.max_seq_len = config.seq_len
+        self.activation_checkpointing = False
         self.token_embedding = nn.Embedding(config.vocab_size, config.n_embd)
         self.position_embedding = nn.Embedding(config.seq_len, config.n_embd)
         self.embedding_dropout = nn.Dropout(config.dropout)
@@ -125,6 +127,13 @@ class GPT(nn.Module):
             raise RuntimeError("decoder blocks observed mixed attention backends")
         return next(iter(selections))
 
+    def set_activation_checkpointing(self, enabled: bool) -> None:
+        """Select training-only non-reentrant block recomputation."""
+
+        if not isinstance(enabled, bool):
+            raise TypeError("activation checkpointing enabled must be a boolean")
+        self.activation_checkpointing = enabled
+
     def forward(
         self,
         token_ids: torch.Tensor,
@@ -149,8 +158,22 @@ class GPT(nn.Module):
         positions = torch.arange(sequence_length, device=token_ids.device)
         x = self.token_embedding(token_ids) + self.position_embedding(positions)
         x = self.embedding_dropout(x)
-        for block in self.blocks:
-            x = block(x)
+        for block_index, block in enumerate(self.blocks):
+            if (
+                self.activation_checkpointing
+                and self.training
+                and torch.is_grad_enabled()
+            ):
+                x = checkpoint(
+                    self._run_checkpointed_block,
+                    block,
+                    block_index,
+                    x,
+                    use_reentrant=False,
+                    preserve_rng_state=True,
+                )
+            else:
+                x = block(x)
         logits = self.lm_head(self.ln_f(x))
         if targets is None:
             return logits
@@ -163,3 +186,19 @@ class GPT(nn.Module):
         if loss_reduction == "none":
             return loss.reshape(targets.shape)
         return loss
+
+    @staticmethod
+    def _run_checkpointed_block(
+        block: nn.Module,
+        block_index: int,
+        x: torch.Tensor,
+    ) -> torch.Tensor:
+        try:
+            return block(x)
+        except Exception as error:
+            if type(error).__name__ == "_StopRecomputationError":
+                raise
+            raise RuntimeError(
+                f"activation checkpoint block {block_index} failed during "
+                f"forward or recomputation: {error}"
+            ) from error

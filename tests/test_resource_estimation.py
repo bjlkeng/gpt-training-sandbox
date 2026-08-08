@@ -221,7 +221,7 @@ def test_memory_components_and_headroom_follow_documented_arithmetic() -> None:
         assert component["mib"] == component["bytes"] / MIB
     assert payload["classification"] == "conservative_estimate_not_observed"
     assert payload["assumptions"]["automatic_mixed_precision"] is False
-    assert payload["assumptions"]["activation_checkpointing"] is False
+    assert payload["assumptions"]["activation_checkpointing_requested"] is False
     assert payload["assumptions"]["compiled_graph_requested"] is False
     assert payload["assumptions"]["optimizer"] == "AdamW"
     assert payload["assumptions"]["optimizer_state_dtype"] == "float32"
@@ -243,6 +243,19 @@ def test_compile_request_keeps_the_conservative_estimate_and_marks_assumption() 
         "not separately modeled"
         in compiled.memory.to_dict()["assumptions"]["compiled_graph_workspace"]
     )
+
+
+def test_activation_checkpoint_request_is_labeled_without_promising_a_fit() -> None:
+    config = load_config(CONFIG_DIR / "tiny_20m_3090.yaml")
+    baseline = estimate_training_resources(config)
+    config.train.activation_checkpointing = True
+
+    checkpointed = estimate_training_resources(config)
+
+    assert checkpointed.memory.total_bytes == baseline.memory.total_bytes
+    assumptions = checkpointed.memory.to_dict()["assumptions"]
+    assert assumptions["activation_checkpointing_requested"] is True
+    assert "not credited" in assumptions["activation_checkpointing_memory"]
 
 
 def test_dtype_batch_and_sequence_changes_affect_only_documented_terms() -> None:
@@ -292,12 +305,7 @@ def test_dtype_batch_and_sequence_changes_affect_only_documented_terms() -> None
     )
 
 
-def test_unsupported_checkpointing_and_signed_64_bit_overflow_fail_explicitly() -> None:
-    checkpointed = load_config(CONFIG_DIR / "base_smoke.yaml")
-    checkpointed.train.activation_checkpointing = True
-    with pytest.raises(ValueError, match="activation checkpointing"):
-        estimate_training_resources(checkpointed)
-
+def test_signed_64_bit_overflow_fails_explicitly() -> None:
     oversized = load_config(CONFIG_DIR / "base_smoke.yaml")
     oversized.model.vocab_size = 2**62
     oversized.tokenizer.vocab_size = 2**62
