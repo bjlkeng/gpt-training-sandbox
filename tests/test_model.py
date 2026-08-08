@@ -49,6 +49,29 @@ def test_gpt_forward_with_targets_returns_scalar_mean_loss() -> None:
     assert torch.isfinite(loss)
 
 
+def test_sdpa_gpt_tiny_training_smoke_has_finite_decreasing_loss() -> None:
+    torch.manual_seed(13)
+    config = _model_config(attention_backend="sdpa", seq_len=4)
+    model = GPT(config)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.03)
+    token_ids = torch.tensor([[1, 2, 3, 4], [2, 3, 4, 5]])
+    targets = torch.tensor([[2, 3, 4, 5], [3, 4, 5, 6]])
+    losses: list[float] = []
+
+    for _ in range(12):
+        loss = model(token_ids, targets)
+        losses.append(float(loss.detach().item()))
+        loss.backward()
+        assert all(
+            parameter.grad is not None and torch.isfinite(parameter.grad).all()
+            for parameter in model.parameters()
+        )
+        optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+
+    assert losses[-1] < losses[0] * 0.25
+
+
 def test_gpt_unreduced_loss_matches_the_target_shape() -> None:
     config = _model_config()
     model = GPT(config)

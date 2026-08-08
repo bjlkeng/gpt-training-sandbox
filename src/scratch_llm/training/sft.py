@@ -556,16 +556,21 @@ def _initialize_runtime(
             raise SFTTrainingError(
                 "base initialization requires a pretraining checkpoint"
             )
-        if base.config.model != config.model:
+        if (
+            base.config.model.parameter_compatibility_dict()
+            != config.model.parameter_compatibility_dict()
+        ):
             raise SFTTrainingError(
                 "base checkpoint architecture or sequence length conflicts "
                 "with the SFT config"
             )
         _validate_tokenizer_contract(config, base.tokenizer)
-        base.model.train()
-        optimizer = build_optimizer(base.model, train_config)
+        model = GPT(config.model).to(device)
+        model.load_state_dict(base.model.state_dict(), strict=True)
+        model.train()
+        optimizer = build_optimizer(model, train_config)
         return _SFTRuntime(
-            model=base.model,
+            model=model,
             tokenizer=base.tokenizer,
             optimizer=optimizer,
             scheduler=build_lr_scheduler(optimizer, train_config),

@@ -43,6 +43,7 @@ TokenizerType = Literal["byte", "regex_byte_bpe"]
 TokenLoaderStrategy = Literal["flat", "packed"]
 NormType = Literal["layernorm", "rmsnorm"]
 ActivationType = Literal["gelu", "relu_squared"]
+AttentionBackend = Literal["manual", "sdpa"]
 TrainDType = Literal["float32", "float16", "bfloat16"]
 SFTSourceKind = Literal["jsonl", "hub_cache"]
 # OmegaConf does not yet support combining ``Literal`` with another type in a
@@ -56,6 +57,7 @@ _TOKENIZER_TYPES: frozenset[str] = frozenset(get_args(TokenizerType))
 _TOKEN_LOADER_STRATEGIES: frozenset[str] = frozenset(get_args(TokenLoaderStrategy))
 _NORM_TYPES: frozenset[str] = frozenset(get_args(NormType))
 _ACTIVATION_TYPES: frozenset[str] = frozenset(get_args(ActivationType))
+_ATTENTION_BACKENDS: frozenset[str] = frozenset(get_args(AttentionBackend))
 _TRAIN_DTYPES: frozenset[str] = frozenset(get_args(TrainDType))
 _SFT_SOURCE_KINDS: frozenset[str] = frozenset(get_args(SFTSourceKind))
 _SFT_DATASET_SPLITS = {
@@ -357,11 +359,29 @@ class GPTConfig(_SerializableConfig):
     use_rmsnorm: bool = False
     use_qk_norm: bool = False
     use_gqa: bool = False
+    attention_backend: AttentionBackend = "manual"
     use_flash_attention: bool = False
     use_kv_cache: bool = False
 
     def __post_init__(self) -> None:
         self.validate()
+
+    def parameter_compatibility_dict(self) -> dict[str, Any]:
+        """Return config fields that must agree when loading model weights.
+
+        Attention execution and inference-cache choices do not alter parameter
+        names or shapes, so a checkpoint may safely select different values for
+        those fields when constructing its destination model.
+        """
+
+        values = asdict(self)
+        for field_name in (
+            "attention_backend",
+            "use_flash_attention",
+            "use_kv_cache",
+        ):
+            values.pop(field_name)
+        return values
 
     def validate(self) -> None:
         _require_non_empty(self.profile, "model.profile")
@@ -381,6 +401,18 @@ class GPTConfig(_SerializableConfig):
             _fail("model.dropout", "must be in [0, 1)")
         _require_choice(self.norm, "model.norm", _NORM_TYPES)
         _require_choice(self.activation, "model.activation", _ACTIVATION_TYPES)
+        _require_choice(
+            self.attention_backend,
+            "model.attention_backend",
+            _ATTENTION_BACKENDS,
+        )
+        _require_bool(self.use_flash_attention, "model.use_flash_attention")
+        if self.use_flash_attention:
+            _fail(
+                "model.use_flash_attention",
+                "must remain false; select the canonical model.attention_backend "
+                "setting instead",
+            )
         expected_rmsnorm = self.norm == "rmsnorm"
         if self.use_rmsnorm is not expected_rmsnorm:
             _fail(
