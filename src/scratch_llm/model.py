@@ -13,6 +13,7 @@ from scratch_llm.attention_backends import (
     FlashProviderLoader,
 )
 from scratch_llm.config import GPTConfig
+from scratch_llm.kv_cache import KVCache, KVCacheError, KVCacheTransaction
 
 
 class MLP(nn.Module):
@@ -62,6 +63,7 @@ class Block(nn.Module):
         config: GPTConfig,
         *,
         flash_provider_loader: FlashProviderLoader | None = None,
+        layer_index: int | None = None,
     ) -> None:
         super().__init__()
         config.validate()
@@ -70,15 +72,27 @@ class Block(nn.Module):
         self.attn = CausalSelfAttention(
             config,
             flash_provider_loader=flash_provider_loader,
+            layer_index=layer_index,
         )
         self.ln_2 = nn.LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        *,
+        kv_cache: KVCacheTransaction | None = None,
+    ) -> torch.Tensor:
         """Apply pre-normalized attention and feed-forward residual updates."""
 
         attention_residual = x
-        x = attention_residual + self.attn(self.ln_1(attention_residual))
+        normalized = self.ln_1(attention_residual)
+        attended = (
+            self.attn(normalized)
+            if kv_cache is None
+            else self.attn(normalized, kv_cache=kv_cache)
+        )
+        x = attention_residual + attended
 
         mlp_residual = x
         return mlp_residual + self.mlp(self.ln_2(mlp_residual))
@@ -104,8 +118,12 @@ class GPT(nn.Module):
         self.embedding_dropout = nn.Dropout(config.dropout)
         self.blocks = nn.ModuleList(
             [
-                Block(config, flash_provider_loader=flash_provider_loader)
-                for _ in range(config.n_layer)
+                Block(
+                    config,
+                    flash_provider_loader=flash_provider_loader,
+                    layer_index=layer_index,
+                )
+                for layer_index in range(config.n_layer)
             ]
         )
         self.ln_f = nn.LayerNorm(config.n_embd, bias=config.bias)
@@ -134,11 +152,44 @@ class GPT(nn.Module):
             raise TypeError("activation checkpointing enabled must be a boolean")
         self.activation_checkpointing = enabled
 
+    def create_kv_cache(
+        self,
+        *,
+        batch_size: int,
+        capacity: int | None = None,
+    ) -> KVCache:
+        """Allocate external cache storage matching this model's parameters."""
+
+        active_capacity = self.max_seq_len if capacity is None else capacity
+        if (
+            isinstance(active_capacity, bool)
+            or not isinstance(active_capacity, int)
+            or active_capacity <= 0
+        ):
+            raise KVCacheError("cache capacity must be a positive integer")
+        if active_capacity > self.max_seq_len:
+            raise KVCacheError(
+                f"cache capacity {active_capacity} exceeds model context "
+                f"length {self.max_seq_len}"
+            )
+        reference = self.token_embedding.weight
+        return KVCache(
+            layer_count=len(self.blocks),
+            batch_size=batch_size,
+            kv_head_count=self.config.n_head,
+            head_dimension=self.config.n_embd // self.config.n_head,
+            capacity=active_capacity,
+            device=reference.device,
+            dtype=reference.dtype,
+        )
+
     def forward(
         self,
         token_ids: torch.Tensor,
         targets: torch.Tensor | None = None,
         loss_reduction: str = "mean",
+        *,
+        kv_cache: KVCache | None = None,
     ) -> torch.Tensor:
         """Return next-token logits or reduced loss for a batch of token IDs."""
 
@@ -155,26 +206,73 @@ class GPT(nn.Module):
                 f"sequence length {sequence_length} exceeds configured "
                 f"context length {self.max_seq_len}"
             )
-        positions = torch.arange(sequence_length, device=token_ids.device)
-        x = self.token_embedding(token_ids) + self.position_embedding(positions)
-        x = self.embedding_dropout(x)
-        for block_index, block in enumerate(self.blocks):
-            if (
-                self.activation_checkpointing
-                and self.training
-                and torch.is_grad_enabled()
-            ):
-                x = checkpoint(
-                    self._run_checkpointed_block,
-                    block,
-                    block_index,
-                    x,
-                    use_reentrant=False,
-                    preserve_rng_state=True,
+        transaction: KVCacheTransaction | None = None
+        position_start = 0
+        if kv_cache is not None:
+            if self.training or torch.is_grad_enabled():
+                raise KVCacheError(
+                    "KV cache is inference-only; use eval() with no_grad or "
+                    "inference_mode"
                 )
-            else:
-                x = block(x)
-        logits = self.lm_head(self.ln_f(x))
+            if targets is not None:
+                raise KVCacheError("KV cache does not support training targets")
+            if kv_cache.position + sequence_length > self.max_seq_len:
+                raise KVCacheError(
+                    f"cached position {kv_cache.position} plus {sequence_length} "
+                    f"tokens exceeds model context length {self.max_seq_len}"
+                )
+            if kv_cache.metadata.layer_count != len(self.blocks):
+                raise KVCacheError(
+                    "cache layer_count mismatch: expected "
+                    f"{len(self.blocks)}, got {kv_cache.metadata.layer_count}"
+                )
+            reference = self.token_embedding.weight
+            transaction = kv_cache.begin(
+                token_count=sequence_length,
+                batch_size=token_ids.shape[0],
+                kv_head_count=self.config.n_head,
+                head_dimension=self.config.n_embd // self.config.n_head,
+                device=reference.device,
+                dtype=reference.dtype,
+            )
+            position_start = transaction.start
+        try:
+            positions = torch.arange(
+                position_start,
+                position_start + sequence_length,
+                device=token_ids.device,
+            )
+            x = self.token_embedding(token_ids) + self.position_embedding(positions)
+            x = self.embedding_dropout(x)
+            for block_index, block in enumerate(self.blocks):
+                if (
+                    self.activation_checkpointing
+                    and self.training
+                    and torch.is_grad_enabled()
+                ):
+                    x = checkpoint(
+                        self._run_checkpointed_block,
+                        block,
+                        block_index,
+                        x,
+                        use_reentrant=False,
+                        preserve_rng_state=True,
+                    )
+                elif transaction is None:
+                    x = block(x)
+                else:
+                    if not isinstance(block, Block):
+                        raise KVCacheError(
+                            "cached decoder block list contains a non-block module"
+                        )
+                    x = block(x, kv_cache=transaction)
+            logits = self.lm_head(self.ln_f(x))
+        except Exception:
+            if transaction is not None:
+                transaction.rollback()
+            raise
+        if transaction is not None:
+            transaction.commit()
         if targets is None:
             return logits
         loss = F.cross_entropy(
