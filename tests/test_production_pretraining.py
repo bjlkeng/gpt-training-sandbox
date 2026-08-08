@@ -393,6 +393,38 @@ def test_production_profile_supports_each_explicit_loader(
     assert telemetry.peak_memory_mib is None
 
 
+def test_cpu_bfloat16_production_training_is_finite_and_checkpointed(
+    tmp_path: Path,
+) -> None:
+    _, artifact_dir, tokenized_dir = _write_production_inputs(tmp_path)
+    config = _production_config(
+        tmp_path,
+        artifact_dir=artifact_dir,
+        tokenized_dir=tokenized_dir,
+        run_name="production-bfloat16",
+        max_steps=1,
+    )
+    config.train.dtype = "bfloat16"
+    config.validate()
+
+    result = run_pretraining(
+        config,
+        paths=prepare_run(config),
+        tracker=NullTracker(),
+    )
+
+    payload = torch.load(result.checkpoint_path, map_location="cpu", weights_only=True)
+    assert math.isfinite(result.steps[0].loss)
+    assert math.isfinite(result.steps[0].grad_norm)
+    assert payload["precision"] == {
+        "device_type": "cpu",
+        "dtype": "bfloat16",
+        "format_version": 1,
+        "scaler_enabled": False,
+        "scaler_state": None,
+    }
+
+
 def test_periodic_validation_installs_best_before_independent_step_and_last(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
