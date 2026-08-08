@@ -728,7 +728,9 @@ Each model also selects one causal-attention implementation explicitly:
 
 ```yaml
 model:
-  attention_backend: manual  # or sdpa
+  attention_backend: manual  # manual, sdpa, or flash
+  attention_fallback_policy: allow  # allow or error
+  flash_attention_provider: auto  # auto, fa2, or fa3
 ```
 
 `manual` remains the compatibility and educational default. `sdpa` reuses the
@@ -755,13 +757,58 @@ uv run python -m scripts.benchmark_pretrain \
   --no-wandb
 ```
 
+For an opt-in long-context kernel-only comparison that writes elapsed time and
+CUDA peak allocated/reserved memory without downloading anything or enforcing
+a noisy performance threshold:
+
+```bash
+SCRATCH_LLM_RUN_FLASH_BENCHMARK=1 uv run python -m scripts.benchmark_flash_attention \
+  --sequence-length 2048 \
+  --dtype bfloat16 \
+  --output runs/flash-attention-benchmark.json
+```
+
 The dry-run summary and completed `metrics/throughput_benchmark.json` both
 record `Requested attention backend` and the effective backend. Manual and
-SDPA are direct selections with no fallback at this layer; later optional
-providers must record any fallback rather than labeling it as requested. The
+SDPA are direct selections with no fallback at this layer; optional flash
+providers record any fallback rather than labeling it as requested. The
 planning memory estimate remains the conservative materialized-manual upper
 bound, while measured peak memory in the benchmark is the evidence for a
 specific backend.
+
+`flash` is an optional, lazy adapter: the normal install has no FlashAttention
+dependency, and importing the project or selecting `manual`/`sdpa` never
+imports one. On a flash request, preflight checks the installed provider and
+version, CUDA availability and compute capability, fp16/bfloat16 dtype, head
+dimension, training/backward/dropout mode, causal or local-window support, and
+KV-cache support. The default `allow` policy falls back deterministically to
+SDPA, then to manual attention only if SDPA is unavailable. Set
+`attention_fallback_policy: error` to reject an unsupported request before
+training begins.
+
+The `auto` provider selects FlashAttention-2 on the Ampere RTX 3090. The
+Hopper-only FlashAttention-3 beta is never claimed on that GPU: an explicit
+`fa3` request reports `flash_cuda_capability_unsupported` and follows the
+configured fallback policy. Provider imports are intentionally outside the
+core dependency set; install a compatible upstream FlashAttention build in
+the run environment when you want actual flash execution.
+
+Every pretraining/SFT progress log and throughput report records requested and
+effective backend, stable fallback reason, provider name, and provider version.
+Thus a request that ran through SDPA is labeled SDPA rather than FlashAttention.
+Select the optional backend, with a strict example, using:
+
+```bash
+uv run python -m scripts.benchmark_pretrain \
+  --config configs/tiny_20m_3090.yaml \
+  --override run.name=tiny-20m-flash-throughput \
+  --override train.dtype=bfloat16 \
+  --override model.attention_backend=flash \
+  --override model.attention_fallback_policy=error \
+  --warmup-steps 2 \
+  --timed-steps 10 \
+  --no-wandb
+```
 
 Pretraining checkpoints use checkpoint format version 7. State is captured at
 the completed optimizer-step boundary after all microbatches, the optimizer

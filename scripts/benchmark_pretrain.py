@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from pathlib import Path
 import sys
 
+from scratch_llm.attention_backends import preflight_attention_backend
 from scratch_llm.diagnostics.accelerator_memory import AcceleratorMemoryError
 from scratch_llm.training.pretraining import (
     PretrainingError,
@@ -26,6 +27,7 @@ from scratch_llm.diagnostics.throughput_runtime import (
     execute_production_throughput_benchmark,
 )
 from scratch_llm.data.tokenized import TokenizedDataError
+from scratch_llm.utils import get_device
 from scripts._common import (
     config_parser,
     prepare_tracked_run,
@@ -74,7 +76,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         validate_production_pretraining_config(config)
         resource_estimate = estimate_training_resources(config)
-    except (OverflowError, PretrainingError, TypeError, ValueError) as error:
+        attention_preflight = preflight_attention_backend(
+            config.model,
+            device=get_device(config.run.device),
+            dtype=config.train.dtype,
+            training=True,
+        )
+    except (
+        OverflowError,
+        PretrainingError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as error:
         parser.error(str(error))
 
     paths, tracker = prepare_tracked_run(parser, config, command=COMMAND)
@@ -87,8 +101,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Benchmark protocol: {THROUGHPUT_BENCHMARK_PROTOCOL_ID}")
             print(f"Warmup steps: {arguments.warmup_steps}")
             print(f"Timed steps: {arguments.timed_steps}")
-            print(f"Requested attention backend: {config.model.attention_backend}")
-            print(f"Effective attention backend: {config.model.attention_backend}")
+            print(
+                "Requested attention backend: "
+                f"{attention_preflight.selection.requested_backend}"
+            )
+            print(
+                "Effective attention backend: "
+                f"{attention_preflight.selection.effective_backend}"
+            )
+            print(
+                "Attention fallback reason: "
+                f"{attention_preflight.selection.fallback_reason}"
+            )
             print(f"Resource estimate JSON: {resource_estimate.to_json()}")
             print(render_training_resource_estimate(resource_estimate))
         return 0
@@ -142,6 +166,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"Peak allocated MiB: {measurements['peak_allocated_mib']}")
     print(f"Requested attention backend: {attention['requested_backend']}")
     print(f"Effective attention backend: {attention['effective_backend']}")
+    print(f"Attention fallback reason: {attention['fallback_reason']}")
     return 0
 
 

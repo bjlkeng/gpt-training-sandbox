@@ -302,7 +302,7 @@ def test_nonzero_dropout_fixture_preserves_eval_parity_and_seeded_modes() -> Non
 def test_readme_documents_sdpa_selection_parity_and_benchmark_identity() -> None:
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
 
-    assert "attention_backend: manual  # or sdpa" in readme
+    assert "attention_backend: manual  # manual, sdpa, or flash" in readme
     assert "never materializes the manual square causal mask" in readme
     assert "Requested attention backend" in readme
     assert "--override model.attention_backend=sdpa" in readme

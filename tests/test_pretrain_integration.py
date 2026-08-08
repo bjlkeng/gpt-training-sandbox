@@ -9,10 +9,18 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import pytest
 import torch
 
+from scratch_llm.attention_backends import (
+    FLASH_CUDA_UNAVAILABLE,
+    AttentionBackendError,
+)
 from scratch_llm.training.checkpoint import load_model_checkpoint
 from scratch_llm.config import ProjectConfig, dump_config, load_config
+from scratch_llm.run import prepare_run
+from scratch_llm.tracking import NullTracker
+from scratch_llm.training.pretraining import run_pretraining
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -63,6 +71,26 @@ def _metric_records(path: Path) -> list[dict[str, object]]:
         for line in path.read_text(encoding="utf-8").splitlines()
         if (record := json.loads(line))["record_type"] == "metrics"
     ]
+
+
+def test_strict_flash_preflight_fails_before_training_work(tmp_path: Path) -> None:
+    config = _integration_config(tmp_path, run_name="strict-flash")
+    config.model.attention_backend = "flash"
+    config.model.attention_fallback_policy = "error"
+    config.validate()
+    paths = prepare_run(config)
+    progress: list[str] = []
+
+    with pytest.raises(AttentionBackendError, match=FLASH_CUDA_UNAVAILABLE):
+        run_pretraining(
+            config,
+            paths=paths,
+            tracker=NullTracker(),
+            progress=progress.append,
+        )
+
+    assert progress == []
+    assert not any(paths.checkpoints_dir.iterdir())
 
 
 def _assert_nested_state_equal(actual: Any, expected: Any) -> None:

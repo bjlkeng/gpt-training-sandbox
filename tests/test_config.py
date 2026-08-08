@@ -10,10 +10,12 @@ import pytest
 from scratch_llm.config import (
     ActivationType,
     AttentionBackend,
+    AttentionFallbackPolicy,
     ConfigValidationError,
     DEFAULT_SPECIAL_TOKENS,
     GPTConfig,
     GenerationConfig,
+    FlashAttentionProvider,
     NormType,
     ProjectConfig,
     RunConfig,
@@ -127,6 +129,8 @@ def test_defaults_cover_the_roadmap_sections_and_are_deterministic() -> None:
             "use_qk_norm": False,
             "use_gqa": False,
             "attention_backend": "manual",
+            "attention_fallback_policy": "allow",
+            "flash_attention_provider": "auto",
             "use_flash_attention": False,
             "use_kv_cache": False,
         },
@@ -425,6 +429,18 @@ def test_train_validation_rejects_adamw_beta_of_one(field_name: str) -> None:
         (
             lambda: GPTConfig(attention_backend=cast(AttentionBackend, "automatic")),
             "model.attention_backend",
+        ),
+        (
+            lambda: GPTConfig(
+                attention_fallback_policy=cast(AttentionFallbackPolicy, "silent")
+            ),
+            "model.attention_fallback_policy",
+        ),
+        (
+            lambda: GPTConfig(
+                flash_attention_provider=cast(FlashAttentionProvider, "fa4")
+            ),
+            "model.flash_attention_provider",
         ),
         (lambda: TrainConfig(dtype=cast(TrainDType, "float64")), "train.dtype"),
     ],

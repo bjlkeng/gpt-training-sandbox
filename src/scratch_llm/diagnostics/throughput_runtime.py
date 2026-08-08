@@ -16,6 +16,10 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
 from scratch_llm._validation import require_positive_integer
+from scratch_llm.attention_backends import (
+    format_attention_selection,
+    preflight_attention_backend,
+)
 from scratch_llm.diagnostics.accelerator_memory import (
     AcceleratorMemorySnapshot,
     collect_accelerator_memory,
@@ -178,6 +182,14 @@ def execute_production_throughput_benchmark(
     validate_production_pretraining_config(config)
     device = get_device(config.run.device)
     precision = build_precision_policy(dtype=config.train.dtype, device=device)
+    preflight = preflight_attention_backend(
+        config.model,
+        device=device,
+        dtype=config.train.dtype,
+        training=True,
+    )
+    if progress is not None:
+        progress(format_attention_selection(preflight.selection))
     set_seed(config.run.seed)
     tokenizer = load_production_tokenizer(config)
     with ExitStack() as resources:
@@ -233,6 +245,7 @@ def execute_production_throughput_benchmark(
             cuda_identity=cuda,
             pytorch_identity=pytorch,
             code_identity=collect_code_identity(repository_root),
+            attention_selection=model.attention_backend_selection(),
         )
 
 
