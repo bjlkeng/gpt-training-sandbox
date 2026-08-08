@@ -821,6 +821,43 @@ rejected before model mode, RNG state, or cache storage is mutated. Each
 single-sequence generation allocates its own cache and logically resets it on
 completion, iterator close, or failure.
 
+Benchmark the two policies against one immutable checkpoint with the production
+command; it always compares explicit `naive` and `cached` modes regardless of
+the checkpoint's default selection:
+
+```bash
+uv run python -m scripts.benchmark_inference \
+  --config configs/tiny_20m_3090.yaml \
+  --override run.name=tiny-20m-inference \
+  --override generation.temperature=0 \
+  --override generation.max_new_tokens=128 \
+  --checkpoint runs/tiny-20m-3090/checkpoints/best.pt \
+  --prompt "Once upon a time" \
+  --warmup-iterations 2 \
+  --timed-iterations 10 \
+  --peak-memory-bandwidth-gbps 936.2 \
+  --peak-memory-bandwidth-basis "RTX 3090 advertised peak" \
+  --no-wandb
+```
+
+Warmups and cold compiler work are excluded, while checkpoint load and compile
+startup remain explicit. Each timed pair synchronizes accelerator boundaries,
+then refuses comparison unless visible token IDs and completion metadata match.
+The atomic `metrics/inference_bench.json` report records prefill, time to first
+token, steady decode, end-to-end, throughput, peak allocated/reserved memory,
+cache size, requested/effective attention and compile state, runtime identities,
+and linear-interpolation quantiles. The canonical terminal, JSONL, and optional
+W&B values use the exact `inference/*` namespace.
+
+Inference MFU models forward linear projections plus attention QK/value FLOPs;
+MBU models one parameter read per steady decode call plus external KV reads and
+writes. Both formulas and exclusions are embedded in the report. MFU uses the
+configured `train.mfu_peak_flops_*` pair, and MBU is null unless the command
+receives an explicit bandwidth value and description. Hardware counters that
+are unavailable remain null with a reason. Prompts, generated text, and raw
+token IDs are omitted by default; the existing independent
+`tracking.wandb.log_prompts` and `log_responses` opt-ins govern text inclusion.
+
 For an opt-in long-context kernel-only comparison that writes elapsed time and
 CUDA peak allocated/reserved memory without downloading anything or enforcing
 a noisy performance threshold:
@@ -1359,6 +1396,7 @@ runs/<training-run>/metrics/core_comparison.md
 runs/<training-run>/checkpoints/last.pt
 runs/<training-run>/checkpoints/best.pt
 runs/<benchmark-run>/metrics/throughput_benchmark.json
+runs/<benchmark-run>/metrics/inference_bench.json
 comparisons/<comparison-name>/comparison.json
 comparisons/<comparison-name>/comparison.md
 ```
