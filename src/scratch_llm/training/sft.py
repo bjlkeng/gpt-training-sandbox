@@ -73,6 +73,10 @@ from scratch_llm.training.checkpoint import (
     load_training_checkpoint,
     save_checkpoint,
 )
+from scratch_llm.training.activation_checkpointing import (
+    configure_activation_checkpointing,
+    format_activation_checkpoint_selection,
+)
 from scratch_llm.training.compilation import (
     ModelCompiler,
     build_compile_runtime,
@@ -267,6 +271,14 @@ def run_sft_training(
         resume_from=resume_from,
         allow_tracking_fork=allow_tracking_fork,
     )
+    activation_checkpoint_selection = configure_activation_checkpointing(
+        runtime.model,
+        enabled=config.sft.activation_checkpointing,
+    )
+    if progress is not None:
+        progress(
+            format_activation_checkpoint_selection(activation_checkpoint_selection)
+        )
     compile_runtime = build_compile_runtime(
         runtime.model,
         config.sft,
@@ -505,8 +517,6 @@ def _validate_request(
         raise SFTTrainingError(
             "base checkpoint initialization and SFT resume are mutually exclusive"
         )
-    if config.sft.activation_checkpointing:
-        raise SFTTrainingError("SFT does not support sft.activation_checkpointing yet")
 
 
 def _resolve_base_checkpoint(

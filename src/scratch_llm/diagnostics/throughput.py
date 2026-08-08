@@ -12,6 +12,9 @@ from typing import Final
 
 from scratch_llm.attention_backends import AttentionBackendSelection
 from scratch_llm.training.compilation import CompileSelection
+from scratch_llm.training.activation_checkpointing import (
+    ActivationCheckpointSelection,
+)
 from scratch_llm._validation import (
     JsonValueValidator,
     require_finite_non_negative_real,
@@ -65,6 +68,7 @@ class BenchmarkExecution:
     code_identity: Mapping[str, object]
     attention_selection: AttentionBackendSelection | None = None
     compile_selection: CompileSelection | None = None
+    activation_checkpoint_selection: ActivationCheckpointSelection | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.steps, tuple) or not self.steps:
@@ -102,6 +106,14 @@ class BenchmarkExecution:
             CompileSelection,
         ):
             raise TypeError("compile_selection must be a CompileSelection or None")
+        if self.activation_checkpoint_selection is not None and not isinstance(
+            self.activation_checkpoint_selection,
+            ActivationCheckpointSelection,
+        ):
+            raise TypeError(
+                "activation_checkpoint_selection must be an "
+                "ActivationCheckpointSelection or None"
+            )
 
 
 @dataclass(frozen=True)
@@ -213,7 +225,15 @@ def build_throughput_benchmark(
         fullgraph=config.train.compile_fullgraph,
         dynamic=config.train.compile_dynamic,
     )
+    activation_checkpoint_selection = (
+        execution.activation_checkpoint_selection
+        or ActivationCheckpointSelection(
+            requested=config.train.activation_checkpointing,
+            effective=config.train.activation_checkpointing,
+        )
+    )
     optimization_state = {
+        "activation_checkpointing": activation_checkpoint_selection.to_dict(),
         "attention": selection.to_dict(),
         "compile": compile_selection.to_dict(),
     }

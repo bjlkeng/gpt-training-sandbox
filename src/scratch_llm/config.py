@@ -550,6 +550,10 @@ class TrainConfig(_SerializableConfig):
         )
         _require_bool(self.compile_fullgraph, "train.compile_fullgraph")
         _require_bool(self.compile_dynamic, "train.compile_dynamic")
+        _require_bool(
+            self.activation_checkpointing,
+            "train.activation_checkpointing",
+        )
 
 
 @dataclass
@@ -783,6 +787,10 @@ class SFTConfig(_SerializableConfig):
         )
         _require_bool(self.compile_fullgraph, "sft.compile_fullgraph")
         _require_bool(self.compile_dynamic, "sft.compile_dynamic")
+        _require_bool(
+            self.activation_checkpointing,
+            "sft.activation_checkpointing",
+        )
 
     def to_train_config(self, seq_len: int) -> TrainConfig:
         """Return the shared optimizer/scheduler view for this SFT contract."""

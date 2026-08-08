@@ -757,6 +757,28 @@ uv run python -m scripts.benchmark_pretrain \
   --no-wandb
 ```
 
+Set `train.activation_checkpointing: true` (or the same SFT field) to apply
+non-reentrant `torch.utils.checkpoint.checkpoint` at each transformer block
+only while the model is training with gradients enabled. Dropout RNG is
+preserved across recomputation. Evaluation, inference-mode generation, BPB,
+and no-grad calls bypass checkpointing, and the runtime flag adds no modules,
+parameters, buffers, or state-dict keys. It composes with AMP, gradient
+accumulation, exact resume, and the compile adapter.
+
+Progress and throughput JSON record requested/effective checkpoint state. The
+planning estimate remains a conservative uncheckpointed upper bound and marks
+the request without promising that a configuration will fit. To record a
+same-shape, same-weight local CUDA comparison with no brittle pass/fail speed
+or memory threshold:
+
+```bash
+SCRATCH_LLM_RUN_ACTIVATION_CHECKPOINT_BENCHMARK=1 \
+  uv run python -m scripts.benchmark_activation_checkpointing \
+  --sequence-length 1024 \
+  --dtype bfloat16 \
+  --output runs/activation-checkpoint-benchmark.json
+```
+
 For an opt-in long-context kernel-only comparison that writes elapsed time and
 CUDA peak allocated/reserved memory without downloading anything or enforcing
 a noisy performance threshold:

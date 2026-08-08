@@ -27,6 +27,9 @@ from scratch_llm.config import (
 from scratch_llm.data.loaders import NextTokenDataset
 from scratch_llm.model import GPT
 from scratch_llm.training.optim import build_lr_scheduler, build_optimizer
+from scratch_llm.training.activation_checkpointing import (
+    configure_activation_checkpointing,
+)
 from scratch_llm.run import prepare_run
 from scratch_llm.tokenization.tokenizer import VOCAB_SIZE, ByteTokenizer
 from scratch_llm.tracking import JsonlTracker
@@ -373,6 +376,7 @@ def test_cpu_training_loop_runs_forward_backward_clip_optimizer_and_scheduler(
             mlp_ratio=2,
         )
     )
+    configure_activation_checkpointing(model, enabled=True)
     train_config = TrainConfig(
         device_batch_size=2,
         total_batch_size_tokens=8,
@@ -552,6 +556,7 @@ def test_fixed_batch_reaches_the_documented_deterministic_overfit_threshold() ->
             mlp_ratio=2,
         )
     )
+    configure_activation_checkpointing(model, enabled=True)
     train_config = TrainConfig(
         device_batch_size=2,
         total_batch_size_tokens=16,

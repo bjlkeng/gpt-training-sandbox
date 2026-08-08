@@ -27,6 +27,9 @@ from scratch_llm.diagnostics.throughput import (
 )
 from scratch_llm.training.loop import OptimizerStepResult
 from scratch_llm.training.compilation import CompileSelection
+from scratch_llm.training.activation_checkpointing import (
+    ActivationCheckpointSelection,
+)
 from scratch_llm.training.telemetry import (
     PeakFlopsBasis,
     TrainingStepTelemetry,
@@ -74,6 +77,7 @@ def _execution(
     durations: tuple[float, ...],
     attention_selection: AttentionBackendSelection | None = None,
     compile_selection: CompileSelection | None = None,
+    activation_checkpoint_selection: ActivationCheckpointSelection | None = None,
 ) -> BenchmarkExecution:
     flops = estimate_gpt_training_flops(config.model)
     basis = PeakFlopsBasis(1_000_000.0, "fake peak")
@@ -129,6 +133,7 @@ def _execution(
         code_identity={"commit": "abc123", "tracked_dirty": False},
         attention_selection=attention_selection,
         compile_selection=compile_selection,
+        activation_checkpoint_selection=activation_checkpoint_selection,
     )
 
 
@@ -258,6 +263,33 @@ def test_compile_startup_and_effective_state_enter_report_identity(
     )
     assert compiled.payload["measurements"]["elapsed_seconds"] == 2.0
     assert compiled.protocol_identity != direct.protocol_identity
+
+
+def test_activation_checkpoint_state_enters_report_identity(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    direct = build_throughput_benchmark(
+        config,
+        execution=_execution(config, durations=(1.0, 2.0)),
+        warmup_steps=1,
+        timed_steps=1,
+    )
+    selection = ActivationCheckpointSelection(requested=True, effective=True)
+    checkpointed = build_throughput_benchmark(
+        config,
+        execution=_execution(
+            config,
+            durations=(1.0, 2.0),
+            activation_checkpoint_selection=selection,
+        ),
+        warmup_steps=1,
+        timed_steps=1,
+    )
+
+    assert (
+        checkpointed.payload["optimization_state"]["activation_checkpointing"]
+        == selection.to_dict()
+    )
+    assert checkpointed.protocol_identity != direct.protocol_identity
 
 
 def test_atomic_report_failure_preserves_prior_complete_report(

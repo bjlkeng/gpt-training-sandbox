@@ -318,6 +318,8 @@ def test_gradient_accumulation_preserves_the_exact_sft_token_budget(
 ) -> None:
     config = _config(tmp_path, run_name="sft-accumulation")
     config.sft.total_batch_size_tokens = 128
+    config.sft.dtype = "bfloat16"
+    config.sft.activation_checkpointing = True
     config.sft.max_steps = 1
     config.sft.eval_every = 1
     config.sft.save_every = 1
@@ -335,16 +337,19 @@ def test_gradient_accumulation_preserves_the_exact_sft_token_budget(
 
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
 @pytest.mark.parametrize("compiled", [False, True])
+@pytest.mark.parametrize("checkpointed", [False, True])
 def test_exact_sft_resume_matches_uninterrupted_training(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     dtype: TrainDType,
     compiled: bool,
+    checkpointed: bool,
 ) -> None:
     config = _config(tmp_path, run_name="sft-uninterrupted")
     config.sft.dtype = dtype
     config.sft.compile = compiled
     config.sft.compile_backend = "eager"
+    config.sft.activation_checkpointing = checkpointed
     base = _base_checkpoint(tmp_path, config)
     compiler = (lambda model, **_kwargs: model) if compiled else None
     fresh_clock = count()
@@ -356,6 +361,7 @@ def test_exact_sft_resume_matches_uninterrupted_training(
     resumed_config.sft.dtype = dtype
     resumed_config.sft.compile = compiled
     resumed_config.sft.compile_backend = "eager"
+    resumed_config.sft.activation_checkpointing = checkpointed
     resumed_config.sft.base_checkpoint = str(base)
     resumed_clock = count()
     monkeypatch.setattr(
