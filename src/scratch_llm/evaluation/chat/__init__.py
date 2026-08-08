@@ -11,6 +11,18 @@ from scratch_llm.evaluation.chat.categorical import (
     evaluate_categorical_task,
     render_multiple_choice_prompt,
 )
+from scratch_llm.evaluation.chat.chatcore import (
+    CHATCORE_BASELINE_ACCURACIES,
+    CHATCORE_CATEGORICAL_TASKS,
+    CHATCORE_PROTOCOL_ID,
+    CHATCORE_PROTOCOL_VERSION,
+    CHATCORE_TASK_ORDER,
+    ChatCoreEvaluationError,
+    ChatCoreResult,
+    ChatCoreRunKind,
+    ChatCoreTaskName,
+    ChatCoreTaskResult,
+)
 from scratch_llm.evaluation.chat.diagnostics import (
     CodeFenceCategory,
     CodePromptDiagnostic,
@@ -82,6 +94,11 @@ from scratch_llm.evaluation.chat.protocol import CHAT_EVAL_REFERENCE_COMMIT
 
 
 __all__ = [
+    "CHATCORE_BASELINE_ACCURACIES",
+    "CHATCORE_CATEGORICAL_TASKS",
+    "CHATCORE_PROTOCOL_ID",
+    "CHATCORE_PROTOCOL_VERSION",
+    "CHATCORE_TASK_ORDER",
     "CHAT_CATEGORICAL_PROTOCOL_ID",
     "CHAT_CATEGORICAL_PROTOCOL_VERSION",
     "CHAT_EVAL_REFERENCE_COMMIT",
@@ -92,6 +109,11 @@ __all__ = [
     "CategoricalGroupResult",
     "CategoricalTask",
     "CategoricalTaskResult",
+    "ChatCoreEvaluationError",
+    "ChatCoreResult",
+    "ChatCoreRunKind",
+    "ChatCoreTaskName",
+    "ChatCoreTaskResult",
     "CodeExecutionResult",
     "CodeExecutionStatus",
     "CodeExecutor",
