@@ -166,6 +166,11 @@ def test_timed_aggregate_excludes_warmup_and_preserves_shared_telemetry(
     assert payload["identities"]["config"].startswith("sha256:")
     assert payload["identities"]["tokenizer"] == "tokenizer:fixture"
     assert payload["identities"]["manifest"] == "manifest:fixture"
+    assert payload["optimization_state"]["attention"] == {
+        "effective_backend": "manual",
+        "fallback_reason": None,
+        "requested_backend": "manual",
+    }
     assert payload["resource_estimate"]["memory"]["classification"] == (
         "conservative_estimate_not_observed"
     )

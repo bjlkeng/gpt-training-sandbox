@@ -87,6 +87,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Benchmark protocol: {THROUGHPUT_BENCHMARK_PROTOCOL_ID}")
             print(f"Warmup steps: {arguments.warmup_steps}")
             print(f"Timed steps: {arguments.timed_steps}")
+            print(f"Requested attention backend: {config.model.attention_backend}")
+            print(f"Effective attention backend: {config.model.attention_backend}")
             print(f"Resource estimate JSON: {resource_estimate.to_json()}")
             print(render_training_resource_estimate(resource_estimate))
         return 0
@@ -129,11 +131,17 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     measurements = completed.payload["measurements"]
     assert isinstance(measurements, dict)
+    optimization_state = completed.payload["optimization_state"]
+    assert isinstance(optimization_state, dict)
+    attention = optimization_state["attention"]
+    assert isinstance(attention, dict)
     print(f"Run directory: {paths.run_dir}")
     print(f"Report: {artifacts.report_path}")
     print(f"Tokens/sec: {measurements['tokens_per_second']}")
     print(f"MFU: {measurements['mfu']}")
     print(f"Peak allocated MiB: {measurements['peak_allocated_mib']}")
+    print(f"Requested attention backend: {attention['requested_backend']}")
+    print(f"Effective attention backend: {attention['effective_backend']}")
     return 0
 
 

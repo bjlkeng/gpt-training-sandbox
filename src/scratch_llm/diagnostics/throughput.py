@@ -184,14 +184,26 @@ def build_throughput_benchmark(
         "version": 1,
         "warmup_steps": warmup_steps,
     }
+    optimization_state = {
+        "attention": {
+            "effective_backend": config.model.attention_backend,
+            "fallback_reason": None,
+            "requested_backend": config.model.attention_backend,
+        }
+    }
     protocol_identity = _payload_identity(
-        {"identities": identities, "protocol": protocol}
+        {
+            "identities": identities,
+            "optimization_state": optimization_state,
+            "protocol": protocol,
+        }
     )
     payload: dict[str, object] = {
         "format": THROUGHPUT_BENCHMARK_FORMAT,
         "format_version": THROUGHPUT_BENCHMARK_FORMAT_VERSION,
         "identities": identities,
         "measurements": _aggregate_measurements(telemetry, memory=memory),
+        "optimization_state": optimization_state,
         "protocol": protocol,
         "protocol_identity": protocol_identity,
         "resource_estimate": resource_estimate.to_dict(),
@@ -385,6 +397,7 @@ def _validate_existing_protocol(path: Path, expected_identity: str) -> None:
     reconstructed_identity = _payload_identity(
         {
             "identities": value.get("identities"),
+            "optimization_state": value.get("optimization_state"),
             "protocol": value.get("protocol"),
         }
     )

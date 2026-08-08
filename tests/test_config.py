@@ -9,6 +9,7 @@ import pytest
 
 from scratch_llm.config import (
     ActivationType,
+    AttentionBackend,
     ConfigValidationError,
     DEFAULT_SPECIAL_TOKENS,
     GPTConfig,
@@ -125,6 +126,7 @@ def test_defaults_cover_the_roadmap_sections_and_are_deterministic() -> None:
             "use_rmsnorm": False,
             "use_qk_norm": False,
             "use_gqa": False,
+            "attention_backend": "manual",
             "use_flash_attention": False,
             "use_kv_cache": False,
         },
@@ -420,6 +422,10 @@ def test_train_validation_rejects_adamw_beta_of_one(field_name: str) -> None:
             lambda: GPTConfig(activation=cast(ActivationType, "relu")),
             "model.activation",
         ),
+        (
+            lambda: GPTConfig(attention_backend=cast(AttentionBackend, "automatic")),
+            "model.attention_backend",
+        ),
         (lambda: TrainConfig(dtype=cast(TrainDType, "float64")), "train.dtype"),
     ],
 )
@@ -428,6 +434,14 @@ def test_validation_rejects_invalid_modes(
 ) -> None:
     with pytest.raises(ConfigValidationError, match=rf"^{path}:"):
         factory()
+
+
+def test_legacy_flash_boolean_cannot_contradict_the_canonical_backend() -> None:
+    with pytest.raises(
+        ConfigValidationError,
+        match="model.use_flash_attention:.*canonical model.attention_backend",
+    ):
+        GPTConfig(use_flash_attention=True)
 
 
 @pytest.mark.parametrize("mode", ["online", "offline", "disabled"])
