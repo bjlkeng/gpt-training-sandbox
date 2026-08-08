@@ -222,10 +222,26 @@ def test_memory_components_and_headroom_follow_documented_arithmetic() -> None:
     assert payload["classification"] == "conservative_estimate_not_observed"
     assert payload["assumptions"]["automatic_mixed_precision"] is False
     assert payload["assumptions"]["activation_checkpointing"] is False
+    assert payload["assumptions"]["compiled_graph_requested"] is False
     assert payload["assumptions"]["optimizer"] == "AdamW"
     assert payload["assumptions"]["optimizer_state_dtype"] == "float32"
     assert payload["assumptions"]["attention"] == (
         "manual_materialized_scores_and_probabilities"
+    )
+
+
+def test_compile_request_keeps_the_conservative_estimate_and_marks_assumption() -> None:
+    config = load_config(CONFIG_DIR / "tiny_20m_3090.yaml")
+    eager = estimate_training_resources(config)
+    config.train.compile = True
+
+    compiled = estimate_training_resources(config)
+
+    assert compiled.memory.total_bytes == eager.memory.total_bytes
+    assert compiled.memory.to_dict()["assumptions"]["compiled_graph_requested"] is True
+    assert (
+        "not separately modeled"
+        in compiled.memory.to_dict()["assumptions"]["compiled_graph_workspace"]
     )
 
 

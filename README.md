@@ -768,6 +768,46 @@ SCRATCH_LLM_RUN_FLASH_BENCHMARK=1 uv run python -m scripts.benchmark_flash_atten
   --output runs/flash-attention-benchmark.json
 ```
 
+Base training, SFT, and the bounded production benchmark share one optional
+`torch.compile` adapter. The ordinary eager GPT always remains the owner of
+parameters, optimizer groups, state-dict keys, checkpoint identity, and resume
+loading; only the callable used for forward/backward execution is wrapped.
+Compilation is off by default:
+
+```yaml
+train:  # use the same fields under sft for finetuning
+  compile: false
+  compile_backend: inductor
+  compile_mode: default  # default, reduce-overhead, or max-autotune
+  compile_fallback_policy: eager  # eager or error
+  compile_fullgraph: false
+  compile_dynamic: false
+```
+
+`eager` fallback records `compile_construction_failed` or
+`compile_execution_failed`; `error` stops instead of publishing a run that
+pretends compilation succeeded. Progress output and throughput JSON record the
+requested/effective state, backend, mode, fullgraph/dynamic options, cold
+compile duration, observed recompilations, and fallback reason. The bounded
+benchmark requires at least one warmup step, so cold compilation is excluded
+from timed tokens/sec while remaining visible as startup cost. Its conservative
+resource estimate marks a compile request but does not guess compiler workspace
+memory; measured accelerator peaks remain the evidence.
+
+For example:
+
+```bash
+uv run python -m scripts.benchmark_pretrain \
+  --config configs/tiny_20m_3090.yaml \
+  --override run.name=tiny-20m-compiled \
+  --override train.dtype=bfloat16 \
+  --override train.compile=true \
+  --override train.compile_mode=reduce-overhead \
+  --warmup-steps 2 \
+  --timed-steps 10 \
+  --no-wandb
+```
+
 The dry-run summary and completed `metrics/throughput_benchmark.json` both
 record `Requested attention backend` and the effective backend. Manual and
 SDPA are direct selections with no fallback at this layer; optional flash

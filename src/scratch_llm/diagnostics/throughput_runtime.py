@@ -30,6 +30,12 @@ from scratch_llm.data.loaders import create_token_loader
 from scratch_llm.model import GPT
 from scratch_llm.diagnostics.oom import PretrainingOOMError, diagnose_out_of_memory
 from scratch_llm.training.optim import build_lr_scheduler, build_optimizer
+from scratch_llm.training.compilation import (
+    ModelCompiler,
+    build_compile_runtime,
+    format_compile_selection,
+    warmup_compiled_training,
+)
 from scratch_llm.training.precision import PrecisionPolicy, build_precision_policy
 from scratch_llm.training.pretraining import (
     PreparedPretrainingBatchIterator,
@@ -176,6 +182,7 @@ def execute_production_throughput_benchmark(
     timed_steps: int,
     repository_root: str | Path,
     progress: Callable[[str], None] | None = None,
+    compiler: ModelCompiler | None = None,
 ) -> BenchmarkExecution:
     """Load immutable production artifacts and execute the bounded protocol."""
 
@@ -215,10 +222,30 @@ def execute_production_throughput_benchmark(
         model = GPT(config.model).to(device)
         optimizer = build_optimizer(model, config.train)
         scheduler = build_lr_scheduler(optimizer, config.train)
+        compile_runtime = build_compile_runtime(
+            model,
+            config.train,
+            compiler=compiler,
+        )
+        warmup_tokens = torch.zeros(
+            (config.train.device_batch_size, config.model.seq_len),
+            dtype=torch.long,
+            device=device,
+        )
+        warmup_compiled_training(
+            compile_runtime,
+            optimizer,
+            inputs=warmup_tokens,
+            targets=warmup_tokens,
+            precision=precision,
+            device=device,
+        )
+        if progress is not None:
+            progress(format_compile_selection(compile_runtime.selection))
         try:
             step_execution = run_benchmark_training_steps(
                 config,
-                model=model,
+                model=compile_runtime.execution_model,
                 batches=batches,
                 optimizer=optimizer,
                 scheduler=scheduler,
@@ -235,6 +262,8 @@ def execute_production_throughput_benchmark(
             )
             assert diagnostic is not None
             raise PretrainingOOMError(diagnostic) from error
+        if progress is not None:
+            progress(format_compile_selection(compile_runtime.selection))
         hardware, cuda, pytorch = collect_runtime_identities(device)
         return BenchmarkExecution(
             steps=step_execution.steps,
@@ -246,6 +275,7 @@ def execute_production_throughput_benchmark(
             pytorch_identity=pytorch,
             code_identity=collect_code_identity(repository_root),
             attention_selection=model.attention_backend_selection(),
+            compile_selection=compile_runtime.selection,
         )
 
 

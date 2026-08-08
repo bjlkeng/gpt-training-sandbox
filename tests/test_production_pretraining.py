@@ -868,9 +868,11 @@ def test_scripts_pretrain_runs_offline_regex_bpe_to_sample(
 
 
 @pytest.mark.parametrize("strategy", ["flat", "packed"])
+@pytest.mark.parametrize("compiled", [False, True])
 def test_exact_resume_matches_uninterrupted_batches_losses_and_state(
     tmp_path: Path,
     strategy: str,
+    compiled: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tokenizer, artifact_dir, tokenized_dir = _write_production_inputs(tmp_path)
@@ -898,10 +900,14 @@ def test_exact_resume_matches_uninterrupted_batches_losses_and_state(
         run_name=f"uninterrupted-{strategy}",
         max_steps=4,
     )
+    uninterrupted_config.train.compile = compiled
+    uninterrupted_config.train.compile_backend = "eager"
+    compiler = (lambda model, **_kwargs: model) if compiled else None
     uninterrupted = run_pretraining(
         uninterrupted_config,
         paths=prepare_run(uninterrupted_config),
         tracker=NullTracker(),
+        compiler=compiler,
     )
     uninterrupted_batches = tuple(consumed_batches)
     consumed_batches.clear()
@@ -915,6 +921,7 @@ def test_exact_resume_matches_uninterrupted_batches_losses_and_state(
         paths=prepare_run(resumed_config),
         tracker=resume_tracker,
         resume_from=interruption,
+        compiler=compiler,
     )
 
     assert len(uninterrupted_batches) == 4
