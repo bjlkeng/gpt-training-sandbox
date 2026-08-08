@@ -1373,6 +1373,89 @@ elapsed time, throughput, FLOPs, MFU, and peak VRAM; and a labeled comparison
 against the conservative resource estimate. The test suite uses CPU and fake
 clocks and does not claim that either GPU command was executed in CI.
 
+For an identity-matched RTX 3090 optimization comparison, run every row from
+the same clean commit, with no other GPU workload and unchanged power/clock
+settings. These commands use the same seed, model, tokenized manifest,
+tokenizer, batch shape, warmup count, and timed optimizer-step count. Only the
+named optimization and the output run name differ:
+
+```bash
+uv run python -m scripts.benchmark_pretrain \
+  --config configs/tiny_20m_3090.yaml \
+  --override run.name=m9-train-baseline \
+  --warmup-steps 5 --timed-steps 30 --no-wandb
+
+uv run python -m scripts.benchmark_pretrain \
+  --config configs/tiny_20m_3090.yaml \
+  --override run.name=m9-train-amp \
+  --override train.dtype=bfloat16 \
+  --warmup-steps 5 --timed-steps 30 --no-wandb
+
+uv run python -m scripts.benchmark_pretrain \
+  --config configs/tiny_20m_3090.yaml \
+  --override run.name=m9-train-sdpa \
+  --override model.attention_backend=sdpa \
+  --warmup-steps 5 --timed-steps 30 --no-wandb
+
+uv run python -m scripts.benchmark_pretrain \
+  --config configs/tiny_20m_3090.yaml \
+  --override run.name=m9-train-flash \
+  --override model.attention_backend=flash \
+  --warmup-steps 5 --timed-steps 30 --no-wandb
+
+uv run python -m scripts.benchmark_pretrain \
+  --config configs/tiny_20m_3090.yaml \
+  --override run.name=m9-train-compile \
+  --override train.compile=true \
+  --warmup-steps 5 --timed-steps 30 --no-wandb
+
+uv run python -m scripts.benchmark_pretrain \
+  --config configs/tiny_20m_3090.yaml \
+  --override run.name=m9-train-checkpointing \
+  --override train.activation_checkpointing=true \
+  --warmup-steps 5 --timed-steps 30 --no-wandb
+
+uv run python -m scripts.benchmark_pretrain \
+  --config configs/tiny_20m_3090.yaml \
+  --override run.name=m9-train-combined \
+  --override train.dtype=bfloat16 \
+  --override model.attention_backend=sdpa \
+  --override train.compile=true \
+  --override train.activation_checkpointing=true \
+  --warmup-steps 5 --timed-steps 30 --no-wandb
+```
+
+Then build the offline comparison from the completed reports:
+
+```bash
+uv run python -m scripts.compare_training_benchmarks \
+  --baseline runs/m9-train-baseline/metrics/throughput_benchmark.json \
+  --variant amp=runs/m9-train-amp/metrics/throughput_benchmark.json \
+  --variant sdpa=runs/m9-train-sdpa/metrics/throughput_benchmark.json \
+  --variant flash=runs/m9-train-flash/metrics/throughput_benchmark.json \
+  --variant compile=runs/m9-train-compile/metrics/throughput_benchmark.json \
+  --variant activation_checkpointing=runs/m9-train-checkpointing/metrics/throughput_benchmark.json \
+  --variant combined=runs/m9-train-combined/metrics/throughput_benchmark.json \
+  --output-dir comparisons/m9-training-optimizations
+```
+
+The comparator rejects changes to uncontrolled identities or measured work and
+reports absolute and relative tokens/sec and peak-memory deltas. It preserves
+both requested and effective optimization states. In particular, a Flash
+request that used SDPA or manual attention is labeled as a fallback result, not
+as Flash performance. `torch.compile` cold-start time is a separate startup
+field and remains outside the timed optimizer-step interval.
+
+Treat one bounded run as a diagnostic, not a stable performance claim. Repeat
+the full suite at least three times after the GPU reaches a steady thermal state
+and interpret deltas smaller than run-to-run variation as noise. Every timed
+step must retain finite loss, gradient, timing, FLOP, and MFU values; report
+construction and JSON serialization reject NaN and infinity rather than
+publishing a completed result. Before accepting a speedup, inspect the timed
+step telemetry for plausible losses, identical processed-token counts and MFU
+bases, and the comparison's identity table. No RTX 3090 measurements are run
+or asserted by the CPU test suite.
+
 Compare two completed, evaluated training runs offline. Compatibility BPB is
 ranked only when its pinned protocol identities match, and full-document BPB
 always remains a separate table:
@@ -1397,6 +1480,8 @@ runs/<training-run>/checkpoints/last.pt
 runs/<training-run>/checkpoints/best.pt
 runs/<benchmark-run>/metrics/throughput_benchmark.json
 runs/<benchmark-run>/metrics/inference_bench.json
+comparisons/<comparison-name>/training_optimization_comparison.json
+comparisons/<comparison-name>/training_optimization_comparison.md
 comparisons/<comparison-name>/comparison.json
 comparisons/<comparison-name>/comparison.md
 ```

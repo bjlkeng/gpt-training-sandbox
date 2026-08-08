@@ -289,6 +289,13 @@ def execute_production_throughput_benchmark(
             attention_selection=model.attention_backend_selection(),
             compile_selection=compile_runtime.selection,
             activation_checkpoint_selection=activation_checkpoint_selection,
+            precision_selection={
+                "autocast_enabled": precision.autocast_enabled,
+                "device_type": precision.device_type,
+                "effective_dtype": precision.dtype,
+                "requested_dtype": config.train.dtype,
+                "scaler_enabled": precision.scaler_enabled,
+            },
         )
 
 
