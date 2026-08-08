@@ -35,6 +35,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SMOKE_CONFIG = PROJECT_ROOT / "configs" / "smoke.yaml"
 BASE_SMOKE_CONFIG = PROJECT_ROOT / "configs" / "base_smoke.yaml"
 CONFIG_COMMANDS = (
+    "scripts.benchmark_inference",
     "scripts.benchmark_pretrain",
     "scripts.prepare_data",
     "scripts.train_tokenizer",
@@ -49,6 +50,7 @@ UNIMPLEMENTED_CONFIG_COMMANDS = tuple(
     for module in CONFIG_COMMANDS
     if module
     not in {
+        "scripts.benchmark_inference",
         "scripts.benchmark_pretrain",
         "scripts.eval_base",
         "scripts.eval_chat",
@@ -378,8 +380,18 @@ def test_config_command_dry_run_resolves_repeated_overrides_without_training(
     output_dir = tmp_path / "runs"
     config_path = (
         BASE_SMOKE_CONFIG
-        if module in {"scripts.benchmark_pretrain", "scripts.prepare_data"}
+        if module
+        in {
+            "scripts.benchmark_inference",
+            "scripts.benchmark_pretrain",
+            "scripts.prepare_data",
+        }
         else SMOKE_CONFIG
+    )
+    extra_arguments = (
+        ("--checkpoint", str(tmp_path / "not-loaded.pt"))
+        if module == "scripts.benchmark_inference"
+        else ()
     )
 
     result = _run_module(
@@ -392,6 +404,7 @@ def test_config_command_dry_run_resolves_repeated_overrides_without_training(
         "run.name=overridden-first",
         "--override",
         f"run.name={run_name}",
+        *extra_arguments,
         "--dry-run",
     )
 

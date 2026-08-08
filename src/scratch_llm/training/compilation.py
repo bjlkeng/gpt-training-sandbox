@@ -113,6 +113,9 @@ class _CompiledExecution(nn.Module):
         config = getattr(canonical_model, "config", None)
         if config is not None:
             self.config = config
+        max_seq_len = getattr(canonical_model, "max_seq_len", None)
+        if max_seq_len is not None:
+            self.max_seq_len = max_seq_len
 
     def forward(self, *args: Any, **kwargs: Any) -> Any:
         if not self.selection.effective:
@@ -134,6 +137,20 @@ class _CompiledExecution(nn.Module):
             self.selection.compile_duration_seconds += self.clock() - started
             self._observed_execution = True
         return result
+
+    def create_kv_cache(self, *, batch_size: int, capacity: int) -> Any:
+        """Delegate external inference-cache ownership to the canonical model."""
+
+        factory = getattr(self._canonical_model, "create_kv_cache", None)
+        if not callable(factory):
+            raise TypeError("canonical model does not expose create_kv_cache")
+        return factory(batch_size=batch_size, capacity=capacity)
+
+    @property
+    def canonical_model(self) -> nn.Module:
+        """Expose the artifact owner for read-only identity and byte accounting."""
+
+        return self._canonical_model
 
     def train(self, mode: bool = True) -> _CompiledExecution:
         super().train(mode)
