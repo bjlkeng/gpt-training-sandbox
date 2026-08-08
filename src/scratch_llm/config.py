@@ -437,6 +437,7 @@ class GPTConfig(_SerializableConfig):
                 "must remain false; select the canonical model.attention_backend "
                 "setting instead",
             )
+        _require_bool(self.use_kv_cache, "model.use_kv_cache")
         expected_rmsnorm = self.norm == "rmsnorm"
         if self.use_rmsnorm is not expected_rmsnorm:
             _fail(
