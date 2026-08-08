@@ -366,6 +366,23 @@ class GPTConfig(_SerializableConfig):
     def __post_init__(self) -> None:
         self.validate()
 
+    def parameter_compatibility_dict(self) -> dict[str, Any]:
+        """Return config fields that must agree when loading model weights.
+
+        Attention execution and inference-cache choices do not alter parameter
+        names or shapes, so a checkpoint may safely select different values for
+        those fields when constructing its destination model.
+        """
+
+        values = asdict(self)
+        for field_name in (
+            "attention_backend",
+            "use_flash_attention",
+            "use_kv_cache",
+        ):
+            values.pop(field_name)
+        return values
+
     def validate(self) -> None:
         _require_non_empty(self.profile, "model.profile")
         for field_name in (

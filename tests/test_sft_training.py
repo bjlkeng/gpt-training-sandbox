@@ -294,6 +294,22 @@ def test_base_initialization_uses_fresh_sft_optimizer_and_writes_ranked_checkpoi
     )
 
 
+def test_fresh_sft_can_switch_a_manual_base_checkpoint_to_sdpa(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path, run_name="sft-sdpa")
+    base = _base_checkpoint(tmp_path, config)
+    base_keys = set(load_model_checkpoint(base).model.state_dict())
+    config.model.attention_backend = "sdpa"
+    config.validate()
+
+    result = _run(config, base_checkpoint=base)
+
+    loaded = load_model_checkpoint(result.checkpoint_path)
+    assert loaded.config.model.attention_backend == "sdpa"
+    assert set(loaded.model.state_dict()) == base_keys
+
+
 def test_gradient_accumulation_preserves_the_exact_sft_token_budget(
     tmp_path: Path,
 ) -> None:
