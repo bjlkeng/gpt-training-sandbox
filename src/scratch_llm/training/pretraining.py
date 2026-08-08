@@ -52,6 +52,11 @@ from scratch_llm.diagnostics.oom import (
     diagnose_out_of_memory,
 )
 from scratch_llm.training.optim import build_lr_scheduler, build_optimizer
+from scratch_llm.training.precision import (
+    PrecisionError,
+    PrecisionPolicy,
+    build_precision_policy,
+)
 from scratch_llm.run import RunPaths
 from scratch_llm.training.rng_state import (
     capture_training_rng_state,
@@ -117,6 +122,7 @@ class _TrainingRuntime:
     tokenizer: Tokenizer
     optimizer: Optimizer
     scheduler: LRScheduler
+    precision: PrecisionPolicy
     initial_step: int
     initial_total_training_time_seconds: float
     initial_total_training_flops: float
@@ -495,10 +501,6 @@ class PreparedPretrainingBatchIterator(Iterator[tuple[Tensor, Tensor]]):
 
 
 def _validate_training_runtime_config(config: ProjectConfig) -> None:
-    if config.train.dtype != "float32":
-        raise PretrainingError(
-            "pretraining currently supports train.dtype='float32' only"
-        )
     if config.train.compile:
         raise PretrainingError("pretraining does not support train.compile yet")
     if config.train.activation_checkpointing:
@@ -731,8 +733,14 @@ def _run_pretraining_impl(
     )
 
     tracking_state = tracker.checkpoint_state()
-    set_seed(config.run.seed)
     device = get_device(config.run.device)
+    try:
+        precision = build_precision_policy(dtype=config.train.dtype, device=device)
+    except PrecisionError as error:
+        raise PretrainingError(
+            f"invalid pretraining precision policy: {error}"
+        ) from error
+    set_seed(config.run.seed)
     metrics_path = paths.run_dir / config.tracking.jsonl.path
 
     with ExitStack() as resources:
@@ -747,6 +755,7 @@ def _run_pretraining_impl(
             metrics_path=metrics_path,
             data=data,
             device=device,
+            precision=precision,
             resume_from=resume_from,
             allow_non_exact_resume=allow_non_exact_resume,
             tracking_state=tracking_state,
@@ -886,6 +895,7 @@ def _initialize_training_runtime(
     metrics_path: Path,
     data: _PreparedTrainingData,
     device: torch.device,
+    precision: PrecisionPolicy,
     resume_from: str | Path | None,
     allow_non_exact_resume: bool,
     tracking_state: TrackingState | None,
@@ -905,6 +915,7 @@ def _initialize_training_runtime(
             tokenizer=data.tokenizer,
             optimizer=optimizer,
             scheduler=build_lr_scheduler(optimizer, config.train),
+            precision=precision,
             initial_step=0,
             initial_total_training_time_seconds=0.0,
             initial_total_training_flops=0.0,
@@ -917,6 +928,7 @@ def _initialize_training_runtime(
         device=device,
         allow_non_exact_resume=allow_non_exact_resume,
         expected_stage="pretrain",
+        expected_precision=precision.checkpoint_state(),
     )
     checkpoint_tracking_state = tracking_state or checkpoint.tracking
     if (
@@ -929,6 +941,12 @@ def _initialize_training_runtime(
             "checkpoint; explicitly select a tracking fork"
         )
     _validate_resume_config(config, checkpoint.config)
+    if checkpoint.precision is None:  # pragma: no cover - exact resume requires it.
+        raise PretrainingError("exact resume checkpoint has no precision state")
+    try:
+        precision.load_checkpoint_state(checkpoint.precision)
+    except PrecisionError as error:
+        raise PretrainingError(f"could not restore precision state: {error}") from error
     if checkpoint.tokenizer.get_identity() != data.tokenizer.get_identity():
         raise PretrainingError(
             "resume checkpoint tokenizer identity does not match "
@@ -980,6 +998,7 @@ def _initialize_training_runtime(
         tokenizer=checkpoint.tokenizer,
         optimizer=checkpoint.optimizer,
         scheduler=checkpoint.scheduler,
+        precision=precision,
         initial_step=checkpoint.step,
         initial_total_training_time_seconds=total_training_time_seconds,
         initial_total_training_flops=total_training_flops,
@@ -1101,6 +1120,7 @@ class _CheckpointLifecycle:
             continuation=continuation,
             validation=validation,
             tracking=self._runtime.checkpoint_tracking_state,
+            precision=self._runtime.precision.checkpoint_state(),
         )
         self._register_checkpoint(checkpoint_path, role=role, step=step)
         return checkpoint_path
@@ -1273,6 +1293,7 @@ def _execute_training(
             ),
             tokens_per_epoch=data.training_tokens_per_epoch,
             peak_flops_basis=peak_flops_basis_from_config(config.train),
+            precision=runtime.precision,
         )
     except torch.OutOfMemoryError:
         try:

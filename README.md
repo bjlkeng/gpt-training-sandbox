@@ -686,17 +686,58 @@ uv run python -m scripts.pretrain \
   --resume runs/smoke/checkpoints/step_000075.pt
 ```
 
-Pretraining checkpoints use checkpoint format version 5. State is captured at
+Pretraining and SFT share one explicit precision policy selected by
+`train.dtype` or `sft.dtype`:
+
+- `float32` keeps parameters, forward/backward, and optimizer work on the
+  original non-autocast path.
+- `float16` is CUDA-only and uses CUDA autocast plus
+  `torch.amp.GradScaler`. Losses are scaled before backward, gradients are
+  unscaled exactly once before clipping, and the scaler steps and updates at
+  the completed optimizer boundary.
+- `bfloat16` uses autocast without scaling on supported CPU or CUDA devices.
+
+Parameters and optimizer state retain their stable float32 storage in every
+mode. Unsupported device/dtype pairs fail before model or checkpoint state is
+constructed. Non-finite float16 attempts that `GradScaler` skips still update
+the scaler, but do not advance the scheduler, global step, or checkpoint cadence.
+The base-pretraining command, SFT command, and production throughput benchmark
+all enter this same boundary; there is no benchmark-only AMP loop.
+
+For example, run a bounded production preset with AMP by overriding only the
+precision identity:
+
+```bash
+uv run python -m scripts.pretrain \
+  --config configs/tiny_20m_3090.yaml \
+  --override run.name=tiny-20m-fp16-smoke \
+  --override train.dtype=float16 \
+  --override train.max_steps=2
+```
+
+The CPU-safe fake-scaler tests always cover scaling, accumulation, clipping,
+skipped steps, and save/load behavior. On an available CUDA device, the bounded
+float32/float16/bfloat16 smoke records finite loss and gradients, tokens/sec,
+and peak allocated memory without asserting a noisy speed threshold:
+
+```bash
+uv run --extra dev pytest tests/test_precision.py -k cuda_precision_smoke -vv
+```
+
+Pretraining checkpoints use checkpoint format version 7. State is captured at
 the completed optimizer-step boundary after all microbatches, the optimizer
 and scheduler updates, and the tracker step. The checkpoint atomically records
 the concrete loader format and next-batch state, its corpus or manifest
 identity, Python and NumPy RNG state, PyTorch CPU RNG state, every CUDA
 generator state available to a CUDA run, and cumulative training-time/FLOP
-counters. Resume reconstructs and validates the model, optimizer, scheduler,
-tokenizer, and data pipeline before installing the loader and RNG continuation
-as one transaction. Model-only sampling and evaluation loads preserve the
-caller's global RNG streams.
+counters. Version 7 also records the requested dtype, effective device type,
+scaler-enabled state, and complete `GradScaler.state_dict`; exact resume rejects
+an incompatible precision policy before reconstructing the model. Resume then
+validates the model, optimizer, scheduler, tokenizer, and data pipeline before
+installing scaler, loader, and RNG continuation state. Model-only sampling and
+evaluation loads preserve the caller's global RNG streams.
 
+Format version 6 added pretrain/SFT stage and base-checkpoint provenance.
 Format version 5 adds the active remote tracker backend/run ID used for an
 explicit same-run W&B resume. Format version 4 adds periodic-validation
 metadata to the exact version-3 continuation: the pinned ranking protocol,
