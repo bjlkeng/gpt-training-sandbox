@@ -49,6 +49,8 @@ model:
   use_qk_norm: false
   use_gqa: false
   attention_backend: manual
+  attention_fallback_policy: allow
+  flash_attention_provider: auto
   use_flash_attention: false
   use_kv_cache: false
 

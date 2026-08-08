@@ -16,6 +16,10 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
 from scratch_llm._validation import require_integer, require_positive_integer
+from scratch_llm.attention_backends import (
+    format_attention_selection,
+    preflight_attention_backend,
+)
 from scratch_llm.diagnostics.accelerator_memory import (
     AcceleratorMemorySnapshot,
     collect_accelerator_memory,
@@ -740,6 +744,14 @@ def _run_pretraining_impl(
         raise PretrainingError(
             f"invalid pretraining precision policy: {error}"
         ) from error
+    attention_preflight = preflight_attention_backend(
+        config.model,
+        device=device,
+        dtype=config.train.dtype,
+        training=True,
+    )
+    if progress is not None:
+        progress(format_attention_selection(attention_preflight.selection))
     set_seed(config.run.seed)
     metrics_path = paths.run_dir / config.tracking.jsonl.path
 
@@ -787,6 +799,9 @@ def _run_pretraining_impl(
             tracker=tracker,
             on_step=checkpoints.on_step,
         )
+        observed_attention = runtime.model.attention_backend_selection()
+        if progress is not None and observed_attention != attention_preflight.selection:
+            progress(format_attention_selection(observed_attention))
         final_step = runtime.scheduler.last_epoch
         final_result = step_results[-1]
         checkpoint_path = checkpoints.finalize(final_step, final_result)

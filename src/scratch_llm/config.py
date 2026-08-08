@@ -43,7 +43,9 @@ TokenizerType = Literal["byte", "regex_byte_bpe"]
 TokenLoaderStrategy = Literal["flat", "packed"]
 NormType = Literal["layernorm", "rmsnorm"]
 ActivationType = Literal["gelu", "relu_squared"]
-AttentionBackend = Literal["manual", "sdpa"]
+AttentionBackend = Literal["manual", "sdpa", "flash"]
+AttentionFallbackPolicy = Literal["allow", "error"]
+FlashAttentionProvider = Literal["auto", "fa2", "fa3"]
 TrainDType = Literal["float32", "float16", "bfloat16"]
 SFTSourceKind = Literal["jsonl", "hub_cache"]
 # OmegaConf does not yet support combining ``Literal`` with another type in a
@@ -58,6 +60,10 @@ _TOKEN_LOADER_STRATEGIES: frozenset[str] = frozenset(get_args(TokenLoaderStrateg
 _NORM_TYPES: frozenset[str] = frozenset(get_args(NormType))
 _ACTIVATION_TYPES: frozenset[str] = frozenset(get_args(ActivationType))
 _ATTENTION_BACKENDS: frozenset[str] = frozenset(get_args(AttentionBackend))
+_ATTENTION_FALLBACK_POLICIES: frozenset[str] = frozenset(
+    get_args(AttentionFallbackPolicy)
+)
+_FLASH_ATTENTION_PROVIDERS: frozenset[str] = frozenset(get_args(FlashAttentionProvider))
 _TRAIN_DTYPES: frozenset[str] = frozenset(get_args(TrainDType))
 _SFT_SOURCE_KINDS: frozenset[str] = frozenset(get_args(SFTSourceKind))
 _SFT_DATASET_SPLITS = {
@@ -360,6 +366,8 @@ class GPTConfig(_SerializableConfig):
     use_qk_norm: bool = False
     use_gqa: bool = False
     attention_backend: AttentionBackend = "manual"
+    attention_fallback_policy: AttentionFallbackPolicy = "allow"
+    flash_attention_provider: FlashAttentionProvider = "auto"
     use_flash_attention: bool = False
     use_kv_cache: bool = False
 
@@ -377,6 +385,8 @@ class GPTConfig(_SerializableConfig):
         values = asdict(self)
         for field_name in (
             "attention_backend",
+            "attention_fallback_policy",
+            "flash_attention_provider",
             "use_flash_attention",
             "use_kv_cache",
         ):
@@ -405,6 +415,16 @@ class GPTConfig(_SerializableConfig):
             self.attention_backend,
             "model.attention_backend",
             _ATTENTION_BACKENDS,
+        )
+        _require_choice(
+            self.attention_fallback_policy,
+            "model.attention_fallback_policy",
+            _ATTENTION_FALLBACK_POLICIES,
+        )
+        _require_choice(
+            self.flash_attention_provider,
+            "model.flash_attention_provider",
+            _FLASH_ATTENTION_PROVIDERS,
         )
         _require_bool(self.use_flash_attention, "model.use_flash_attention")
         if self.use_flash_attention:

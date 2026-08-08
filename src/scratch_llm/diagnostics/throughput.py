@@ -10,6 +10,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
+from scratch_llm.attention_backends import AttentionBackendSelection
 from scratch_llm._validation import (
     JsonValueValidator,
     require_finite_non_negative_real,
@@ -61,6 +62,7 @@ class BenchmarkExecution:
     cuda_identity: Mapping[str, object]
     pytorch_identity: Mapping[str, object]
     code_identity: Mapping[str, object]
+    attention_selection: AttentionBackendSelection | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.steps, tuple) or not self.steps:
@@ -85,6 +87,13 @@ class BenchmarkExecution:
                 self,
                 field,
                 MappingProxyType(_json_object(getattr(self, field), label=field)),
+            )
+        if self.attention_selection is not None and not isinstance(
+            self.attention_selection,
+            AttentionBackendSelection,
+        ):
+            raise TypeError(
+                "attention_selection must be an AttentionBackendSelection or None"
             )
 
 
@@ -184,13 +193,11 @@ def build_throughput_benchmark(
         "version": 1,
         "warmup_steps": warmup_steps,
     }
-    optimization_state = {
-        "attention": {
-            "effective_backend": config.model.attention_backend,
-            "fallback_reason": None,
-            "requested_backend": config.model.attention_backend,
-        }
-    }
+    selection = execution.attention_selection or AttentionBackendSelection(
+        requested_backend=config.model.attention_backend,
+        effective_backend=config.model.attention_backend,
+    )
+    optimization_state = {"attention": selection.to_dict()}
     protocol_identity = _payload_identity(
         {
             "identities": identities,

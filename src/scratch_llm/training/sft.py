@@ -12,6 +12,10 @@ import torch
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
+from scratch_llm.attention_backends import (
+    format_attention_selection,
+    preflight_attention_backend,
+)
 from scratch_llm.data.hub import load_hub_parquet_cache
 from scratch_llm.data.sft_sources import SFTConversationDataset, get_sft_dataset_spec
 from scratch_llm.chat.loader import (
@@ -228,6 +232,14 @@ def run_sft_training(
         precision = build_precision_policy(dtype=config.sft.dtype, device=device)
     except PrecisionError as error:
         raise SFTTrainingError(f"invalid SFT precision policy: {error}") from error
+    attention_preflight = preflight_attention_backend(
+        config.model,
+        device=device,
+        dtype=config.sft.dtype,
+        training=True,
+    )
+    if progress is not None:
+        progress(format_attention_selection(attention_preflight.selection))
     set_seed(config.run.seed)
     metrics_path = paths.run_dir / config.tracking.jsonl.path
     active_base_checkpoint = _resolve_base_checkpoint(
@@ -377,6 +389,9 @@ def run_sft_training(
             raise
         _clear_accelerator_cache_after_oom(config.run.device)
         raise SFTTrainingOOMError(_sft_oom_diagnostic(diagnostic)) from error
+    observed_attention = runtime.model.attention_backend_selection()
+    if progress is not None and observed_attention != attention_preflight.selection:
+        progress(format_attention_selection(observed_attention))
     final_step = runtime.scheduler.last_epoch
     final_result = step_results[-1]
     checkpoint_path = lifecycle.finalize(final_step, final_result)

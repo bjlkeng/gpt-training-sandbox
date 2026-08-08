@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 from pathlib import Path
+import sys
 
 from scratch_llm.run import RunConflictError, prepare_run
 from scratch_llm.tracking import build_tracker
@@ -127,6 +128,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 tracker=tracker,
                 base_checkpoint=arguments.base_checkpoint,
                 resume_from=arguments.resume,
+                progress=lambda message: print(message, file=sys.stderr, flush=True),
                 allow_tracking_fork=arguments.wandb_resume == "fork",
             )
         except (
