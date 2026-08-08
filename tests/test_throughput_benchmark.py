@@ -26,6 +26,7 @@ from scratch_llm.diagnostics.throughput import (
     report_throughput_benchmark,
 )
 from scratch_llm.training.loop import OptimizerStepResult
+from scratch_llm.training.compilation import CompileSelection
 from scratch_llm.training.telemetry import (
     PeakFlopsBasis,
     TrainingStepTelemetry,
@@ -72,6 +73,7 @@ def _execution(
     *,
     durations: tuple[float, ...],
     attention_selection: AttentionBackendSelection | None = None,
+    compile_selection: CompileSelection | None = None,
 ) -> BenchmarkExecution:
     flops = estimate_gpt_training_flops(config.model)
     basis = PeakFlopsBasis(1_000_000.0, "fake peak")
@@ -126,6 +128,7 @@ def _execution(
         pytorch_identity={"version": "fixture"},
         code_identity={"commit": "abc123", "tracked_dirty": False},
         attention_selection=attention_selection,
+        compile_selection=compile_selection,
     )
 
 
@@ -218,6 +221,43 @@ def test_actual_attention_fallback_enters_report_and_protocol_identity(
         fallback_selection.to_dict()
     )
     assert fallback.protocol_identity != direct.protocol_identity
+
+
+def test_compile_startup_and_effective_state_enter_report_identity(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    direct = build_throughput_benchmark(
+        config,
+        execution=_execution(config, durations=(1.0, 2.0)),
+        warmup_steps=1,
+        timed_steps=1,
+    )
+    compile_selection = CompileSelection(
+        requested=True,
+        effective=True,
+        backend="inductor",
+        mode="reduce-overhead",
+        fullgraph=False,
+        dynamic=False,
+        compile_duration_seconds=1.25,
+    )
+    compiled = build_throughput_benchmark(
+        config,
+        execution=_execution(
+            config,
+            durations=(9.0, 2.0),
+            compile_selection=compile_selection,
+        ),
+        warmup_steps=1,
+        timed_steps=1,
+    )
+
+    assert compiled.payload["optimization_state"]["compile"] == (
+        compile_selection.to_dict()
+    )
+    assert compiled.payload["measurements"]["elapsed_seconds"] == 2.0
+    assert compiled.protocol_identity != direct.protocol_identity
 
 
 def test_atomic_report_failure_preserves_prior_complete_report(

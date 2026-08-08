@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import Final
 
 from scratch_llm.attention_backends import AttentionBackendSelection
+from scratch_llm.training.compilation import CompileSelection
 from scratch_llm._validation import (
     JsonValueValidator,
     require_finite_non_negative_real,
@@ -63,6 +64,7 @@ class BenchmarkExecution:
     pytorch_identity: Mapping[str, object]
     code_identity: Mapping[str, object]
     attention_selection: AttentionBackendSelection | None = None
+    compile_selection: CompileSelection | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.steps, tuple) or not self.steps:
@@ -95,6 +97,11 @@ class BenchmarkExecution:
             raise TypeError(
                 "attention_selection must be an AttentionBackendSelection or None"
             )
+        if self.compile_selection is not None and not isinstance(
+            self.compile_selection,
+            CompileSelection,
+        ):
+            raise TypeError("compile_selection must be a CompileSelection or None")
 
 
 @dataclass(frozen=True)
@@ -172,6 +179,7 @@ def build_throughput_benchmark(
     protocol = {
         "excluded_work": [
             "artifact and tokenizer loading",
+            "cold torch.compile graph construction (warmup; reported separately)",
             "data-loader planning",
             "model and optimizer construction",
             "validation and sampling",
@@ -197,7 +205,18 @@ def build_throughput_benchmark(
         requested_backend=config.model.attention_backend,
         effective_backend=config.model.attention_backend,
     )
-    optimization_state = {"attention": selection.to_dict()}
+    compile_selection = execution.compile_selection or CompileSelection(
+        requested=config.train.compile,
+        effective=config.train.compile,
+        backend=config.train.compile_backend,
+        mode=config.train.compile_mode,
+        fullgraph=config.train.compile_fullgraph,
+        dynamic=config.train.compile_dynamic,
+    )
+    optimization_state = {
+        "attention": selection.to_dict(),
+        "compile": compile_selection.to_dict(),
+    }
     protocol_identity = _payload_identity(
         {
             "identities": identities,

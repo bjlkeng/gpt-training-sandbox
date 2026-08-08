@@ -73,6 +73,12 @@ from scratch_llm.training.checkpoint import (
     load_training_checkpoint,
     save_checkpoint,
 )
+from scratch_llm.training.compilation import (
+    ModelCompiler,
+    build_compile_runtime,
+    format_compile_selection,
+    warmup_compiled_training,
+)
 from scratch_llm.training.loop import (
     OptimizerStepResult,
     derive_grad_accum_steps,
@@ -213,9 +219,12 @@ def run_sft_training(
     allow_tracking_fork: bool = False,
     validation_runner: Callable[[int], SFTAssistantBPBResult] | None = None,
     sample_runner: Callable[[str], FixedSFTSamplesResult] | None = None,
+    compiler: ModelCompiler | None = None,
 ) -> SFTTrainingResult:
     """Initialize from base weights or exactly continue one SFT checkpoint."""
 
+    if compiler is not None and not callable(compiler):
+        raise TypeError("compiler must be callable or None")
     _validate_request(
         config,
         paths=paths,
@@ -258,6 +267,26 @@ def run_sft_training(
         resume_from=resume_from,
         allow_tracking_fork=allow_tracking_fork,
     )
+    compile_runtime = build_compile_runtime(
+        runtime.model,
+        config.sft,
+        compiler=compiler,
+    )
+    warmup_tokens = torch.zeros(
+        (config.sft.device_batch_size, config.model.seq_len),
+        dtype=torch.long,
+        device=device,
+    )
+    warmup_compiled_training(
+        compile_runtime,
+        runtime.optimizer,
+        inputs=warmup_tokens,
+        targets=warmup_tokens,
+        precision=runtime.precision,
+        device=device,
+    )
+    if progress is not None:
+        progress(format_compile_selection(compile_runtime.selection))
     train_sources = build_sft_conversation_sources(
         config.sft.train_sources,
         config=config.sft,
@@ -351,7 +380,7 @@ def run_sft_training(
     )
     try:
         step_results = run_training_steps(
-            runtime.model,
+            compile_runtime.execution_model,
             train_loader,
             runtime.optimizer,
             runtime.scheduler,
@@ -389,6 +418,8 @@ def run_sft_training(
             raise
         _clear_accelerator_cache_after_oom(config.run.device)
         raise SFTTrainingOOMError(_sft_oom_diagnostic(diagnostic)) from error
+    if progress is not None:
+        progress(format_compile_selection(compile_runtime.selection))
     observed_attention = runtime.model.attention_backend_selection()
     if progress is not None and observed_attention != attention_preflight.selection:
         progress(format_attention_selection(observed_attention))
@@ -474,8 +505,6 @@ def _validate_request(
         raise SFTTrainingError(
             "base checkpoint initialization and SFT resume are mutually exclusive"
         )
-    if config.sft.compile:
-        raise SFTTrainingError("SFT does not support sft.compile yet")
     if config.sft.activation_checkpointing:
         raise SFTTrainingError("SFT does not support sft.activation_checkpointing yet")
 

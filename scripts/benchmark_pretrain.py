@@ -113,6 +113,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "Attention fallback reason: "
                 f"{attention_preflight.selection.fallback_reason}"
             )
+            print(f"Requested torch.compile: {config.train.compile}")
+            print(
+                "Effective torch.compile: "
+                f"{'pending execution' if config.train.compile else False}"
+            )
             print(f"Resource estimate JSON: {resource_estimate.to_json()}")
             print(render_training_resource_estimate(resource_estimate))
         return 0
@@ -159,6 +164,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     assert isinstance(optimization_state, dict)
     attention = optimization_state["attention"]
     assert isinstance(attention, dict)
+    compile_state = optimization_state["compile"]
+    assert isinstance(compile_state, dict)
     print(f"Run directory: {paths.run_dir}")
     print(f"Report: {artifacts.report_path}")
     print(f"Tokens/sec: {measurements['tokens_per_second']}")
@@ -167,6 +174,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"Requested attention backend: {attention['requested_backend']}")
     print(f"Effective attention backend: {attention['effective_backend']}")
     print(f"Attention fallback reason: {attention['fallback_reason']}")
+    print(f"Requested torch.compile: {compile_state['requested']}")
+    print(f"Effective torch.compile: {compile_state['effective']}")
+    print(f"Compile duration seconds: {compile_state['compile_duration_seconds']}")
+    print(f"Compile fallback reason: {compile_state['fallback_reason']}")
     return 0
 
 

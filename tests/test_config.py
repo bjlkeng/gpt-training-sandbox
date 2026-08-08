@@ -11,6 +11,8 @@ from scratch_llm.config import (
     ActivationType,
     AttentionBackend,
     AttentionFallbackPolicy,
+    CompileFallbackPolicy,
+    CompileMode,
     ConfigValidationError,
     DEFAULT_SPECIAL_TOKENS,
     GPTConfig,
@@ -157,6 +159,11 @@ def test_defaults_cover_the_roadmap_sections_and_are_deterministic() -> None:
             "mfu_peak_flops_basis": None,
             "dtype": "float32",
             "compile": False,
+            "compile_backend": "inductor",
+            "compile_mode": "default",
+            "compile_fallback_policy": "eager",
+            "compile_fullgraph": False,
+            "compile_dynamic": False,
             "activation_checkpointing": False,
         },
         "sft": SFTConfig().to_dict(),
@@ -441,6 +448,16 @@ def test_train_validation_rejects_adamw_beta_of_one(field_name: str) -> None:
                 flash_attention_provider=cast(FlashAttentionProvider, "fa4")
             ),
             "model.flash_attention_provider",
+        ),
+        (
+            lambda: TrainConfig(compile_mode=cast(CompileMode, "fastest")),
+            "train.compile_mode",
+        ),
+        (
+            lambda: SFTConfig(
+                compile_fallback_policy=cast(CompileFallbackPolicy, "silent")
+            ),
+            "sft.compile_fallback_policy",
         ),
         (lambda: TrainConfig(dtype=cast(TrainDType, "float64")), "train.dtype"),
     ],

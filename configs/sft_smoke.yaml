@@ -68,6 +68,11 @@ sft:
   log_every: 1
   dtype: float32
   compile: false
+  compile_backend: inductor
+  compile_mode: default
+  compile_fallback_policy: eager
+  compile_fullgraph: false
+  compile_dynamic: false
   activation_checkpointing: false
 
 generation:

@@ -47,6 +47,8 @@ AttentionBackend = Literal["manual", "sdpa", "flash"]
 AttentionFallbackPolicy = Literal["allow", "error"]
 FlashAttentionProvider = Literal["auto", "fa2", "fa3"]
 TrainDType = Literal["float32", "float16", "bfloat16"]
+CompileMode = Literal["default", "reduce-overhead", "max-autotune"]
+CompileFallbackPolicy = Literal["eager", "error"]
 SFTSourceKind = Literal["jsonl", "hub_cache"]
 # OmegaConf does not yet support combining ``Literal`` with another type in a
 # union. Runtime validation below still restricts string values to ``"auto"``.
@@ -65,6 +67,8 @@ _ATTENTION_FALLBACK_POLICIES: frozenset[str] = frozenset(
 )
 _FLASH_ATTENTION_PROVIDERS: frozenset[str] = frozenset(get_args(FlashAttentionProvider))
 _TRAIN_DTYPES: frozenset[str] = frozenset(get_args(TrainDType))
+_COMPILE_MODES: frozenset[str] = frozenset(get_args(CompileMode))
+_COMPILE_FALLBACK_POLICIES: frozenset[str] = frozenset(get_args(CompileFallbackPolicy))
 _SFT_SOURCE_KINDS: frozenset[str] = frozenset(get_args(SFTSourceKind))
 _SFT_DATASET_SPLITS = {
     "gsm8k": frozenset({"train", "test"}),
@@ -467,6 +471,11 @@ class TrainConfig(_SerializableConfig):
     mfu_peak_flops_basis: str | None = None
     dtype: TrainDType = "float32"
     compile: bool = False
+    compile_backend: str = "inductor"
+    compile_mode: CompileMode = "default"
+    compile_fallback_policy: CompileFallbackPolicy = "eager"
+    compile_fullgraph: bool = False
+    compile_dynamic: bool = False
     activation_checkpointing: bool = False
 
     def __post_init__(self) -> None:
@@ -531,6 +540,16 @@ class TrainConfig(_SerializableConfig):
                 "train.mfu_peak_flops_basis",
             )
         _require_choice(self.dtype, "train.dtype", _TRAIN_DTYPES)
+        _require_bool(self.compile, "train.compile")
+        _require_non_empty(self.compile_backend, "train.compile_backend")
+        _require_choice(self.compile_mode, "train.compile_mode", _COMPILE_MODES)
+        _require_choice(
+            self.compile_fallback_policy,
+            "train.compile_fallback_policy",
+            _COMPILE_FALLBACK_POLICIES,
+        )
+        _require_bool(self.compile_fullgraph, "train.compile_fullgraph")
+        _require_bool(self.compile_dynamic, "train.compile_dynamic")
 
 
 @dataclass
@@ -636,6 +655,11 @@ class SFTConfig(_SerializableConfig):
     mfu_peak_flops_basis: str | None = None
     dtype: TrainDType = "float32"
     compile: bool = False
+    compile_backend: str = "inductor"
+    compile_mode: CompileMode = "default"
+    compile_fallback_policy: CompileFallbackPolicy = "eager"
+    compile_fullgraph: bool = False
+    compile_dynamic: bool = False
     activation_checkpointing: bool = False
 
     def __post_init__(self) -> None:
@@ -749,6 +773,16 @@ class SFTConfig(_SerializableConfig):
                 "sft.mfu_peak_flops_basis",
             )
         _require_choice(self.dtype, "sft.dtype", _TRAIN_DTYPES)
+        _require_bool(self.compile, "sft.compile")
+        _require_non_empty(self.compile_backend, "sft.compile_backend")
+        _require_choice(self.compile_mode, "sft.compile_mode", _COMPILE_MODES)
+        _require_choice(
+            self.compile_fallback_policy,
+            "sft.compile_fallback_policy",
+            _COMPILE_FALLBACK_POLICIES,
+        )
+        _require_bool(self.compile_fullgraph, "sft.compile_fullgraph")
+        _require_bool(self.compile_dynamic, "sft.compile_dynamic")
 
     def to_train_config(self, seq_len: int) -> TrainConfig:
         """Return the shared optimizer/scheduler view for this SFT contract."""
@@ -798,6 +832,11 @@ class SFTConfig(_SerializableConfig):
             mfu_peak_flops_basis=self.mfu_peak_flops_basis,
             dtype=self.dtype,
             compile=self.compile,
+            compile_backend=self.compile_backend,
+            compile_mode=self.compile_mode,
+            compile_fallback_policy=self.compile_fallback_policy,
+            compile_fullgraph=self.compile_fullgraph,
+            compile_dynamic=self.compile_dynamic,
             activation_checkpointing=self.activation_checkpointing,
         )
 
