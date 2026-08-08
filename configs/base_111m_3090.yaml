@@ -81,6 +81,11 @@ train:
   mfu_peak_flops_basis: NVIDIA GeForce RTX 3090 advertised FP32 peak (35.58 TFLOP/s)
   dtype: float32
   compile: false
+  compile_backend: inductor
+  compile_mode: default
+  compile_fallback_policy: eager
+  compile_fullgraph: false
+  compile_dynamic: false
   activation_checkpointing: false
 
 generation:

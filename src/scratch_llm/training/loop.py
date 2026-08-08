@@ -25,9 +25,10 @@ from scratch_llm.diagnostics.accelerator_memory import (
     collect_accelerator_memory,
     reset_accelerator_memory_peak,
 )
-from scratch_llm.config import ProjectConfig
+from scratch_llm.config import GPTConfig, ProjectConfig
 from scratch_llm.data.loaders import NextTokenDataset
 from scratch_llm.model import GPT
+from scratch_llm.training.compilation import build_compile_runtime
 from scratch_llm.training.optim import build_lr_scheduler, build_optimizer
 from scratch_llm.training.precision import PrecisionPolicy
 from scratch_llm.tokenization.tokenizer import (
@@ -390,8 +391,11 @@ def run_training_steps(
 
     model.to(resolved_device)
     model.train()
+    model_config = getattr(model, "config", None)
     flops_estimate = (
-        estimate_gpt_training_flops(model.config) if isinstance(model, GPT) else None
+        estimate_gpt_training_flops(model_config)
+        if isinstance(model_config, GPTConfig)
+        else None
     )
     batch_iterator = iter(_repeat_batches(batches))
     results: list[OptimizerStepResult] = []
@@ -609,13 +613,14 @@ def train_tiny_text(
     model = GPT(config.model).to(device)
     optimizer = build_optimizer(model, config.train)
     scheduler = build_lr_scheduler(optimizer, config.train)
+    compile_runtime = build_compile_runtime(model, config.train)
     grad_accum_steps = derive_grad_accum_steps(
         device_batch_size=config.train.device_batch_size,
         seq_len=config.model.seq_len,
         total_batch_size_tokens=config.train.total_batch_size_tokens,
     )
     steps = run_training_steps(
-        model,
+        compile_runtime.execution_model,
         batches,
         optimizer,
         scheduler,

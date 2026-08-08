@@ -271,6 +271,7 @@ class TrainingMemoryEstimate:
     activation_bytes: int
     logits_loss_workspace_bytes: int
     allocator_headroom_bytes: int
+    compiled_graph_requested: bool = False
 
     def __post_init__(self) -> None:
         if self.dtype not in _DTYPE_BYTES:
@@ -296,6 +297,8 @@ class TrainingMemoryEstimate:
             require_positive_integer(getattr(self, name), name=name)
         _bounded_signed_64(self.subtotal_bytes, name="memory subtotal bytes")
         _bounded_signed_64(self.total_bytes, name="memory total bytes")
+        if not isinstance(self.compiled_graph_requested, bool):
+            raise TypeError("compiled_graph_requested must be a boolean")
 
     @property
     def component_bytes(self) -> Mapping[str, int]:
@@ -346,7 +349,10 @@ class TrainingMemoryEstimate:
                 "attention": "manual_materialized_scores_and_probabilities",
                 "attention_workspace_dtype": "float32_conservative",
                 "automatic_mixed_precision": False,
-                "compiled_graph": False,
+                "compiled_graph_requested": self.compiled_graph_requested,
+                "compiled_graph_workspace": (
+                    "not separately modeled; use observed accelerator peak memory"
+                ),
                 "distributed_training": False,
                 "gradient_dtype": self.dtype,
                 "optimizer": "AdamW",
@@ -703,10 +709,6 @@ def estimate_training_resources(
             "resource estimation does not model activation checkpointing; "
             "disable train.activation_checkpointing"
         )
-    if config.train.compile:
-        raise ValueError(
-            "resource estimation does not model compiled graphs; disable train.compile"
-        )
     model = estimate_gpt_model_size(config.model)
     tokens = estimate_token_budget(
         device_batch_size=config.train.device_batch_size,
@@ -955,6 +957,7 @@ def _estimate_training_memory(
         activation_bytes=activation_bytes,
         logits_loss_workspace_bytes=logits_loss_workspace_bytes,
         allocator_headroom_bytes=allocator_headroom_bytes,
+        compiled_graph_requested=config.train.compile,
     )
 
 

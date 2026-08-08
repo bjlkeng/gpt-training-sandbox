@@ -39,6 +39,7 @@ from scratch_llm.training.checkpoint import (
     load_model_checkpoint,
     save_checkpoint,
 )
+from scratch_llm.training.compilation import ModelCompiler
 from scratch_llm.training.optim import build_lr_scheduler, build_optimizer
 from scratch_llm.training.sft import (
     SFTTrainingError,
@@ -179,6 +180,7 @@ def _run(
     *,
     base_checkpoint: Path | None = None,
     resume_from: Path | None = None,
+    compiler: ModelCompiler | None = None,
 ):
     paths = prepare_run(config)
     tracker = build_tracker(config, paths, stage="train_sft")
@@ -190,6 +192,7 @@ def _run(
             base_checkpoint=base_checkpoint,
             resume_from=resume_from,
             sample_runner=_fixed_samples,
+            compiler=compiler,
         )
 
 
@@ -331,21 +334,28 @@ def test_gradient_accumulation_preserves_the_exact_sft_token_budget(
 
 
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
+@pytest.mark.parametrize("compiled", [False, True])
 def test_exact_sft_resume_matches_uninterrupted_training(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     dtype: TrainDType,
+    compiled: bool,
 ) -> None:
     config = _config(tmp_path, run_name="sft-uninterrupted")
     config.sft.dtype = dtype
+    config.sft.compile = compiled
+    config.sft.compile_backend = "eager"
     base = _base_checkpoint(tmp_path, config)
+    compiler = (lambda model, **_kwargs: model) if compiled else None
     fresh_clock = count()
     monkeypatch.setattr(training_loop, "perf_counter", lambda: float(next(fresh_clock)))
-    uninterrupted = _run(config, base_checkpoint=base)
+    uninterrupted = _run(config, base_checkpoint=base, compiler=compiler)
     resume_checkpoint = uninterrupted.paths.checkpoints_dir / "step_000002.pt"
 
     resumed_config = _config(tmp_path, run_name="sft-resumed")
     resumed_config.sft.dtype = dtype
+    resumed_config.sft.compile = compiled
+    resumed_config.sft.compile_backend = "eager"
     resumed_config.sft.base_checkpoint = str(base)
     resumed_clock = count()
     monkeypatch.setattr(
@@ -353,7 +363,11 @@ def test_exact_sft_resume_matches_uninterrupted_training(
         "perf_counter",
         lambda: float(next(resumed_clock)),
     )
-    resumed = _run(resumed_config, resume_from=resume_checkpoint)
+    resumed = _run(
+        resumed_config,
+        resume_from=resume_checkpoint,
+        compiler=compiler,
+    )
 
     uninterrupted_payload = torch.load(
         uninterrupted.checkpoint_path,

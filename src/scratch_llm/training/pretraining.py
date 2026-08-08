@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import torch
-from torch import Tensor
+from torch import Tensor, nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
@@ -39,6 +39,12 @@ from scratch_llm.training.checkpoint import (
     load_model_checkpoint,
     load_training_checkpoint,
     save_checkpoint,
+)
+from scratch_llm.training.compilation import (
+    ModelCompiler,
+    build_compile_runtime,
+    format_compile_selection,
+    warmup_compiled_training,
 )
 from scratch_llm.config import ProjectConfig
 from scratch_llm.data.loaders import NextTokenDataset, create_token_loader
@@ -505,8 +511,6 @@ class PreparedPretrainingBatchIterator(Iterator[tuple[Tensor, Tensor]]):
 
 
 def _validate_training_runtime_config(config: ProjectConfig) -> None:
-    if config.train.compile:
-        raise PretrainingError("pretraining does not support train.compile yet")
     if config.train.activation_checkpointing:
         raise PretrainingError(
             "pretraining does not support train.activation_checkpointing yet"
@@ -687,6 +691,7 @@ def run_pretraining(
     allow_non_exact_resume: bool = False,
     allow_tracking_fork: bool = False,
     validation_runner: Callable[[int], PeriodicValidationResult] | None = None,
+    compiler: ModelCompiler | None = None,
 ) -> PretrainingResult:
     """Run pretraining and transform only supported PyTorch OOM failures."""
 
@@ -700,6 +705,7 @@ def run_pretraining(
             allow_non_exact_resume=allow_non_exact_resume,
             allow_tracking_fork=allow_tracking_fork,
             validation_runner=validation_runner,
+            compiler=compiler,
         )
     except torch.OutOfMemoryError as error:
         memory = _collect_memory_after_oom(config.run.device)
@@ -723,9 +729,12 @@ def _run_pretraining_impl(
     allow_non_exact_resume: bool = False,
     allow_tracking_fork: bool = False,
     validation_runner: Callable[[int], PeriodicValidationResult] | None = None,
+    compiler: ModelCompiler | None = None,
 ) -> PretrainingResult:
     """Train or resume either supported data profile through one shared loop."""
 
+    if compiler is not None and not callable(compiler):
+        raise TypeError("compiler must be callable or None")
     _validate_pretraining_request(
         config,
         paths=paths,
@@ -773,6 +782,26 @@ def _run_pretraining_impl(
             tracking_state=tracking_state,
             allow_tracking_fork=allow_tracking_fork,
         )
+        compile_runtime = build_compile_runtime(
+            runtime.model,
+            config.train,
+            compiler=compiler,
+        )
+        warmup_tokens = torch.zeros(
+            (config.train.device_batch_size, config.model.seq_len),
+            dtype=torch.long,
+            device=device,
+        )
+        warmup_compiled_training(
+            compile_runtime,
+            runtime.optimizer,
+            inputs=warmup_tokens,
+            targets=warmup_tokens,
+            precision=runtime.precision,
+            device=device,
+        )
+        if progress is not None:
+            progress(format_compile_selection(compile_runtime.selection))
         active_validation_runner = _resolve_periodic_validation_runner(
             config,
             paths=paths,
@@ -798,7 +827,10 @@ def _run_pretraining_impl(
             device=device,
             tracker=tracker,
             on_step=checkpoints.on_step,
+            execution_model=compile_runtime.execution_model,
         )
+        if progress is not None:
+            progress(format_compile_selection(compile_runtime.selection))
         observed_attention = runtime.model.attention_backend_selection()
         if progress is not None and observed_attention != attention_preflight.selection:
             progress(format_attention_selection(observed_attention))
@@ -1280,6 +1312,7 @@ def _execute_training(
     device: torch.device,
     tracker: Tracker,
     on_step: Callable[[int, OptimizerStepResult], None],
+    execution_model: nn.Module,
 ) -> list[OptimizerStepResult]:
     grad_accum_steps = derive_grad_accum_steps(
         device_batch_size=config.train.device_batch_size,
@@ -1288,7 +1321,7 @@ def _execute_training(
     )
     try:
         return run_training_steps(
-            runtime.model,
+            execution_model,
             data.batches,
             runtime.optimizer,
             runtime.scheduler,
