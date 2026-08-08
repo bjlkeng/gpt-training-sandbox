@@ -242,6 +242,7 @@ def test_smoke_config_is_a_cpu_safe_tiny_byte_gpt() -> None:
     assert config.model.mlp_ratio == 4
     assert config.model.tie_weights is True
     assert config.model.use_flash_attention is False
+    assert config.model.attention_backend == "manual"
     assert config.train.device_batch_size == 2
     assert config.train.max_steps == 200
     assert config.train.learning_rate == 0.005

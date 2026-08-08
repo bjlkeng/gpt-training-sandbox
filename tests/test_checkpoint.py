@@ -226,12 +226,14 @@ def test_version_one_byte_checkpoint_remains_readable(tmp_path: Path) -> None:
     }
     del payload["config"]["data"]["loader_strategy"]
     del payload["config"]["tokenizer"]["artifact_dir"]
+    del payload["config"]["model"]["attention_backend"]
     legacy_path = tmp_path / "legacy-v1-byte.pt"
     torch.save(payload, legacy_path)
 
     loaded = load_model_checkpoint(legacy_path)
 
     assert loaded.config == config
+    assert loaded.config.model.attention_backend == "manual"
     assert loaded.step == 0
     assert isinstance(loaded.tokenizer, ByteTokenizer)
 

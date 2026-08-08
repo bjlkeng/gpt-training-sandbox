@@ -724,6 +724,45 @@ and peak allocated memory without asserting a noisy speed threshold:
 uv run --extra dev pytest tests/test_precision.py -k cuda_precision_smoke -vv
 ```
 
+Each model also selects one causal-attention implementation explicitly:
+
+```yaml
+model:
+  attention_backend: manual  # or sdpa
+```
+
+`manual` remains the compatibility and educational default. `sdpa` reuses the
+same Q/K/V and output projections and therefore has identical parameters,
+state-dict keys, checkpoint compatibility, output shape, and configured output
+dropout. For ordinary full causal attention it delegates to PyTorch
+`scaled_dot_product_attention` with `is_causal=true`; training alone supplies
+the configured attention-dropout probability.
+The SDPA path never materializes the manual square causal mask. CPU tests
+compare one-token and exact-context
+forward results, input gradients, parameter gradients, dropout modes, and
+future-token isolation against the manual implementation.
+
+Select SDPA for a bounded training or throughput run with a normal dotted
+override:
+
+```bash
+uv run python -m scripts.benchmark_pretrain \
+  --config configs/tiny_20m_3090.yaml \
+  --override run.name=tiny-20m-sdpa-throughput \
+  --override model.attention_backend=sdpa \
+  --warmup-steps 2 \
+  --timed-steps 10 \
+  --no-wandb
+```
+
+The dry-run summary and completed `metrics/throughput_benchmark.json` both
+record `Requested attention backend` and the effective backend. Manual and
+SDPA are direct selections with no fallback at this layer; later optional
+providers must record any fallback rather than labeling it as requested. The
+planning memory estimate remains the conservative materialized-manual upper
+bound, while measured peak memory in the benchmark is the evidence for a
+specific backend.
+
 Pretraining checkpoints use checkpoint format version 7. State is captured at
 the completed optimizer-step boundary after all microbatches, the optimizer
 and scheduler updates, and the tracker step. The checkpoint atomically records

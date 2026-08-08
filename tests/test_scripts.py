@@ -169,6 +169,8 @@ def test_pretraining_benchmark_dry_run_is_gpu_and_artifact_free(
     )
     assert "Warmup steps: 1" in result.stdout
     assert "Timed steps: 2" in result.stdout
+    assert "Requested attention backend: manual" in result.stdout
+    assert "Effective attention backend: manual" in result.stdout
     assert not (
         tmp_path
         / "runs"
