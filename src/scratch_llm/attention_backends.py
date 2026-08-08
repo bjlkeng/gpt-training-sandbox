@@ -233,6 +233,7 @@ def runtime_attention_request(
     q: torch.Tensor,
     *,
     training: bool,
+    use_kv_cache: bool | None = None,
 ) -> AttentionBackendRequest:
     """Build the same capability request from projected query tensors."""
 
@@ -245,7 +246,7 @@ def runtime_attention_request(
         training=training,
         requires_backward=torch.is_grad_enabled() and q.requires_grad,
         dropout_p=config.dropout if training else 0.0,
-        use_kv_cache=config.use_kv_cache,
+        use_kv_cache=config.use_kv_cache if use_kv_cache is None else use_kv_cache,
     )
 
 

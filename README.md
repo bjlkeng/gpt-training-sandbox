@@ -779,6 +779,31 @@ SCRATCH_LLM_RUN_ACTIVATION_CHECKPOINT_BENCHMARK=1 \
   --output runs/activation-checkpoint-benchmark.json
 ```
 
+The model-level `KVCache` is an external inference object; it owns no tokenizer
+or sampling policy and never enters a model/checkpoint state dict. Allocate it
+from a model so layer count, batch size, KV heads, head dimension, capacity,
+device, and dtype are explicit and validated:
+
+```python
+model.eval()
+cache = model.create_kv_cache(batch_size=1, capacity=model.max_seq_len)
+with torch.inference_mode():
+    prompt_logits = model(prompt_ids, kv_cache=cache)  # prefill T tokens
+    next_logits = model(next_token_id, kv_cache=cache)  # append exactly one
+cache.reset()  # logical reset; no full-buffer zero fill
+```
+
+Storage is preallocated per layer as `(batch, kv_heads, capacity, head_dim)`.
+Metadata reports the stable layer shape, allocated bytes, and bytes per logical
+token. One model forward is one transaction: every layer must append exactly
+once before the logical position advances. Overflow, metadata/tensor mismatch,
+duplicate or missing layer writes, and downstream forward failures roll back
+the transaction, so partially written or stale slots are never visible.
+Learned position embeddings use the committed cache offset. Manual attention
+uses the corresponding rectangular causal mask; SDPA uses `is_causal` for
+prefill and an explicit rectangular mask for one-token decode. Cached execution
+is accepted only in eval mode under `no_grad`/`inference_mode`.
+
 For an opt-in long-context kernel-only comparison that writes elapsed time and
 CUDA peak allocated/reserved memory without downloading anything or enforcing
 a noisy performance threshold:
