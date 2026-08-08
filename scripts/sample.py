@@ -48,7 +48,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments,
         )
         if settings.top_p is not None:
-            raise ValueError("top_p sampling is not implemented in the naive generator")
+            raise ValueError(
+                "top_p sampling is not implemented in the shared generator"
+            )
         device = next(checkpoint.model.parameters()).device
 
         for prompt in arguments.prompt or [""]:
