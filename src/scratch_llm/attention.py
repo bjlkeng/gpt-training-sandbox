@@ -11,6 +11,7 @@ from torch import nn
 from scratch_llm.attention_backends import (
     AttentionBackendResolution,
     AttentionBackendSelection,
+    FlashAttentionProvider,
     FlashProviderLoader,
     kernel_fallback_resolution,
     resolve_attention_backend,
@@ -41,6 +42,8 @@ class CausalSelfAttention(nn.Module):
         self.attention_backend = config.attention_backend
         self._config = config
         self._flash_provider_loader = flash_provider_loader
+        self._prepared_attention_backend: str | None = None
+        self._prepared_flash_provider: FlashAttentionProvider | None = None
         self.layer_index = layer_index
         self.last_backend_selection = AttentionBackendSelection(
             requested_backend=config.attention_backend,
@@ -68,6 +71,28 @@ class CausalSelfAttention(nn.Module):
             self.register_buffer("causal_mask", causal_mask, persistent=False)
         else:
             self.register_buffer("causal_mask", None, persistent=False)
+
+    def prepare_attention_backend(
+        self,
+        resolution: AttentionBackendResolution,
+    ) -> None:
+        """Bind a preflight result before a compiled forward is constructed."""
+
+        if not isinstance(resolution, AttentionBackendResolution):
+            raise TypeError("resolution must be an AttentionBackendResolution")
+        selection = resolution.selection
+        if selection.requested_backend != self.attention_backend:
+            raise ValueError(
+                "prepared attention request does not match the configured backend"
+            )
+        if selection.effective_backend == "flash":
+            if resolution.provider is None:
+                raise ValueError("prepared flash attention requires a provider")
+        elif resolution.provider is not None:
+            raise ValueError("a fallback attention resolution cannot retain a provider")
+        self._prepared_attention_backend = selection.effective_backend
+        self._prepared_flash_provider = resolution.provider
+        self.last_backend_selection = selection
 
     def forward(
         self,
@@ -114,10 +139,18 @@ class CausalSelfAttention(nn.Module):
             query_start = kv_cache.start
             k, v = kv_cache.write(self.layer_index, k, v)
 
-        if self.attention_backend == "manual":
+        active_backend = self._prepared_attention_backend or self.attention_backend
+        if active_backend == "manual":
             attended = self._manual_attention(q, k, v, query_start=query_start)
-        elif self.attention_backend == "sdpa":
+        elif active_backend == "sdpa":
             attended = self._sdpa_attention(q, k, v, query_start=query_start)
+        elif self._prepared_flash_provider is not None:
+            attended = self._prepared_flash_attention(
+                q,
+                k,
+                v,
+                query_start=query_start,
+            )
         else:
             attended = self._flash_or_fallback_attention(
                 q,
@@ -132,6 +165,37 @@ class CausalSelfAttention(nn.Module):
             .view(batch_size, sequence_length, channels)
         )
         return self.output_dropout(self.out_proj(attended))
+
+    def _prepared_flash_attention(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        *,
+        query_start: int,
+    ) -> torch.Tensor:
+        provider = self._prepared_flash_provider
+        if provider is None:  # pragma: no cover - guarded by the caller.
+            raise RuntimeError("prepared flash attention lost its provider")
+        try:
+            return run_flash_attention(
+                provider,
+                q,
+                k,
+                v,
+                dropout_p=self.attention_dropout.p if self.training else 0.0,
+                causal=True,
+            )
+        except (NotImplementedError, RuntimeError, TypeError):
+            fallback = kernel_fallback_resolution(self._config)
+            self.prepare_attention_backend(fallback)
+            return self._run_fallback(
+                fallback,
+                q,
+                k,
+                v,
+                query_start=query_start,
+            )
 
     def _flash_or_fallback_attention(
         self,
