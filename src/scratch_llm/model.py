@@ -9,6 +9,7 @@ from torch.utils.checkpoint import checkpoint
 
 from scratch_llm.attention import CausalSelfAttention
 from scratch_llm.attention_backends import (
+    AttentionBackendResolution,
     AttentionBackendSelection,
     FlashProviderLoader,
 )
@@ -144,6 +145,21 @@ class GPT(nn.Module):
         if len(selections) != 1:  # pragma: no cover - identical blocks share facts.
             raise RuntimeError("decoder blocks observed mixed attention backends")
         return next(iter(selections))
+
+    def prepare_attention_backend(
+        self,
+        resolution: AttentionBackendResolution,
+    ) -> None:
+        """Bind one preflight result across every decoder block."""
+
+        if not isinstance(resolution, AttentionBackendResolution):
+            raise TypeError("resolution must be an AttentionBackendResolution")
+        for block in self.blocks:
+            if not isinstance(
+                block, Block
+            ):  # pragma: no cover - constructor invariant.
+                raise RuntimeError("decoder block list contains a non-block module")
+            block.attn.prepare_attention_backend(resolution)
 
     def set_activation_checkpointing(self, enabled: bool) -> None:
         """Select training-only non-reentrant block recomputation."""

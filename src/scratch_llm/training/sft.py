@@ -271,6 +271,7 @@ def run_sft_training(
         resume_from=resume_from,
         allow_tracking_fork=allow_tracking_fork,
     )
+    runtime.model.prepare_attention_backend(attention_preflight)
     activation_checkpoint_selection = configure_activation_checkpointing(
         runtime.model,
         enabled=config.sft.activation_checkpointing,

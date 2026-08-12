@@ -777,6 +777,7 @@ def _run_pretraining_impl(
             tracking_state=tracking_state,
             allow_tracking_fork=allow_tracking_fork,
         )
+        runtime.model.prepare_attention_backend(attention_preflight)
         activation_checkpoint_selection = configure_activation_checkpointing(
             runtime.model,
             enabled=config.train.activation_checkpointing,

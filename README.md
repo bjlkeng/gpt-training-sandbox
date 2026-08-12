@@ -937,6 +937,17 @@ the run environment when you want actual flash execution.
 Every pretraining/SFT progress log and throughput report records requested and
 effective backend, stable fallback reason, provider name, and provider version.
 Thus a request that ran through SDPA is labeled SDPA rather than FlashAttention.
+Production pretraining, SFT, and throughput benchmarking bind that preflight
+result to every decoder block before constructing a compiled model. The
+standalone eager module remains lazy, but `torch.compile` never needs to trace
+provider imports, version checks, CUDA capability queries, or the cached
+provider loader on the prepared path.
+
+On the RTX 3090 reference box, binding native FA2 before compilation reduced a
+matched 236M-model run from five observed recompilations to one and made FA2's
+three-run median 0.30% faster than a fresh SDPA control. See the
+[FA2 prepared-path benchmark](comparisons/gpt-training-sandbox-244-fa2-preflight/README.md)
+for the repeated measurements and acceptance threshold.
 Select the optional backend, with a strict example, using:
 
 ```bash

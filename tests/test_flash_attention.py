@@ -31,6 +31,7 @@ from scratch_llm.attention_backends import (
     run_flash_attention,
 )
 from scratch_llm.config import GPTConfig
+from scratch_llm.model import GPT
 
 
 def _config(**overrides: object) -> GPTConfig:
@@ -306,6 +307,81 @@ def test_flash_tensor_adapter_matches_sdpa_forward_and_backward() -> None:
             rtol=1e-10,
             atol=1e-10,
         )
+
+
+def test_prepared_flash_provider_stays_out_of_the_compiled_forward_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _provider()
+    config = _config(attention_fallback_policy="error")
+    resolution = resolve_attention_backend(
+        config,
+        _request(head_dimension=8),
+        provider_loader=lambda _preference, _capability: provider,
+    )
+    module = CausalSelfAttention(config)
+    module.prepare_attention_backend(resolution)
+
+    def unexpected_resolution(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("prepared attention must not resolve inside forward")
+
+    monkeypatch.setattr(
+        attention_module,
+        "resolve_attention_backend",
+        unexpected_resolution,
+    )
+    compiled = torch.compile(module, backend="eager", fullgraph=True)
+
+    output = compiled(torch.randn(2, 6, 16))
+
+    assert output.shape == (2, 6, 16)
+    assert module.last_backend_selection == resolution.selection
+
+
+def test_gpt_prepares_the_same_backend_for_every_decoder_block() -> None:
+    provider = _provider()
+    config = _config(n_layer=3)
+    resolution = resolve_attention_backend(
+        config,
+        _request(head_dimension=8),
+        provider_loader=lambda _preference, _capability: provider,
+    )
+    model = GPT(config)
+
+    model.prepare_attention_backend(resolution)
+
+    assert model.attention_backend_selection() == resolution.selection
+    assert [block.attn.last_backend_selection for block in model.blocks] == [
+        resolution.selection
+    ] * 3
+
+
+def test_prepared_flash_kernel_failure_falls_back_once() -> None:
+    calls = 0
+
+    def fail(*_args: object, **_kwargs: object) -> torch.Tensor:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("kernel launch failed")
+
+    provider = _provider(function=fail)
+    config = _config()
+    resolution = resolve_attention_backend(
+        config,
+        _request(head_dimension=8),
+        provider_loader=lambda _preference, _capability: provider,
+    )
+    module = CausalSelfAttention(config)
+    module.prepare_attention_backend(resolution)
+    inputs = torch.randn(1, 4, 16)
+
+    first = module(inputs)
+    second = module(inputs)
+
+    assert first.shape == second.shape == (1, 4, 16)
+    assert calls == 1
+    assert module.last_backend_selection.effective_backend == "sdpa"
+    assert module.last_backend_selection.fallback_reason == FLASH_KERNEL_UNAVAILABLE
 
 
 def test_flash_cpu_fallback_preserves_projection_keys_and_sdpa_math() -> None:

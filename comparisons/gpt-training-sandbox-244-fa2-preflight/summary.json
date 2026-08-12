@@ -1,0 +1,73 @@
+{
+  "acceptance": {
+    "fa2_advantage_over_fresh_sdpa_percent": 0.304326492106477,
+    "fa2_advantage_over_previous_best_percent": 0.3068945143070767,
+    "passed": true,
+    "previous_best_tokens_per_second": 37535.077399937334,
+    "requirement": "native FA2 median must exceed the best existing configuration median"
+  },
+  "bead": "gpt-training-sandbox-244",
+  "environment": {
+    "cuda": "13.0",
+    "flash_attention": "2.8.3.post1",
+    "gpu": "NVIDIA GeForce RTX 3090",
+    "gpu_compute_capability": [8, 6],
+    "python": "3.12.13",
+    "pytorch": "2.13.0+cu130"
+  },
+  "format": "scratch_llm_prepared_fa2_benchmark_summary",
+  "format_version": 1,
+  "model": {
+    "attention_heads": 8,
+    "embedding_width": 1024,
+    "head_dimension": 128,
+    "layers": 16,
+    "parameters": 235963392,
+    "sequence_length": 1024
+  },
+  "prepared_fa2": {
+    "fallback_reason": null,
+    "median_tokens_per_second": 37650.270493418655,
+    "observed_recompilations": 1,
+    "peak_allocated_mib": 14479.158203125,
+    "peak_reserved_mib": 15028,
+    "provider": "fa2",
+    "tokens_per_second": [
+      37668.27830728177,
+      37650.270493418655,
+      37572.22568482647
+    ]
+  },
+  "pre_fix_fa2": {
+    "median_tokens_per_second": 35969.9037664812,
+    "observed_recompilations": 5,
+    "peak_allocated_mib": 17997.2841796875,
+    "peak_reserved_mib": 20494,
+    "tokens_per_second": [
+      35942.218152513924,
+      35969.9037664812,
+      36046.00405942288
+    ]
+  },
+  "protocol": {
+    "activation_checkpointing": false,
+    "compile_mode": "default",
+    "device_batch_size": 16,
+    "dtype": "bfloat16",
+    "timed_steps": 30,
+    "timed_tokens": 1966080,
+    "total_batch_size_tokens": 65536,
+    "warmup_steps": 5
+  },
+  "sdpa_control": {
+    "median_tokens_per_second": 37536.03838452728,
+    "observed_recompilations": 1,
+    "peak_allocated_mib": 14479.166015625,
+    "peak_reserved_mib": 15028,
+    "tokens_per_second": [
+      37596.7082425466,
+      37536.03838452728,
+      37525.368558158145
+    ]
+  }
+}

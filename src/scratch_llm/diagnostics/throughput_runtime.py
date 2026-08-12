@@ -224,6 +224,7 @@ def execute_production_throughput_benchmark(
             strategy=config.data.loader_strategy,
         )
         model = GPT(config.model).to(device)
+        model.prepare_attention_backend(preflight)
         optimizer = build_optimizer(model, config.train)
         scheduler = build_lr_scheduler(optimizer, config.train)
         activation_checkpoint_selection = configure_activation_checkpointing(
