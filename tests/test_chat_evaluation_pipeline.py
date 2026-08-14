@@ -295,6 +295,54 @@ def test_full_orchestration_preflights_then_runs_once_in_canonical_order_and_res
     assert _rng_probe() == pytest.approx(expected_rng)
 
 
+def test_chat_tasks_and_fixed_samples_use_configured_sft_precision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    config.sft.dtype = "bfloat16"
+    config.validate()
+    checkpoint = tmp_path / "sft.pt"
+    checkpoint.write_bytes(b"fixture")
+    cache_root = tmp_path / "cache"
+    cache_root.mkdir()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    calls: list[str] = []
+    tokenizer = _patch_runtime(
+        monkeypatch,
+        config=config,
+        model=nn.Linear(1, 1),
+        calls=calls,
+    )
+
+    def run_task(*args: object, **_kwargs: object):
+        assert torch.is_autocast_enabled("cpu")
+        assert torch.get_autocast_dtype("cpu") is torch.bfloat16
+        task = args[2]
+        calls.append(f"run:{task.name}")
+        return _task_result(task.name, tokenizer.get_identity())
+
+    def fixed_samples(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        assert torch.is_autocast_enabled("cpu")
+        assert torch.get_autocast_dtype("cpu") is torch.bfloat16
+        calls.append("fixed")
+        return SimpleNamespace()
+
+    monkeypatch.setattr(pipeline, "_evaluate_task", run_task)
+    monkeypatch.setattr(pipeline, "generate_fixed_sft_samples", fixed_samples)
+
+    evaluate_checkpoint_chat_model(
+        config,
+        checkpoint_path=checkpoint,
+        cache_root=cache_root,
+        settings=_settings(("ARC-Easy",)),
+        run_dir=run_dir,
+    )
+
+    assert calls[-2:] == ["run:ARC-Easy", "fixed"]
+
+
 @pytest.mark.parametrize(
     "failure",
     (RuntimeError("fixture task failed"), KeyboardInterrupt()),

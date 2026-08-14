@@ -1215,7 +1215,8 @@ class _CheckpointLifecycle:
         if self._validation_runner is None or step % self._config.train.eval_every != 0:
             return None
         try:
-            validation = self._validation_runner(step)
+            with self._runtime.precision.autocast():
+                validation = self._validation_runner(step)
         except torch.OutOfMemoryError:
             raise
         except Exception as error:

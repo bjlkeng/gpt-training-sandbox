@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from itertools import count
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
@@ -181,6 +181,7 @@ def _run(
     base_checkpoint: Path | None = None,
     resume_from: Path | None = None,
     compiler: ModelCompiler | None = None,
+    sample_runner: Callable[[str], FixedSFTSamplesResult] = _fixed_samples,
 ):
     paths = prepare_run(config)
     tracker = build_tracker(config, paths, stage="train_sft")
@@ -191,7 +192,7 @@ def _run(
             tracker=tracker,
             base_checkpoint=base_checkpoint,
             resume_from=resume_from,
-            sample_runner=_fixed_samples,
+            sample_runner=sample_runner,
             compiler=compiler,
         )
 
@@ -315,6 +316,7 @@ def test_fresh_sft_can_switch_a_manual_base_checkpoint_to_sdpa(
 
 def test_gradient_accumulation_preserves_the_exact_sft_token_budget(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = _config(tmp_path, run_name="sft-accumulation")
     config.sft.total_batch_size_tokens = 128
@@ -325,14 +327,40 @@ def test_gradient_accumulation_preserves_the_exact_sft_token_budget(
     config.sft.save_every = 1
     config.validate()
     base = _base_checkpoint(tmp_path, config)
+    precision_events: list[str] = []
+    callback_type = sft_training.SFTAssistantBPBCallback
 
-    result = _run(config, base_checkpoint=base)
+    def checked_callback(*args: Any, **kwargs: Any):
+        callback = callback_type(*args, **kwargs)
+
+        def run(step: int):
+            assert torch.is_autocast_enabled("cpu")
+            assert torch.get_autocast_dtype("cpu") is torch.bfloat16
+            precision_events.append("validation")
+            return callback(step)
+
+        return run
+
+    def checked_samples(checkpoint_identity: str) -> FixedSFTSamplesResult:
+        assert torch.is_autocast_enabled("cpu")
+        assert torch.get_autocast_dtype("cpu") is torch.bfloat16
+        precision_events.append("sample")
+        return _fixed_samples(checkpoint_identity)
+
+    monkeypatch.setattr(sft_training, "SFTAssistantBPBCallback", checked_callback)
+
+    result = _run(
+        config,
+        base_checkpoint=base,
+        sample_runner=checked_samples,
+    )
 
     telemetry = result.steps[0].telemetry
     assert config.sft.to_train_config(config.model.seq_len).grad_accum_steps == 2
     assert telemetry is not None
     assert telemetry.processed_model_tokens == 128
     assert telemetry.supervised_target_tokens > 0
+    assert precision_events == ["validation", "sample"]
 
 
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])

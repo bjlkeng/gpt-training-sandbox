@@ -76,14 +76,26 @@ class _SpyTracker(Tracker):
 
 
 class _ConstantCompletionModel(nn.Module):
-    def __init__(self, token_id: int) -> None:
+    def __init__(
+        self,
+        token_id: int,
+        *,
+        expected_autocast_dtype: torch.dtype | None = None,
+    ) -> None:
         super().__init__()
         self.max_seq_len = 16
         self.vocab_size = VOCAB_SIZE
         self.token_id = token_id
+        self.expected_autocast_dtype = expected_autocast_dtype
         self.anchor = nn.Parameter(torch.tensor(0.0))
 
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
+        if self.expected_autocast_dtype is not None:
+            assert torch.is_autocast_enabled(token_ids.device.type)
+            assert (
+                torch.get_autocast_dtype(token_ids.device.type)
+                is self.expected_autocast_dtype
+            )
         logits = torch.full(
             (token_ids.shape[0], token_ids.shape[1], self.vocab_size),
             -torch.inf,
@@ -191,10 +203,15 @@ def test_sample_mode_does_not_open_validation_data(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = _config(tmp_path)
+    config.train.dtype = "bfloat16"
+    config.validate()
     tokenizer = ByteTokenizer()
     checkpoint = SimpleNamespace(
         config=config,
-        model=_ConstantCompletionModel(ord("A")),
+        model=_ConstantCompletionModel(
+            ord("A"),
+            expected_autocast_dtype=torch.bfloat16,
+        ),
         step=12,
         tokenizer=tokenizer,
     )
@@ -230,6 +247,8 @@ def test_core_mode_loads_the_explicit_bundle_without_validation_data(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = _config(tmp_path)
+    config.train.dtype = "bfloat16"
+    config.validate()
     tokenizer = ByteTokenizer()
     checkpoint = SimpleNamespace(
         config=config,
@@ -252,6 +271,8 @@ def test_core_mode_loads_the_explicit_bundle_without_validation_data(
     )
 
     def evaluate(*args: object, **kwargs: object) -> CoreEvaluationResult:
+        assert torch.is_autocast_enabled("cpu")
+        assert torch.get_autocast_dtype("cpu") is torch.bfloat16
         calls.append(("evaluate", args[2]))
         assert kwargs["max_per_task"] == 1
         return _core_result(tokenizer_identity=tokenizer.get_identity())
@@ -305,6 +326,8 @@ def test_bpb_mode_runs_both_protocols_with_one_frozen_identity_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = _config(tmp_path)
+    config.train.dtype = "bfloat16"
+    config.validate()
     tokenizer = ByteTokenizer()
     checkpoint = SimpleNamespace(
         config=config,
@@ -343,6 +366,8 @@ def test_bpb_mode_runs_both_protocols_with_one_frozen_identity_set(
     calls: list[tuple[str, str]] = []
 
     def compatibility(*_args: object, **kwargs: Any) -> BaseValidationResult:
+        assert torch.is_autocast_enabled("cpu")
+        assert torch.get_autocast_dtype("cpu") is torch.bfloat16
         calls.append(("compatibility", kwargs["checkpoint_identity"]))
         return _protocol_result(
             NANOCHAT_COMPAT_PROTOCOL_ID,
@@ -350,6 +375,8 @@ def test_bpb_mode_runs_both_protocols_with_one_frozen_identity_set(
         )
 
     def full_document(*_args: object, **kwargs: Any) -> BaseValidationResult:
+        assert torch.is_autocast_enabled("cpu")
+        assert torch.get_autocast_dtype("cpu") is torch.bfloat16
         calls.append(("full_document", kwargs["checkpoint_identity"]))
         return _protocol_result(
             FULL_DOCUMENT_PROTOCOL_ID,

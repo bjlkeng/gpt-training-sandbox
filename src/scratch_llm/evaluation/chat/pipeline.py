@@ -45,6 +45,7 @@ from scratch_llm.training.checkpoint import (
     load_checkpoint_metadata,
     load_model_checkpoint,
 )
+from scratch_llm.training.precision import PrecisionError, build_precision_policy
 from scratch_llm.training.rng_state import preserve_global_rng_state
 from scratch_llm.utils import get_device
 
@@ -99,6 +100,12 @@ def evaluate_checkpoint_chat_model(
 
     _validate_code_execution(settings, executor)
     device = get_device(config.run.device)
+    try:
+        precision = build_precision_policy(dtype=config.sft.dtype, device=device)
+    except PrecisionError as error:
+        raise ChatEvaluationError(
+            f"invalid chat evaluation precision policy: {error}"
+        ) from error
     metadata = load_checkpoint_metadata(resolved_checkpoint)
     _validate_sft_checkpoint(
         requested=config,
@@ -130,7 +137,7 @@ def evaluate_checkpoint_chat_model(
 
     modes = tuple((module, module.training) for module in model.modules())
     results: list[ChatTaskResult] = []
-    with preserve_global_rng_state(device):
+    with preserve_global_rng_state(device), precision.autocast():
         try:
             model.eval()
             for task in tasks:

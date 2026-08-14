@@ -27,6 +27,7 @@ from scratch_llm.evaluation.sampling import (
 )
 from scratch_llm.training.best_checkpoint import PeriodicValidationResult
 from scratch_llm.training.checkpoint import load_model_checkpoint
+from scratch_llm.training.precision import PrecisionError, build_precision_policy
 from scratch_llm.config import ProjectConfig
 from scratch_llm.evaluation.core.bundle import CoreBundle, load_core_bundle
 from scratch_llm.evaluation.core.results import CoreTaskResult
@@ -66,6 +67,15 @@ def evaluate_checkpoint_base_model(
     if not isinstance(config, ProjectConfig):
         raise TypeError(f"config must be a ProjectConfig, got {type(config).__name__}")
     config.validate()
+    try:
+        precision = build_precision_policy(
+            dtype=config.train.dtype,
+            device=config.run.device,
+        )
+    except PrecisionError as error:
+        raise BaseEvaluationError(
+            f"invalid base evaluation precision policy: {error}"
+        ) from error
     requested_modes = tuple(modes)
     if max_per_task is not None and "core" not in requested_modes:
         raise BaseEvaluationError("max_per_task requires the core evaluation mode")
@@ -194,13 +204,14 @@ def evaluate_checkpoint_base_model(
 
             effective_core_runner = run_core
 
-        completed = execute_base_evaluation_modes(
-            requested_modes,
-            context=context,
-            bpb_runner=run_bpb if "bpb" in requested_modes else None,
-            sample_runner=run_samples if "sample" in requested_modes else None,
-            core_runner=effective_core_runner,
-        )
+        with precision.autocast():
+            completed = execute_base_evaluation_modes(
+                requested_modes,
+                context=context,
+                bpb_runner=run_bpb if "bpb" in requested_modes else None,
+                sample_runner=run_samples if "sample" in requested_modes else None,
+                core_runner=effective_core_runner,
+            )
 
     return report_completed_base_evaluation(
         completed,
