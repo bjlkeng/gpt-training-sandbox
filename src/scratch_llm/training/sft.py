@@ -455,7 +455,8 @@ def run_sft_training(
     else:
         active_sample_runner = sample_runner
 
-    samples = active_sample_runner(checkpoint_identity)
+    with runtime.precision.autocast():
+        samples = active_sample_runner(checkpoint_identity)
     if not isinstance(samples, FixedSFTSamplesResult):
         raise SFTTrainingError("SFT sample runner must return a FixedSFTSamplesResult")
     if not lifecycle.validation_results:  # pragma: no cover - finalize validates.
@@ -958,7 +959,8 @@ class _SFTCheckpointLifecycle:
         result: OptimizerStepResult,
     ) -> ExactTrainingState | None:
         try:
-            validation = self._validation_runner(step)
+            with self._runtime.precision.autocast():
+                validation = self._validation_runner(step)
             decision = advance_sft_validation_state(
                 self._validation_state,
                 validation,

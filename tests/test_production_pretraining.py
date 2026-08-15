@@ -469,10 +469,14 @@ def test_periodic_validation_installs_best_before_independent_step_and_last(
         max_steps=1,
     )
     config.train.eval_every = 1
+    config.train.dtype = "bfloat16"
+    config.validate()
     events: list[str] = []
     real_save_checkpoint = pretraining.save_checkpoint
 
     def validation_runner(step: int) -> PeriodicValidationResult:
+        assert torch.is_autocast_enabled("cpu")
+        assert torch.get_autocast_dtype("cpu") is torch.bfloat16
         events.append(f"validate:{step}")
         return _fake_validation_result(
             step=step,
