@@ -159,6 +159,7 @@ def _categorical(task_name: str, *, bounded: bool) -> CategoricalTaskResult:
         evaluated_count=1,
         available_count=1,
         elapsed_seconds=1,
+        model_max_seq_len=512,
     )
 
 

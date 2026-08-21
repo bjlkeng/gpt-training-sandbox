@@ -54,6 +54,7 @@ def _categorical(
         evaluated_count=2,
         available_count=2,
         elapsed_seconds=elapsed_seconds,
+        model_max_seq_len=512,
     )
 
 
@@ -206,6 +207,12 @@ def test_full_report_is_canonical_content_free_and_derived_from_exact_counts() -
     assert payload["tasks"][0]["score"]["passed_count"] == 1
     assert payload["tasks"][0]["score"]["baseline_accuracy"] == 0.25
     assert payload["tasks"][0]["score"]["centered_score"] == pytest.approx(1 / 3)
+    assert payload["tasks"][0]["details"]["prompt_preflight"] == {
+        "excluded_examples": [],
+        "model_max_seq_len": 512,
+        "policy_id": "scratch_llm_exclude_overlength_categorical_prompts_v1",
+        "policy_version": 1,
+    }
     assert payload["tasks"][3]["evaluation_type"] == "generative"
     assert payload["tasks"][4]["evaluation_type"] == "code_execution"
     serialized = json.dumps(payload, sort_keys=True)

@@ -30,6 +30,10 @@ from scratch_llm.utils import get_device
 
 CHAT_CATEGORICAL_PROTOCOL_ID: Final = "nanochat_chat_categorical_v1"
 CHAT_CATEGORICAL_PROTOCOL_VERSION: Final = 1
+CHAT_CATEGORICAL_CONTEXT_POLICY_ID: Final = (
+    "scratch_llm_exclude_overlength_categorical_prompts_v1"
+)
+CHAT_CATEGORICAL_CONTEXT_POLICY_VERSION: Final = 1
 CHAT_CATEGORICAL_REFERENCE_FILES: Final[Mapping[str, str]] = MappingProxyType(
     {
         "scripts/chat_eval.py": (
@@ -163,6 +167,38 @@ class CategoricalGroupResult:
 
 
 @dataclass(frozen=True, slots=True)
+class CategoricalPromptExclusion:
+    """Content-free identity and length for one prompt excluded at preflight."""
+
+    example_identity: str
+    source_row: int
+    prompt_token_count: int
+
+    def __post_init__(self) -> None:
+        try:
+            require_non_empty_string(
+                self.example_identity,
+                name="example_identity",
+            )
+            require_non_negative_integer(self.source_row, name="source_row")
+            require_positive_integer(
+                self.prompt_token_count,
+                name="prompt_token_count",
+            )
+        except (TypeError, ValueError) as error:
+            raise CategoricalEvaluationError(str(error)) from error
+
+    def to_dict(self) -> dict[str, object]:
+        """Return stable content-free exclusion metadata."""
+
+        return {
+            "example_identity": self.example_identity,
+            "prompt_token_count": self.prompt_token_count,
+            "source_row": self.source_row,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class CategoricalTaskResult:
     """Completed counts and identities for one categorical task run."""
 
@@ -178,6 +214,8 @@ class CategoricalTaskResult:
     evaluated_count: int
     available_count: int
     elapsed_seconds: float
+    model_max_seq_len: int
+    prompt_exclusions: tuple[CategoricalPromptExclusion, ...] = ()
     groups: tuple[CategoricalGroupResult, ...] = ()
     renderer_identity: str = CHAT_RENDERER_ID
 
@@ -195,6 +233,10 @@ class CategoricalTaskResult:
             require_non_negative_integer(self.passed_count, name="passed_count")
             require_positive_integer(self.evaluated_count, name="evaluated_count")
             require_positive_integer(self.available_count, name="available_count")
+            require_positive_integer(
+                self.model_max_seq_len,
+                name="model_max_seq_len",
+            )
             require_finite_non_negative_real(
                 self.elapsed_seconds,
                 name="elapsed_seconds",
@@ -213,20 +255,67 @@ class CategoricalTaskResult:
             raise CategoricalEvaluationError(
                 "evaluated_count must not exceed available_count"
             )
+        if not isinstance(self.prompt_exclusions, tuple) or any(
+            not isinstance(exclusion, CategoricalPromptExclusion)
+            for exclusion in self.prompt_exclusions
+        ):
+            raise TypeError(
+                "prompt_exclusions must be a tuple of CategoricalPromptExclusion values"
+            )
+        exclusion_identities = tuple(
+            exclusion.example_identity for exclusion in self.prompt_exclusions
+        )
+        exclusion_rows = tuple(
+            exclusion.source_row for exclusion in self.prompt_exclusions
+        )
+        if len(set(exclusion_identities)) != len(exclusion_identities):
+            raise CategoricalEvaluationError(
+                "prompt exclusion example identities must be unique"
+            )
+        if len(set(exclusion_rows)) != len(exclusion_rows):
+            raise CategoricalEvaluationError(
+                "prompt exclusion source rows must be unique"
+            )
+        if any(
+            exclusion.prompt_token_count <= self.model_max_seq_len
+            for exclusion in self.prompt_exclusions
+        ):
+            raise CategoricalEvaluationError(
+                "excluded prompt lengths must exceed model_max_seq_len"
+            )
         if self.run_kind == "full":
             if self.max_problems is not None:
                 raise CategoricalEvaluationError(
                     "full results must not set max_problems"
                 )
-            if self.evaluated_count != self.available_count:
+            if self.selected_count != self.available_count:
                 raise CategoricalEvaluationError(
-                    "full results must evaluate every available problem"
+                    "full results must account for every available problem"
                 )
         elif self.run_kind == "bounded":
             try:
-                require_positive_integer(self.max_problems, name="max_problems")
+                bounded_max_problems = require_positive_integer(
+                    self.max_problems,
+                    name="max_problems",
+                )
             except (TypeError, ValueError) as error:
                 raise CategoricalEvaluationError(str(error)) from error
+            if self.evaluated_count > bounded_max_problems:
+                raise CategoricalEvaluationError(
+                    "bounded evaluated_count must not exceed max_problems"
+                )
+            if self.selected_count > self.available_count:
+                raise CategoricalEvaluationError(
+                    "bounded selected_count must not exceed available_count"
+                )
+            if (
+                self.evaluated_count < bounded_max_problems
+                and self.selected_count != self.available_count
+            ):
+                raise CategoricalEvaluationError(
+                    "bounded results below max_problems must account for every "
+                    "available problem"
+                )
         else:
             raise CategoricalEvaluationError("run_kind must be 'bounded' or 'full'")
         if not isinstance(self.groups, tuple) or any(
@@ -255,6 +344,18 @@ class CategoricalTaskResult:
 
         return self.passed_count / self.evaluated_count
 
+    @property
+    def selected_count(self) -> int:
+        """Return source rows consumed to satisfy the requested evaluation scope."""
+
+        return self.evaluated_count + self.excluded_overlength_count
+
+    @property
+    def excluded_overlength_count(self) -> int:
+        """Return prompts rejected intact because they exceed the model window."""
+
+        return len(self.prompt_exclusions)
+
     def to_dict(self) -> dict[str, object]:
         """Return a stable JSON-compatible completed-result representation."""
 
@@ -263,7 +364,9 @@ class CategoricalTaskResult:
             "counts": {
                 "available": self.available_count,
                 "evaluated": self.evaluated_count,
+                "excluded_overlength": self.excluded_overlength_count,
                 "passed": self.passed_count,
+                "selected": self.selected_count,
             },
             "elapsed_seconds": self.elapsed_seconds,
             "groups": [group.to_dict() for group in self.groups],
@@ -277,6 +380,14 @@ class CategoricalTaskResult:
             },
             "protocol_id": CHAT_CATEGORICAL_PROTOCOL_ID,
             "protocol_version": CHAT_CATEGORICAL_PROTOCOL_VERSION,
+            "prompt_preflight": {
+                "excluded_examples": [
+                    exclusion.to_dict() for exclusion in self.prompt_exclusions
+                ],
+                "model_max_seq_len": self.model_max_seq_len,
+                "policy_id": CHAT_CATEGORICAL_CONTEXT_POLICY_ID,
+                "policy_version": CHAT_CATEGORICAL_CONTEXT_POLICY_VERSION,
+            },
             "reference_commit": CHAT_EVAL_REFERENCE_COMMIT,
             "reference_files": dict(CHAT_CATEGORICAL_REFERENCE_FILES),
             "scope": {
@@ -330,24 +441,54 @@ def evaluate_categorical_task(
     ):
         raise CategoricalEvaluationError("model.max_seq_len must be positive")
 
-    examples = (
-        task.examples
-        if max_problems is None
-        else task.examples[: min(max_problems, len(task.examples))]
+    selected_example_list: list[CategoricalExample] = []
+    selected_prompt_list: list[tuple[int, ...]] = []
+    fitting_prompt_count = 0
+    for example in task.examples:
+        prompt = render_completion_prompt(example.conversation, tokenizer).token_ids
+        selected_example_list.append(example)
+        selected_prompt_list.append(prompt)
+        if len(prompt) <= max_seq_len:
+            fitting_prompt_count += 1
+        if max_problems is not None and fitting_prompt_count == max_problems:
+            break
+    selected_examples = tuple(selected_example_list)
+    selected_prompts = tuple(selected_prompt_list)
+    selected_label_token_ids = _encode_declared_labels(
+        selected_examples,
+        tokenizer=tokenizer,
     )
-    rendered = tuple(
-        render_completion_prompt(example.conversation, tokenizer).token_ids
-        for example in examples
-    )
-    too_long = next(
-        (len(prompt) for prompt in rendered if len(prompt) > max_seq_len),
-        None,
-    )
-    if too_long is not None:
-        raise CategoricalEvaluationError(
-            f"rendered prompt length {too_long} exceeds model.max_seq_len {max_seq_len}"
+    prompt_exclusions = tuple(
+        CategoricalPromptExclusion(
+            example_identity=example.identity,
+            source_row=example.source_row,
+            prompt_token_count=len(prompt),
         )
-    label_token_ids = _encode_declared_labels(examples, tokenizer=tokenizer)
+        for example, prompt in zip(
+            selected_examples,
+            selected_prompts,
+            strict=True,
+        )
+        if len(prompt) > max_seq_len
+    )
+    prepared = tuple(
+        (example, prompt, label_token_ids)
+        for example, prompt, label_token_ids in zip(
+            selected_examples,
+            selected_prompts,
+            selected_label_token_ids,
+            strict=True,
+        )
+        if len(prompt) <= max_seq_len
+    )
+    if not prepared:
+        raise CategoricalEvaluationError(
+            "no selected prompts fit model.max_seq_len "
+            f"{max_seq_len}; excluded {len(prompt_exclusions)} overlength prompts"
+        )
+    examples = tuple(item[0] for item in prepared)
+    rendered = tuple(item[1] for item in prepared)
+    label_token_ids = tuple(item[2] for item in prepared)
     resolved_device = get_device(device)
     bos_token_id = tokenizer.get_bos_token_id()
     modes = tuple((module, module.training) for module in model.modules())
@@ -404,6 +545,8 @@ def evaluate_categorical_task(
         evaluated_count=len(examples),
         available_count=len(task.examples),
         elapsed_seconds=elapsed_seconds,
+        model_max_seq_len=max_seq_len,
+        prompt_exclusions=prompt_exclusions,
         groups=tuple(
             CategoricalGroupResult(
                 name=name,
@@ -477,6 +620,8 @@ def _validate_logits(logits: object, *, input_ids: torch.Tensor) -> None:
 
 
 __all__ = [
+    "CHAT_CATEGORICAL_CONTEXT_POLICY_ID",
+    "CHAT_CATEGORICAL_CONTEXT_POLICY_VERSION",
     "CHAT_CATEGORICAL_PROTOCOL_ID",
     "CHAT_CATEGORICAL_PROTOCOL_VERSION",
     "CHAT_CATEGORICAL_REFERENCE_FILES",
@@ -484,6 +629,7 @@ __all__ = [
     "CategoricalEvaluationError",
     "CategoricalExample",
     "CategoricalGroupResult",
+    "CategoricalPromptExclusion",
     "CategoricalRunKind",
     "CategoricalTask",
     "CategoricalTaskResult",

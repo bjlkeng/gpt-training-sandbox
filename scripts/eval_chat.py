@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from scratch_llm.evaluation.chat.chatcore import CHATCORE_TASK_ORDER
+from scratch_llm.evaluation.chat.categorical import CategoricalTaskResult
 from scratch_llm.evaluation.chat.execution import LocalPythonExecutor
 from scratch_llm.evaluation.chat.generative import GenerativeEvaluationConfig
 from scratch_llm.evaluation.chat.pipeline import evaluate_checkpoint_chat_model
@@ -217,9 +218,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _print_task_progress(result: ChatTaskResult) -> None:
     """Print one content-free line after a requested task completes."""
 
+    exclusion_summary = (
+        f", excluded_overlength={result.excluded_overlength_count}"
+        if isinstance(result, CategoricalTaskResult)
+        else ""
+    )
     print(
         f"{result.task_name}: accuracy={result.accuracy:.4f}, "
         f"passed={result.passed_count}/{result.evaluated_count}"
+        f"{exclusion_summary}"
     )
 
 

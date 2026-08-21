@@ -15,6 +15,9 @@ from scripts._checkpoint_fixtures import create_tiny_sft_checkpoint
 from scratch_llm.config import dump_config
 from scratch_llm.data.hub import publish_local_parquet_cache
 from scratch_llm.evaluation.chat.arc import get_arc_dataset_spec
+from scratch_llm.evaluation.chat.categorical import (
+    CHAT_CATEGORICAL_CONTEXT_POLICY_ID,
+)
 from scratch_llm.evaluation.chat.gsm8k import get_gsm8k_dataset_spec
 from scratch_llm.evaluation.chat.humaneval import get_humaneval_dataset_spec
 from scratch_llm.evaluation.chat.mmlu import get_mmlu_dataset_spec
@@ -104,7 +107,13 @@ def _chat_fixtures(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
                 "choices": ["a", "b", "c", "d"],
                 "question": "PRIVATE_MMLU_QUESTION",
                 "subject": "fixture_subject",
-            }
+            },
+            {
+                "answer": 1,
+                "choices": ["a", "b", "c", "d"],
+                "question": "PRIVATE_OVERLENGTH_MMLU_" + "x" * 600,
+                "subject": "fixture_subject",
+            },
         ],
     )
     _publish_cache(
@@ -199,6 +208,20 @@ def test_cpu_cli_full_filtered_bounded_failure_refusal_and_deterministic_rerun(
     ]
     assert payload["chatcore"]["chatcore_metric"] is not None
     assert payload["response_diagnostics"]["sample_count"] == 5
+    mmlu_details = payload["tasks"][2]["details"]
+    assert mmlu_details["counts"] == {
+        "available": 2,
+        "evaluated": 1,
+        "excluded_overlength": 1,
+        "passed": mmlu_details["counts"]["passed"],
+        "selected": 2,
+    }
+    assert mmlu_details["prompt_preflight"]["policy_id"] == (
+        CHAT_CATEGORICAL_CONTEXT_POLICY_ID
+    )
+    assert mmlu_details["prompt_preflight"]["model_max_seq_len"] == 512
+    assert len(mmlu_details["prompt_preflight"]["excluded_examples"]) == 1
+    assert "excluded_overlength=1" in full.stdout
     assert payload["tasks"][4]["details"]["scoring"]["outcome_counts"] == {
         "syntax_error": 1
     }
@@ -206,6 +229,7 @@ def test_cpu_cli_full_filtered_bounded_failure_refusal_and_deterministic_rerun(
     for private in (
         "PRIVATE_ARC_QUESTION",
         "PRIVATE_MMLU_QUESTION",
+        "PRIVATE_OVERLENGTH_MMLU_",
         "PRIVATE_GSM8K_QUESTION",
         "PRIVATE_HUMANEVAL_PROMPT",
         "PRIVATE_REFERENCE",
@@ -239,6 +263,7 @@ def test_cpu_cli_full_filtered_bounded_failure_refusal_and_deterministic_rerun(
     for private in (
         "PRIVATE_ARC_QUESTION",
         "PRIVATE_MMLU_QUESTION",
+        "PRIVATE_OVERLENGTH_MMLU_",
         "PRIVATE_GSM8K_QUESTION",
         "PRIVATE_HUMANEVAL_PROMPT",
         "PRIVATE_REFERENCE",
@@ -294,6 +319,13 @@ def test_cpu_cli_full_filtered_bounded_failure_refusal_and_deterministic_rerun(
     )
     assert bounded_payload["chatcore"]["chatcore_metric"] is None
     assert bounded_payload["chatcore"]["chatcore_cat"] is None
+    assert bounded_payload["tasks"][2]["details"]["counts"] == {
+        "available": 2,
+        "evaluated": 1,
+        "excluded_overlength": 1,
+        "passed": bounded_payload["tasks"][2]["details"]["counts"]["passed"],
+        "selected": 2,
+    }
     bounded_metrics = next(
         record["metrics"]
         for record in _tracking_records(output_dir, "chat-eval-bounded")

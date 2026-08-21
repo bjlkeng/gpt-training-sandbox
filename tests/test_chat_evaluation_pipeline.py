@@ -98,6 +98,7 @@ def _task_result(task_name: str, tokenizer_identity: str):
             evaluated_count=1,
             available_count=1,
             elapsed_seconds=1,
+            model_max_seq_len=512,
         )
     outcome = "test_failure" if task_name == "HumanEval" else None
     sample = GenerativeSampleResult(
