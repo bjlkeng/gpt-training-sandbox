@@ -9,7 +9,7 @@ import math
 from os import PathLike
 from pathlib import Path
 import time
-from typing import Literal, TypeAlias
+from typing import Literal, TypeAlias, cast
 
 import torch
 from torch import nn
@@ -29,7 +29,7 @@ from scratch_llm.chat.rendering import (
     CompletionPrompt,
     render_completion_prompt,
 )
-from scratch_llm.config import GenerationConfig
+from scratch_llm.config import GenerationConfig, TrainDType
 from scratch_llm.generation import (
     CompletionReason,
     GeneratedToken,
@@ -37,6 +37,11 @@ from scratch_llm.generation import (
     stream_generate_sequence,
 )
 from scratch_llm.tokenization.tokenizer import Tokenizer
+from scratch_llm.training.precision import (
+    PrecisionError,
+    PrecisionPolicy,
+    build_precision_policy,
+)
 from scratch_llm.utils import get_device
 
 
@@ -51,6 +56,7 @@ ChatStatus: TypeAlias = Literal[
 TokenEventType: TypeAlias = Literal["start", "token", "complete"]
 _HistoryMessage: TypeAlias = UserMessage | AssistantMessage
 _CheckpointLoader: TypeAlias = Callable[..., object]
+_SUPPORTED_INFERENCE_DTYPES = frozenset({"float32", "float16", "bfloat16"})
 
 
 def _load_model_checkpoint(path: Path, *, device: str) -> object:
@@ -269,6 +275,17 @@ class ChatEngine:
             raise ChatEngineError(
                 "SFT checkpoint is missing canonical GenerationConfig defaults"
             )
+        precision_dtype = _checkpoint_precision_dtype(checkpoint, checkpoint_config)
+        try:
+            precision = build_precision_policy(
+                dtype=precision_dtype,
+                device=resolved_device,
+            )
+        except PrecisionError as error:
+            raise ChatEngineError(
+                f"SFT checkpoint {path} has an incompatible inference precision "
+                f"policy: {error}"
+            ) from error
         try:
             default_generation.validate()
             tokenizer_identity = tokenizer.get_identity()
@@ -291,6 +308,7 @@ class ChatEngine:
         self._bos_token_id = bos_token_id
         self._max_seq_len = max_seq_len
         self._default_generation = _copy_generation_config(default_generation)
+        self._precision: PrecisionPolicy = precision
         self._clock = clock
         self._messages: tuple[_HistoryMessage, ...] = ()
         self._pending_prompt: CompletionPrompt | None = None
@@ -554,7 +572,12 @@ class ChatEngine:
         interrupted_status: Literal["cancelled", "failed"] | None = None
         try:
             yield self._event(type="start", elapsed_seconds=0.0)
-            for event in generation_stream:
+            while True:
+                try:
+                    with self._precision.autocast():
+                        event = next(generation_stream)
+                except StopIteration:
+                    break
                 if isinstance(event, GeneratedToken):
                     token_bytes = self._tokenizer.decode_single_token_bytes(
                         event.token_id
@@ -710,6 +733,37 @@ def _copy_generation_config(config: GenerationConfig) -> GenerationConfig:
         )
     config.validate()
     return GenerationConfig(**config.to_dict())
+
+
+def _checkpoint_precision_dtype(
+    checkpoint: object,
+    checkpoint_config: object,
+) -> TrainDType:
+    """Resolve the SFT precision recorded by modern and legacy checkpoints."""
+
+    sft_config = getattr(checkpoint_config, "sft", None)
+    config_dtype = getattr(sft_config, "dtype", None)
+    precision_state = getattr(checkpoint, "precision", None)
+    state_dtype = (
+        None if precision_state is None else getattr(precision_state, "dtype", None)
+    )
+    for source, dtype in (
+        ("training config", config_dtype),
+        ("precision state", state_dtype),
+    ):
+        if dtype is not None and (
+            not isinstance(dtype, str) or dtype not in _SUPPORTED_INFERENCE_DTYPES
+        ):
+            raise ChatEngineError(
+                f"SFT checkpoint has invalid {source} dtype {dtype!r}"
+            )
+    if config_dtype is not None and state_dtype is not None:
+        if config_dtype != state_dtype:
+            raise ChatEngineError(
+                "SFT checkpoint precision state does not match its training config: "
+                f"state={state_dtype!r}, config={config_dtype!r}"
+            )
+    return cast(TrainDType, state_dtype or config_dtype or "float32")
 
 
 def _message_payload(message: _HistoryMessage) -> dict[str, str]:

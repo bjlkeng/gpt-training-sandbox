@@ -10,11 +10,19 @@ import subprocess
 import sys
 
 import pytest
+import torch
 
 import scripts.chat as chat_script
 from scripts._checkpoint_fixtures import create_tiny_sft_checkpoint
 from scratch_llm.chat import TokenEvent, read_conversations
 from scratch_llm.config import GenerationConfig
+from scratch_llm.tokenization.tokenizer import ByteTokenizer
+from tests.test_chat_engine import (
+    _PrecisionTransitionModel,
+    _assistant_end,
+    _assistant_start,
+    _engine,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -291,6 +299,47 @@ def test_one_shot_subprocess_uses_real_engine_and_writes_parseable_transcript(
     ] == [
         ("user", "Hi"),
         ("assistant", "\x00\x00"),
+    ]
+
+
+def test_terminal_main_uses_shared_checkpoint_precision(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    tokenizer = ByteTokenizer()
+    model = _PrecisionTransitionModel(
+        {
+            _assistant_start(tokenizer): ord("A"),
+            ord("A"): _assistant_end(tokenizer),
+        },
+        expected_autocast_dtype=torch.bfloat16,
+    )
+    monkeypatch.setattr(
+        chat_script,
+        "ChatEngine",
+        lambda *_args, **_kwargs: _engine(model, dtype="bfloat16")[0],
+    )
+
+    assert (
+        chat_script.main(
+            [
+                "--checkpoint",
+                "unused.pt",
+                "--prompt",
+                "hello",
+                "--temperature",
+                "0",
+                "--max-new-tokens",
+                "2",
+            ]
+        )
+        == 0
+    )
+
+    assert capsys.readouterr().out == "A\n"
+    assert model.precision_observations == [
+        (True, torch.bfloat16),
+        (True, torch.bfloat16),
     ]
 
 

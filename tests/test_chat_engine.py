@@ -33,10 +33,12 @@ from scratch_llm.config import (
     SFTConfig,
     TokenizerConfig,
     TrainConfig,
+    TrainDType,
 )
 from scratch_llm.model import GPT
 from scratch_llm.training.checkpoint import ExactTrainingState, save_checkpoint
 from scratch_llm.training.optim import build_lr_scheduler, build_optimizer
+from scratch_llm.training.precision import PrecisionCheckpointState
 from scratch_llm.training.rng_state import capture_training_rng_state
 from scratch_llm.tokenization.tokenizer import VOCAB_SIZE, ByteTokenizer
 
@@ -86,18 +88,51 @@ class _TransitionModel(torch.nn.Module):
         return logits
 
 
+class _PrecisionTransitionModel(_TransitionModel):
+    def __init__(
+        self,
+        transitions: dict[int, int],
+        *,
+        expected_autocast_dtype: torch.dtype | None,
+    ) -> None:
+        super().__init__(transitions)
+        self.expected_autocast_dtype = expected_autocast_dtype
+        self.precision_observations: list[tuple[bool, torch.dtype | None]] = []
+
+    def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
+        enabled = torch.is_autocast_enabled(token_ids.device.type)
+        dtype = torch.get_autocast_dtype(token_ids.device.type) if enabled else None
+        self.precision_observations.append((enabled, dtype))
+        expected_enabled = self.expected_autocast_dtype is not None
+        if enabled is not expected_enabled or dtype is not self.expected_autocast_dtype:
+            raise RuntimeError("checkpoint precision is not active")
+        return super().forward(token_ids)
+
+
 def _checkpoint(
     model: torch.nn.Module,
     *,
     stage: str = "sft",
     generation: GenerationConfig | None = None,
+    dtype: TrainDType | None = None,
 ) -> SimpleNamespace:
+    config = SimpleNamespace(generation=generation or GenerationConfig())
+    precision = None
+    if dtype is not None:
+        config.sft = SimpleNamespace(dtype=dtype)
+        precision = PrecisionCheckpointState(
+            dtype=dtype,
+            device_type="cpu",
+            scaler_enabled=False,
+            scaler_state=None,
+        )
     return SimpleNamespace(
         model=model,
         tokenizer=ByteTokenizer(),
-        config=SimpleNamespace(generation=generation or GenerationConfig()),
+        config=config,
         step=17,
         training_stage=stage,
+        precision=precision,
     )
 
 
@@ -107,12 +142,13 @@ def _engine(
     clock: _Clock | None = None,
     stage: str = "sft",
     generation: GenerationConfig | None = None,
+    dtype: TrainDType | None = None,
 ) -> tuple[ChatEngine, list[tuple[Path, str]]]:
     calls: list[tuple[Path, str]] = []
 
     def load(path: Path, *, device: str) -> SimpleNamespace:
         calls.append((path, device))
-        return _checkpoint(model, stage=stage, generation=generation)
+        return _checkpoint(model, stage=stage, generation=generation, dtype=dtype)
 
     return (
         ChatEngine(
@@ -317,6 +353,53 @@ def test_streaming_is_utf8_lossless_and_commits_one_normalized_turn() -> None:
         ("user", "Launch?"),
         ("assistant", "🚀"),
     )
+
+
+def test_checkpoint_precision_wraps_each_lazy_generation_step_without_leaking() -> None:
+    tokenizer = ByteTokenizer()
+    model = _PrecisionTransitionModel(
+        {
+            _assistant_start(tokenizer): ord("A"),
+            ord("A"): _assistant_end(tokenizer),
+        },
+        expected_autocast_dtype=torch.bfloat16,
+    )
+    engine, _ = _engine(model, dtype="bfloat16")
+    engine.append_user_message("hello")
+
+    stream = engine.generate_stream(GenerationConfig(temperature=0, max_new_tokens=2))
+    assert torch.is_autocast_enabled("cpu") is False
+    assert next(stream).type == "start"
+    assert torch.is_autocast_enabled("cpu") is False
+    assert next(stream).type == "token"
+    assert torch.is_autocast_enabled("cpu") is False
+    assert next(stream).type == "complete"
+    assert torch.is_autocast_enabled("cpu") is False
+
+    assert model.precision_observations == [
+        (True, torch.bfloat16),
+        (True, torch.bfloat16),
+    ]
+
+
+@pytest.mark.parametrize("dtype", [None, "float32"], ids=["legacy", "modern"])
+def test_float32_checkpoint_inference_remains_without_autocast(
+    dtype: TrainDType | None,
+) -> None:
+    tokenizer = ByteTokenizer()
+    model = _PrecisionTransitionModel(
+        {_assistant_start(tokenizer): _assistant_end(tokenizer)},
+        expected_autocast_dtype=None,
+    )
+    engine, _ = _engine(model, dtype=dtype)
+    engine.append_user_message("hello")
+
+    events = tuple(
+        engine.generate_stream(GenerationConfig(temperature=0, max_new_tokens=1))
+    )
+
+    assert events[-1].type == "complete"
+    assert model.precision_observations == [(False, None)]
 
 
 @pytest.mark.parametrize("stop_name", ["assistant_end", "bos"])
