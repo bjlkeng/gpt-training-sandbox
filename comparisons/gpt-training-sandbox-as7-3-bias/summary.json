@@ -1,0 +1,86 @@
+{
+  "bead": "gpt-training-sandbox-as7.3",
+  "controls": {
+    "changed_config_fields": [
+      "model.bias",
+      "run.name"
+    ],
+    "device": "NVIDIA GeForce RTX 3090",
+    "dtype": "float32",
+    "manual_attention": true,
+    "mfu_peak_flops_basis": "rtx3090_fp32_35.58_tflops",
+    "mfu_peak_flops_per_second": 35580000000000,
+    "normalization": "layernorm",
+    "position_encoding": "learned_absolute",
+    "seed": 1337,
+    "sequence_length": 128,
+    "source_base_commit": "40a5d6a",
+    "timed_optimizer_steps": 45,
+    "total_optimizer_steps": 50,
+    "total_processed_model_tokens": 51200,
+    "warmup_steps_excluded": 5
+  },
+  "deltas": {
+    "peak_memory_mib": 0.044921875,
+    "unique_parameters": 2944,
+    "validation_bpb": 3.9695985705867134,
+    "validation_bpb_percent": 32.253063421606164,
+    "warm_tokens_per_second_median": -3526.2195202204093,
+    "warm_tokens_per_second_percent": -7.6967247912509515
+  },
+  "format": "scratch_llm_bounded_architecture_flag_comparison",
+  "format_version": 1,
+  "interpretation": {
+    "all_training_telemetry_finite": true,
+    "claim": "bounded diagnostic only; no quality or throughput improvement claim",
+    "both_modes_tiny_overfit": "passed",
+    "checkpoint_and_architecture_mismatch_coverage": "passed"
+  },
+  "inventory": {
+    "added_elements": {
+      "attention_output_projection_bias": 256,
+      "attention_qkv_projection_bias": 768,
+      "block_layernorm_bias": 512,
+      "final_layernorm_bias": 128,
+      "mlp_input_projection_bias": 1024,
+      "mlp_output_projection_bias": 256
+    },
+    "added_tensor_count": 13,
+    "layernorm_bias_changes_with_flag": true,
+    "lm_head_bias": false,
+    "projection_bias_elements": 2304,
+    "total_added_elements": 2944
+  },
+  "runs": {
+    "bias_free": {
+      "bias": false,
+      "checkpoint_identity": "sha256:8d1b48b337837698681f60ae4439e5c5b00343fcfc788493c0df1ad7473c078f",
+      "config_identity": "sha256:fccb7e47322b0a9e6cd420a552cf5f5fed0097acba93d1a50291000558121b83",
+      "final_training_loss": 2.809593915939331,
+      "peak_memory_mib": 28.6328125,
+      "run_directory": "runs/m10-bias-free",
+      "unique_parameters": 444160,
+      "validation_bpb": 12.307663674289925,
+      "warm_tokens_per_second_mean": 45781.8226060224,
+      "warm_tokens_per_second_median": 45814.54600310961
+    },
+    "biased": {
+      "bias": true,
+      "checkpoint_identity": "sha256:a2184df0fe07f3cc794d456c25aebd587f04200c5d0896c5cdb1f3227cff4fa5",
+      "config_identity": "sha256:d89b1e66c5c5268195f0303888f31213c4507d4823cfa525662196974a61d48b",
+      "final_training_loss": 2.9862022399902344,
+      "peak_memory_mib": 28.677734375,
+      "run_directory": "runs/m10-biased",
+      "unique_parameters": 447104,
+      "validation_bpb": 16.27726224487664,
+      "warm_tokens_per_second_mean": 42188.56333240205,
+      "warm_tokens_per_second_median": 42288.3264828892
+    }
+  },
+  "validation": {
+    "counted_bytes": 261,
+    "protocol": "bounded_contiguous_byte_next_token_bpb_v1",
+    "source_path": "data/fixtures/chat/validation.jsonl",
+    "source_sha256": "b41bd8ad00945ea6c0223a2f1964835de0d6b7105fe76dcfa80639e78823ac3f"
+  }
+}
