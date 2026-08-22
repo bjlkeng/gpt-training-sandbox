@@ -8,6 +8,7 @@ import pytest
 
 from scratch_llm.chat.conversation import Conversation, UserMessage
 from scratch_llm.evaluation.chat.categorical import (
+    CHAT_CATEGORICAL_CONTEXT_POLICY_ID,
     CategoricalEvaluationError,
     CategoricalExample,
     CategoricalTask,
@@ -180,6 +181,97 @@ def test_categorical_eval_ties_choose_the_first_declared_label_deterministically
     assert first.passed_count == 1
     assert first.run_kind == "bounded"
     assert first.max_problems == 1
+
+
+def test_categorical_eval_excludes_overlength_prompts_without_cropping() -> None:
+    tokenizer = ByteTokenizer()
+    examples = (
+        _example("short", labels=("A", "B"), answer="A", source_row=3),
+        _example("x" * 40, labels=("A", "B"), answer="B", source_row=7),
+        _example("also short", labels=("A", "B"), answer="B", source_row=11),
+    )
+    from scratch_llm.chat.rendering import render_completion_prompt
+
+    prompts = tuple(
+        render_completion_prompt(example.conversation, tokenizer).token_ids
+        for example in examples
+    )
+    max_seq_len = max(len(prompts[0]), len(prompts[2]))
+    assert len(prompts[1]) > max_seq_len
+    model = _PositionLogitModel(
+        answer_positions=(len(prompts[0]) - 1, len(prompts[2]) - 1),
+        preferred_token_ids=(ord("A"), ord("B")),
+        distractor_token_ids=(ord("B"), ord("A")),
+    )
+    model.max_seq_len = max_seq_len
+
+    result = evaluate_categorical_task(
+        model,
+        tokenizer,
+        _task(*examples),
+        checkpoint_identity="checkpoint",
+        batch_size=2,
+        max_problems=None,
+        device="cpu",
+        clock=iter((1.0, 2.0)).__next__,
+    )
+
+    assert result.passed_count == 2
+    assert result.evaluated_count == 2
+    assert result.available_count == 3
+    assert result.excluded_overlength_count == 1
+    assert result.run_kind == "full"
+    assert result.to_dict()["counts"] == {
+        "available": 3,
+        "evaluated": 2,
+        "excluded_overlength": 1,
+        "passed": 2,
+        "selected": 3,
+    }
+    assert result.to_dict()["prompt_preflight"] == {
+        "excluded_examples": [
+            {
+                "example_identity": "example-7",
+                "prompt_token_count": len(prompts[1]),
+                "source_row": 7,
+            }
+        ],
+        "model_max_seq_len": max_seq_len,
+        "policy_id": CHAT_CATEGORICAL_CONTEXT_POLICY_ID,
+        "policy_version": 1,
+    }
+    assert len(model.inputs) == 1
+    assert tuple(model.inputs[0][0, : len(prompts[0])].tolist()) == prompts[0]
+    assert tuple(model.inputs[0][1, : len(prompts[2])].tolist()) == prompts[2]
+
+
+def test_categorical_eval_rejects_when_every_selected_prompt_is_overlength() -> None:
+    model = _PositionLogitModel(
+        answer_positions=(),
+        preferred_token_ids=(),
+        distractor_token_ids=(),
+    )
+    model.max_seq_len = 1
+
+    with pytest.raises(CategoricalEvaluationError, match="no selected prompts fit"):
+        evaluate_categorical_task(
+            model,
+            ByteTokenizer(),
+            _task(
+                _example(
+                    "too long",
+                    labels=("A", "B"),
+                    answer="A",
+                    source_row=0,
+                )
+            ),
+            checkpoint_identity="checkpoint",
+            batch_size=1,
+            max_problems=None,
+            device="cpu",
+        )
+
+    assert model.inputs == []
 
 
 def test_categorical_eval_rejects_multi_token_labels_before_model_execution() -> None:

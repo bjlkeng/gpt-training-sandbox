@@ -1669,7 +1669,19 @@ artifacts. The Markdown contains only the frozen five public prompts from the
 roadmap and their generated assistant outputs. Prompts are rendered through
 the shared chat template, and sampling stops on `assistant_end` with BOS as a
 safety stop. Training conversations are never copied into either artifact,
-and ChatCORE fields remain absent until that evaluator exists.
+and ChatCORE fields remain absent because the separate chat evaluator owns
+those results.
+
+`scripts.eval_chat` evaluates the pinned ARC, MMLU, GSM8K, and explicitly
+enabled HumanEval adapters and atomically publishes `metrics/chat_eval.json`
+only after every requested task completes. Categorical prompts are preflighted
+against the checkpoint context window without cropping. An overlength prompt
+is excluded intact; bounded runs continue through the deterministic task order
+until they reach their requested number of fitting prompts. Each task report
+records available, selected, evaluated, and excluded counts together with the
+context-policy identity, model limit, and content-free identity, source row,
+and token length of every exclusion. The evaluator fails before model execution
+when none of the selected task prompts fit.
 
 The bounded CPU acceptance test uses the tracked train and validation JSONL
 fixtures, a deterministic two-layer/64-channel base checkpoint, and 200 real

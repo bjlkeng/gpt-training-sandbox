@@ -1,11 +1,14 @@
 """Chat-model task evaluation contracts."""
 
 from scratch_llm.evaluation.chat.categorical import (
+    CHAT_CATEGORICAL_CONTEXT_POLICY_ID,
+    CHAT_CATEGORICAL_CONTEXT_POLICY_VERSION,
     CHAT_CATEGORICAL_PROTOCOL_ID,
     CHAT_CATEGORICAL_PROTOCOL_VERSION,
     CategoricalEvaluationError,
     CategoricalExample,
     CategoricalGroupResult,
+    CategoricalPromptExclusion,
     CategoricalTask,
     CategoricalTaskResult,
     evaluate_categorical_task,
@@ -132,6 +135,8 @@ __all__ = [
     "CHATCORE_TASK_METRIC_PREFIX",
     "CHAT_CATEGORICAL_PROTOCOL_ID",
     "CHAT_CATEGORICAL_PROTOCOL_VERSION",
+    "CHAT_CATEGORICAL_CONTEXT_POLICY_ID",
+    "CHAT_CATEGORICAL_CONTEXT_POLICY_VERSION",
     "CHAT_EVAL_REFERENCE_COMMIT",
     "CHAT_EVALUATION_REPORT_FORMAT",
     "CHAT_EVALUATION_REPORT_FORMAT_VERSION",
@@ -143,6 +148,7 @@ __all__ = [
     "CategoricalEvaluationError",
     "CategoricalExample",
     "CategoricalGroupResult",
+    "CategoricalPromptExclusion",
     "CategoricalTask",
     "CategoricalTaskResult",
     "ChatCoreEvaluationError",
