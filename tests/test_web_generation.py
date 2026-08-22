@@ -8,7 +8,9 @@ from pathlib import Path
 import threading
 
 import pytest
+import torch
 
+import scratch_llm.web.service as web_service
 from scratch_llm.chat import (
     AssistantMessage,
     Conversation,
@@ -22,6 +24,13 @@ from scratch_llm.web.service import (
     GenerationOverrides,
     GenerationTerminal,
     WebServiceError,
+)
+from scratch_llm.tokenization.tokenizer import ByteTokenizer
+from tests.test_chat_engine import (
+    _PrecisionTransitionModel,
+    _assistant_end,
+    _assistant_start,
+    _engine,
 )
 from tests.test_web_service import FakeEngine, _checkpoint
 
@@ -206,6 +215,48 @@ def test_completed_generation_forwards_events_losslessly_and_commits_once(
         )
     ]
     assert service.status == "ready"
+
+
+def test_web_service_uses_shared_checkpoint_precision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tokenizer = ByteTokenizer()
+    model = _PrecisionTransitionModel(
+        {
+            _assistant_start(tokenizer): ord("A"),
+            ord("A"): _assistant_end(tokenizer),
+        },
+        expected_autocast_dtype=torch.bfloat16,
+    )
+    monkeypatch.setattr(
+        web_service,
+        "ChatEngine",
+        lambda *_args, **_kwargs: _engine(model, dtype="bfloat16")[0],
+    )
+    root = tmp_path / "catalog"
+    _checkpoint(root, "model.pt")
+    service = ChatSessionService(root, initial_checkpoint_id="model.pt")
+
+    async def scenario() -> GenerationTerminal:
+        await service.startup()
+        lease = await service.start_generation(
+            "hello",
+            GenerationOverrides(temperature=0, max_new_tokens=2),
+        )
+        items = await _collect(lease)
+        await service.shutdown()
+        terminal = items[-1]
+        assert isinstance(terminal, GenerationTerminal)
+        return terminal
+
+    terminal = asyncio.run(scenario())
+
+    assert terminal.outcome == "completed"
+    assert model.precision_observations == [
+        (True, torch.bfloat16),
+        (True, torch.bfloat16),
+    ]
 
 
 def test_cancellation_rolls_back_partial_turn_and_allows_immediate_reuse(
