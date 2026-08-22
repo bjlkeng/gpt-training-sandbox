@@ -576,6 +576,7 @@ class GPTConfig(_SerializableConfig):
         dropout = _require_real(self.dropout, "model.dropout")
         if dropout < 0 or dropout >= 1:
             _fail("model.dropout", "must be in [0, 1)")
+        _require_bool(self.bias, "model.bias")
         _require_choice(self.norm, "model.norm", _NORM_TYPES)
         _require_choice(self.activation, "model.activation", _ACTIVATION_TYPES)
         _require_choice(
