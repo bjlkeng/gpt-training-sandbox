@@ -1235,6 +1235,28 @@ position encoding and theta and account for the exact parameter delta. The
 bounded same-seed RTX 3090 diagnostic and its limitations are in
 [`comparisons/gpt-training-sandbox-as7-2-rope`](comparisons/gpt-training-sandbox-as7-2-rope/README.md).
 
+### Bias policy audit
+
+`model.bias` is the existing architecture-wide compatibility switch; no
+custom linear layer or duplicate flag is used. The default is already
+`false`. In that mode, every attention QKV/output projection and MLP
+input/output projection is an ordinary `torch.nn.Linear` with `bias=None`, and
+the LM head remains bias-free regardless of the flag. With `model.bias: true`,
+each of those four projections per block receives its standard PyTorch bias.
+
+The switch has one important legacy interaction: every `LayerNorm` also uses
+`model.bias`, while retaining its learned weight in both modes. Consequently,
+a LayerNorm comparison changes projection biases *and* two normalization biases
+per block plus the final normalization bias. Parameter-free RMSNorm has no such
+normalization state. Checkpoint/config identities include the flag, strict
+state loading exposes every missing or unexpected bias key, and the estimator
+accounts for the exact inventory for tied or untied heads at any depth. The
+implementation does not change the LM-head policy, forward API, or PyTorch's
+standard weight initialization.
+
+The full inventory and bounded same-seed RTX 3090 diagnostic are in
+[`comparisons/gpt-training-sandbox-as7-3-bias`](comparisons/gpt-training-sandbox-as7-3-bias/README.md).
+
 ### Base-model orchestration and resource preflight
 
 The three named presets and repeatable dotted overrides are the orchestration
