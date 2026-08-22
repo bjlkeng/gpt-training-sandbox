@@ -1253,6 +1253,29 @@ standard weight initialization.
 The full inventory and bounded same-seed RTX 3090 diagnostic are in
 [`comparisons/gpt-training-sandbox-as7-3-bias`](comparisons/gpt-training-sandbox-as7-3-bias/README.md).
 
+### ReLU-squared MLP
+
+Set `model.activation: relu_squared` to replace only the elementwise MLP
+activation with:
+
+```text
+relu_squared(x) = relu(x).square()
+```
+
+The activation remains between the existing input and output projections.
+It has no parameters or buffers and does not change MLP width, projection
+initialization, dropout placement, residual ordering, or state keys.
+`model.activation: gelu` remains the compatibility default and preserves the
+existing exact-logit path. Unknown activation names fail typed config
+validation, and the selected name participates in config/checkpoint and
+resource-report identity.
+
+ReLU-squared is an isolated experimental option, not a new project default;
+this bead does not add gated MLP variants. The bounded same-seed RTX 3090
+comparison, including mixed quality/performance evidence and exact identities,
+is in
+[`comparisons/gpt-training-sandbox-as7-4-relu2`](comparisons/gpt-training-sandbox-as7-4-relu2/README.md).
+
 ### Base-model orchestration and resource preflight
 
 The three named presets and repeatable dotted overrides are the orchestration
