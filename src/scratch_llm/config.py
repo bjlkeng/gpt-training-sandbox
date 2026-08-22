@@ -86,6 +86,9 @@ _WANDB_ENVIRONMENT_FIELDS = {
     "WANDB_RUN_GROUP": "group",
 }
 _MAX_SIGNED_64 = 2**63 - 1
+ROPE_MAX_CONTEXT_LENGTH = 2**24
+ROPE_MIN_THETA = 1.0
+ROPE_MAX_THETA = 3.4028235e38
 _SIMPLE_GPT_GEOMETRY = {
     "n_layer": 6,
     "n_head": 6,
@@ -441,6 +444,7 @@ class GPTConfig(_SerializableConfig):
     norm: NormType = "layernorm"
     activation: ActivationType = "gelu"
     use_rope: bool = False
+    rope_theta: float = 10_000.0
     use_rmsnorm: bool = False
     use_qk_norm: bool = False
     use_gqa: bool = False
@@ -546,6 +550,29 @@ class GPTConfig(_SerializableConfig):
             _require_positive_int(getattr(self, field_name), f"model.{field_name}")
         if self.n_embd % self.n_head != 0:
             _fail("model.n_embd", "must be divisible by model.n_head")
+        _require_bool(self.use_rope, "model.use_rope")
+        rope_theta = _require_real(self.rope_theta, "model.rope_theta")
+        if not math.isfinite(rope_theta):
+            _fail("model.rope_theta", "must be finite")
+        if not ROPE_MIN_THETA <= rope_theta <= ROPE_MAX_THETA:
+            _fail(
+                "model.rope_theta",
+                f"must be in [{ROPE_MIN_THETA}, {ROPE_MAX_THETA}]",
+            )
+        if self.use_rope:
+            head_dimension = self.n_embd // self.n_head
+            if head_dimension % 2 != 0:
+                _fail(
+                    "model.n_embd",
+                    "must produce an even per-head dimension when model.use_rope "
+                    "is true",
+                )
+            if self.seq_len > ROPE_MAX_CONTEXT_LENGTH:
+                _fail(
+                    "model.seq_len",
+                    f"must be at most {ROPE_MAX_CONTEXT_LENGTH} when "
+                    "model.use_rope is true so float32 positions remain exact",
+                )
         dropout = _require_real(self.dropout, "model.dropout")
         if dropout < 0 or dropout >= 1:
             _fail("model.dropout", "must be in [0, 1)")
