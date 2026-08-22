@@ -1,0 +1,1530 @@
+{
+  "aligned_steps": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    49,
+    50
+  ],
+  "format": "scratch_llm_run_comparison",
+  "format_version": 1,
+  "identity_differences": [
+    {
+      "field": "config_identity",
+      "values": {
+        "m10-rope": "sha256:4a128df142a80d8e273de83f4ca4787b2de6d27747d990e349eaf44e4455564b",
+        "m10-rope-learned": "sha256:88f8a55feac494202d6b608169269d049ad1c56f2b42ee44ba30dfea6eb80fac"
+      }
+    }
+  ],
+  "numeric_deltas": [
+    {
+      "baseline": "m10-rope",
+      "field": "best_compatibility_bpb",
+      "values": {
+        "m10-rope": null,
+        "m10-rope-learned": null
+      }
+    },
+    {
+      "baseline": "m10-rope",
+      "field": "best_full_document_bpb",
+      "values": {
+        "m10-rope": null,
+        "m10-rope-learned": null
+      }
+    },
+    {
+      "baseline": "m10-rope",
+      "field": "best_loss",
+      "values": {
+        "m10-rope": 0.0,
+        "m10-rope-learned": 0.5211174488067627
+      }
+    },
+    {
+      "baseline": "m10-rope",
+      "field": "latest_loss",
+      "values": {
+        "m10-rope": 0.0,
+        "m10-rope-learned": 0.6828172206878662
+      }
+    },
+    {
+      "baseline": "m10-rope",
+      "field": "tokens_per_second",
+      "values": {
+        "m10-rope": 0.0,
+        "m10-rope-learned": 12371.749819521247
+      }
+    },
+    {
+      "baseline": "m10-rope",
+      "field": "mfu",
+      "values": {
+        "m10-rope": 0.0,
+        "m10-rope-learned": 0.0010278608308740595
+      }
+    },
+    {
+      "baseline": "m10-rope",
+      "field": "peak_memory_mib",
+      "values": {
+        "m10-rope": 0.0,
+        "m10-rope-learned": 0.0009765625
+      }
+    }
+  ],
+  "rankings": {
+    "full_documents_v1": [],
+    "nanochat_compat_v1": []
+  },
+  "run_count": 2,
+  "runs": [
+    {
+      "evaluation": {
+        "full_documents_v1": null,
+        "nanochat_compat_v1": null
+      },
+      "identities": {
+        "checkpoint_identity": null,
+        "code_identity": null,
+        "config_identity": "sha256:4a128df142a80d8e273de83f4ca4787b2de6d27747d990e349eaf44e4455564b",
+        "hardware": {
+          "device": "cuda",
+          "mfu_peak_flops_basis": "rtx3090_fp32_35.58_tflops",
+          "mfu_peak_flops_per_second": 35580000000000.0
+        },
+        "precision": {
+          "activation_checkpointing": false,
+          "compile": false,
+          "dtype": "float32"
+        },
+        "tokenizer_identity": null,
+        "validation_manifest_identity": null
+      },
+      "path": "/home/bojji/code/gpt-training-sandbox-as7-2/runs/m10-rope",
+      "rankable": false,
+      "ranking_blockers": [
+        "base_eval.json is missing",
+        "nanochat_compat_v1 result is missing",
+        "full_documents_v1 result is missing"
+      ],
+      "run": "m10-rope",
+      "status": "completed",
+      "training": {
+        "best_compatibility_bpb": null,
+        "best_full_document_bpb": null,
+        "best_loss": 2.050102710723877,
+        "configured_parameters": 461696,
+        "cumulative_processed_model_tokens": 51200,
+        "latest_compatibility_bpb": null,
+        "latest_full_document_bpb": null,
+        "latest_loss": 2.126776695251465,
+        "latest_step": 50,
+        "mfu": 0.002787494945689957,
+        "peak_memory_mib": 28.6318359375,
+        "tokens_per_second": 33551.419662455846,
+        "total_training_flops": 151348838400.0,
+        "total_training_time": 1.914246205240488,
+        "unique_parameters": 427776
+      }
+    },
+    {
+      "evaluation": {
+        "full_documents_v1": null,
+        "nanochat_compat_v1": null
+      },
+      "identities": {
+        "checkpoint_identity": null,
+        "code_identity": null,
+        "config_identity": "sha256:88f8a55feac494202d6b608169269d049ad1c56f2b42ee44ba30dfea6eb80fac",
+        "hardware": {
+          "device": "cuda",
+          "mfu_peak_flops_basis": "rtx3090_fp32_35.58_tflops",
+          "mfu_peak_flops_per_second": 35580000000000.0
+        },
+        "precision": {
+          "activation_checkpointing": false,
+          "compile": false,
+          "dtype": "float32"
+        },
+        "tokenizer_identity": null,
+        "validation_manifest_identity": null
+      },
+      "path": "/home/bojji/code/gpt-training-sandbox-as7-2/runs/m10-rope-learned",
+      "rankable": false,
+      "ranking_blockers": [
+        "base_eval.json is missing",
+        "nanochat_compat_v1 result is missing",
+        "full_documents_v1 result is missing"
+      ],
+      "run": "m10-rope-learned",
+      "status": "completed",
+      "training": {
+        "best_compatibility_bpb": null,
+        "best_full_document_bpb": null,
+        "best_loss": 2.5712201595306396,
+        "configured_parameters": 478080,
+        "cumulative_processed_model_tokens": 51200,
+        "latest_compatibility_bpb": null,
+        "latest_full_document_bpb": null,
+        "latest_loss": 2.809593915939331,
+        "latest_step": 50,
+        "mfu": 0.0038153557765640165,
+        "peak_memory_mib": 28.6328125,
+        "tokens_per_second": 45923.16948197709,
+        "total_training_flops": 151348838400.0,
+        "total_training_time": 1.4016214525327086,
+        "unique_parameters": 444160
+      }
+    }
+  ],
+  "step_series": {
+    "1": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 3026976768.0,
+        "total_training_time": 0.4431641008704901,
+        "train/loss": 117.42596435546875,
+        "train/mfu": 0.00019197230148071634,
+        "train/peak_memory_mib": 25.3681640625,
+        "train/tok_per_sec": 2310.656476886545,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 3026976768.0,
+        "total_training_time": 0.32208164408802986,
+        "train/loss": 85.1033935546875,
+        "train/mfu": 0.0002641418222346379,
+        "train/peak_memory_mib": 25.244140625,
+        "train/tok_per_sec": 3179.318097743332,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "10": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 30269767680.0,
+        "total_training_time": 0.6989507749676704,
+        "train/loss": 9.82816219329834,
+        "train/mfu": 0.0027742806235210283,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33392.36672163163,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 30269767680.0,
+        "total_training_time": 0.5124933803454041,
+        "train/loss": 8.622888565063477,
+        "train/mfu": 0.003776981790891,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45461.28462746742,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "11": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 33296744448.0,
+        "total_training_time": 0.7294848477467895,
+        "train/loss": 9.360934257507324,
+        "train/mfu": 0.0027862392610762273,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33536.30573318968,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 33296744448.0,
+        "total_training_time": 0.5353708248585463,
+        "train/loss": 9.508438110351562,
+        "train/mfu": 0.003718738442524393,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 44760.244065361236,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "12": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 36323721216.0,
+        "total_training_time": 0.7513380823656917,
+        "train/loss": 9.396058082580566,
+        "train/mfu": 0.003893026998582329,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 46858.05181052142,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 36323721216.0,
+        "total_training_time": 0.5576942758634686,
+        "train/loss": 7.500082969665527,
+        "train/mfu": 0.0038110251125142323,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45871.04385313027,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "13": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 39350697984.0,
+        "total_training_time": 0.7817526217550039,
+        "train/loss": 8.260459899902344,
+        "train/mfu": 0.002797189570710248,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33668.108100951074,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 39350697984.0,
+        "total_training_time": 0.5801032176241279,
+        "train/loss": 7.309387683868408,
+        "train/mfu": 0.0037964859423704257,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45696.04450477524,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "14": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 42377674752.0,
+        "total_training_time": 0.8123934883624315,
+        "train/loss": 6.971226215362549,
+        "train/mfu": 0.0027765282708132467,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33419.42031599635,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 42377674752.0,
+        "total_training_time": 0.6023845402523875,
+        "train/loss": 5.384531021118164,
+        "train/mfu": 0.0038182308024137853,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45957.77445910006,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "15": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 45404651520.0,
+        "total_training_time": 0.8430106192827225,
+        "train/loss": 6.686366558074951,
+        "train/mfu": 0.0027786807522633757,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33445.32845569023,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 45404651520.0,
+        "total_training_time": 0.6246191328391433,
+        "train/loss": 6.050620079040527,
+        "train/mfu": 0.003826255509103242,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46054.363083313496,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "16": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 48431628288.0,
+        "total_training_time": 0.8734483616426587,
+        "train/loss": 6.177253246307373,
+        "train/mfu": 0.0027950572474035006,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33642.442592846266,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 48431628288.0,
+        "total_training_time": 0.6470021354034543,
+        "train/loss": 5.265465259552002,
+        "train/mfu": 0.0038008856110033247,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45749.00070076992,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "17": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 51458605056.0,
+        "total_training_time": 0.90420510340482,
+        "train/loss": 6.321033477783203,
+        "train/mfu": 0.002766067779078109,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33293.5135951164,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 51458605056.0,
+        "total_training_time": 0.6693322286009789,
+        "train/loss": 6.197723388671875,
+        "train/mfu": 0.003809891504938793,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45857.399292606526,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "18": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 54485581824.0,
+        "total_training_time": 0.9347847336903214,
+        "train/loss": 6.097256183624268,
+        "train/mfu": 0.0027820883242684743,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33486.343374318116,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 54485581824.0,
+        "total_training_time": 0.691458067856729,
+        "train/loss": 5.711137294769287,
+        "train/mfu": 0.0038450623903737574,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46280.730333602034,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "19": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 57512558592.0,
+        "total_training_time": 0.9653418613597751,
+        "train/loss": 5.139584541320801,
+        "train/mfu": 0.0027841370857243763,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33511.00309809681,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 57512558592.0,
+        "total_training_time": 0.7137719197198749,
+        "train/loss": 4.992448806762695,
+        "train/mfu": 0.003812664568157903,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45890.77700615493,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "2": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 6053953536.0,
+        "total_training_time": 0.4621622497215867,
+        "train/loss": 106.101806640625,
+        "train/mfu": 0.004478080103727028,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 53899.98825811346,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 6053953536.0,
+        "total_training_time": 0.3358540814369917,
+        "train/loss": 79.5208740234375,
+        "train/mfu": 0.006177209612367799,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 74351.40012288307,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "20": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 60539535360.0,
+        "total_training_time": 0.9962322451174259,
+        "train/loss": 5.420943260192871,
+        "train/mfu": 0.002754100856926683,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33149.47486679826,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 60539535360.0,
+        "total_training_time": 0.7358708083629608,
+        "train/loss": 4.887629985809326,
+        "train/mfu": 0.0038497516210779068,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46337.171816121045,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "21": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 63566512128.0,
+        "total_training_time": 1.0269922642037272,
+        "train/loss": 4.597301959991455,
+        "train/mfu": 0.002765773068574841,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33289.96633997631,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 63566512128.0,
+        "total_training_time": 0.7579074595123529,
+        "train/loss": 4.116624355316162,
+        "train/mfu": 0.003860624366243011,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46468.040586477524,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "22": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 66593488896.0,
+        "total_training_time": 1.05769382417202,
+        "train/loss": 4.709849834442139,
+        "train/mfu": 0.002771039402089094,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33353.354065967476,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 66593488896.0,
+        "total_training_time": 0.7800245927646756,
+        "train/loss": 4.404341697692871,
+        "train/mfu": 0.0038465759285872167,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46298.947893369615,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "23": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 69620465664.0,
+        "total_training_time": 1.0882354909554124,
+        "train/loss": 4.252034664154053,
+        "train/mfu": 0.00278554647921185,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33527.96712970551,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 69620465664.0,
+        "total_training_time": 0.8021056083962321,
+        "train/loss": 4.002126693725586,
+        "train/mfu": 0.0038528677211820475,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46374.678460739684,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "24": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 72647442432.0,
+        "total_training_time": 1.1187455104663968,
+        "train/loss": 4.05471134185791,
+        "train/mfu": 0.002788435856198353,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33562.74484293046,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 72647442432.0,
+        "total_training_time": 0.8242090744897723,
+        "train/loss": 4.0112996101379395,
+        "train/mfu": 0.0038489543684102926,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46327.57575967994,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "25": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 75674419200.0,
+        "total_training_time": 1.1493604062125087,
+        "train/loss": 3.8582589626312256,
+        "train/mfu": 0.002778883621987998,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33447.770277971606,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 75674419200.0,
+        "total_training_time": 0.8462677970528603,
+        "train/loss": 4.017584323883057,
+        "train/mfu": 0.0038567615207283725,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46421.54581124815,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "26": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 78701395968.0,
+        "total_training_time": 1.1797844525426626,
+        "train/loss": 3.8474440574645996,
+        "train/mfu": 0.0027963155017095924,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33657.58745197186,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 78701395968.0,
+        "total_training_time": 0.8683682885020971,
+        "train/loss": 4.105955123901367,
+        "train/mfu": 0.003849472423414274,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46333.811279810194,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "27": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 81728372736.0,
+        "total_training_time": 1.2105589397251606,
+        "train/loss": 3.6288399696350098,
+        "train/mfu": 0.002764472787904786,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33274.31563448985,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 81728372736.0,
+        "total_training_time": 0.8905431795865297,
+        "train/loss": 3.64558744430542,
+        "train/mfu": 0.003836556944239763,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46178.355334465516,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "28": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 84755349504.0,
+        "total_training_time": 1.240948311984539,
+        "train/loss": 3.56365704536438,
+        "train/mfu": 0.002799506079020284,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33695.990534453515,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 84755349504.0,
+        "total_training_time": 0.9126578969880939,
+        "train/loss": 3.6088037490844727,
+        "train/mfu": 0.0038469961353303633,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46304.00567214912,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "29": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 87782326272.0,
+        "total_training_time": 1.2714218720793724,
+        "train/loss": 3.347510814666748,
+        "train/mfu": 0.00279177201852974,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33602.90024576464,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 87782326272.0,
+        "total_training_time": 0.9348487984389067,
+        "train/loss": 3.655888080596924,
+        "train/mfu": 0.0038337889322032992,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46145.03841899999,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "3": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 9080930304.0,
+        "total_training_time": 0.4839822333306074,
+        "train/loss": 78.1226806640625,
+        "train/mfu": 0.003898959499793983,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 46929.45780108941,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 9080930304.0,
+        "total_training_time": 0.3554687211290002,
+        "train/loss": 69.28909301757812,
+        "train/mfu": 0.0043373334261348736,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 52205.904165407825,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "30": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 90809303040.0,
+        "total_training_time": 1.3021643674001098,
+        "train/loss": 2.791966438293457,
+        "train/mfu": 0.0027673496080961512,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33308.94220903599,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 90809303040.0,
+        "total_training_time": 0.957011685706675,
+        "train/loss": 3.152106285095215,
+        "train/mfu": 0.003838634892190501,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46203.36635873293,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "31": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 93836279808.0,
+        "total_training_time": 1.3330502333119512,
+        "train/loss": 3.0937533378601074,
+        "train/mfu": 0.002754503714436031,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33154.32382316361,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 93836279808.0,
+        "total_training_time": 0.9796156147494912,
+        "train/loss": 3.5918846130371094,
+        "train/mfu": 0.003763736482121827,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45301.85871935575,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "32": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 96863256576.0,
+        "total_training_time": 1.363631695508957,
+        "train/loss": 3.1049816608428955,
+        "train/mfu": 0.002781921669725461,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33484.337452650005,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 96863256576.0,
+        "total_training_time": 1.0017870282754302,
+        "train/loss": 3.5659730434417725,
+        "train/mfu": 0.003837158703400137,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46185.59835176915,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "33": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 99890233344.0,
+        "total_training_time": 1.3939912701025605,
+        "train/loss": 2.9440910816192627,
+        "train/mfu": 0.0028022537705671476,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33729.06286426504,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 99890233344.0,
+        "total_training_time": 1.023913868702948,
+        "train/loss": 3.194762945175171,
+        "train/mfu": 0.0038448884130757813,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46278.63627228538,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "34": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 102917210112.0,
+        "total_training_time": 1.4245398715138435,
+        "train/loss": 2.85084867477417,
+        "train/mfu": 0.002784914151464822,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33520.35617649551,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 102917210112.0,
+        "total_training_time": 1.0460918061435223,
+        "train/loss": 3.180426597595215,
+        "train/mfu": 0.003836029955702579,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46172.01228670656,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "35": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 105944186880.0,
+        "total_training_time": 1.4550374448299408,
+        "train/loss": 3.0668411254882812,
+        "train/mfu": 0.002789573829234335,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33576.44194790775,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 105944186880.0,
+        "total_training_time": 1.0682191783562303,
+        "train/loss": 3.5209083557128906,
+        "train/mfu": 0.003844796009210739,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46277.52406189043,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "36": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 108971163648.0,
+        "total_training_time": 1.4854429960250854,
+        "train/loss": 2.936147689819336,
+        "train/mfu": 0.0027980164487636603,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33678.060740550514,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 108971163648.0,
+        "total_training_time": 1.0903890207409859,
+        "train/loss": 3.3846354484558105,
+        "train/mfu": 0.0038374306366850664,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46188.8714510718,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "37": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 111998140416.0,
+        "total_training_time": 1.5158421359956264,
+        "train/loss": 2.768627643585205,
+        "train/mfu": 0.0027986065546651796,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33685.16349450449,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 111998140416.0,
+        "total_training_time": 1.1124796131625772,
+        "train/loss": 3.0680618286132812,
+        "train/mfu": 0.0038511974126410487,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46354.57394973008,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "38": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 115025117184.0,
+        "total_training_time": 1.546380857937038,
+        "train/loss": 2.565500497817993,
+        "train/mfu": 0.002785815088822546,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33531.20022391713,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 115025117184.0,
+        "total_training_time": 1.1345239682123065,
+        "train/loss": 2.9518768787384033,
+        "train/mfu": 0.003859275183411856,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46451.80127474731,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "39": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 118052093952.0,
+        "total_training_time": 1.576941341161728,
+        "train/loss": 2.779909133911133,
+        "train/mfu": 0.0027838313861806878,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33507.3235744095,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 118052093952.0,
+        "total_training_time": 1.1569415656849742,
+        "train/loss": 3.3071935176849365,
+        "train/mfu": 0.00379502007213159,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45678.40069608244,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "4": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 12107907072.0,
+        "total_training_time": 0.514963218010962,
+        "train/loss": 39.49574279785156,
+        "train/mfu": 0.002746046752725955,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33052.53240221672,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 12107907072.0,
+        "total_training_time": 0.3789382902905345,
+        "train/loss": 48.50537109375,
+        "train/mfu": 0.003624916665158695,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 43630.967102638395,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "40": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 121079070720.0,
+        "total_training_time": 1.607515069656074,
+        "train/loss": 2.6445460319519043,
+        "train/mfu": 0.0027826253639124474,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33492.80740127471,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 121079070720.0,
+        "total_training_time": 1.1793998396024108,
+        "train/loss": 2.9890830516815186,
+        "train/mfu": 0.0037881465285579184,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45595.667937996186,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "41": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 124106047488.0,
+        "total_training_time": 1.6380406571552157,
+        "train/loss": 2.5176312923431396,
+        "train/mfu": 0.002787013759526575,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33545.62791064357,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 124106047488.0,
+        "total_training_time": 1.201630836352706,
+        "train/loss": 2.9745395183563232,
+        "train/mfu": 0.0038268744012393756,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46061.81232006182,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "42": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 127133024256.0,
+        "total_training_time": 1.6695548668503761,
+        "train/loss": 2.5244224071502686,
+        "train/mfu": 0.002699583241994015,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 32493.278743310984,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 127133024256.0,
+        "total_training_time": 1.2239584866911173,
+        "train/loss": 3.034579038619995,
+        "train/mfu": 0.0038103083436138055,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45862.416531952025,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "43": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 130160001024.0,
+        "total_training_time": 1.7002147966995835,
+        "train/loss": 2.422424077987671,
+        "train/mfu": 0.0027748019253846924,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33398.641322281816,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 130160001024.0,
+        "total_training_time": 1.2462313314899802,
+        "train/loss": 2.9080352783203125,
+        "train/mfu": 0.003819684155572419,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45975.26760713912,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "44": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 133186977792.0,
+        "total_training_time": 1.730697744525969,
+        "train/loss": 2.30383038520813,
+        "train/mfu": 0.002790912245832757,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33592.551672894435,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 133186977792.0,
+        "total_training_time": 1.268412223085761,
+        "train/loss": 2.862245559692383,
+        "train/mfu": 0.0038355190552359464,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46165.86288148943,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "45": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 136213954560.0,
+        "total_training_time": 1.76140805054456,
+        "train/loss": 2.2627921104431152,
+        "train/mfu": 0.0027702502321611117,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33343.855296658614,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 136213954560.0,
+        "total_training_time": 1.2906325198709965,
+        "train/loss": 2.7677173614501953,
+        "train/mfu": 0.003828717194914776,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46083.992932102126,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "46": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 139240931328.0,
+        "total_training_time": 1.792032134719193,
+        "train/loss": 2.3443431854248047,
+        "train/mfu": 0.002778049847714663,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33437.73463267235,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 139240931328.0,
+        "total_training_time": 1.312884177081287,
+        "train/loss": 3.0300443172454834,
+        "train/mfu": 0.003823321183394677,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46019.0443490404,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "47": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 142267908096.0,
+        "total_training_time": 1.8225451288744807,
+        "train/loss": 2.28425931930542,
+        "train/mfu": 0.0027881640177549478,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33559.47288517886,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 142267908096.0,
+        "total_training_time": 1.3349638590589166,
+        "train/loss": 2.871114730834961,
+        "train/mfu": 0.003853100441570466,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46377.47957771674,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "48": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 145294884864.0,
+        "total_training_time": 1.8530984595417976,
+        "train/loss": 2.136410713195801,
+        "train/mfu": 0.002784483083173181,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33515.167663713306,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 145294884864.0,
+        "total_training_time": 1.3573055546730757,
+        "train/loss": 2.5712201595306396,
+        "train/mfu": 0.0038079129644852765,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45833.58477729136,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "49": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 148321861632.0,
+        "total_training_time": 1.8837258871644735,
+        "train/loss": 2.050102710723877,
+        "train/mfu": 0.0027777465814580004,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33434.08439701453,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 148321861632.0,
+        "total_training_time": 1.3793233400210738,
+        "train/loss": 2.6941380500793457,
+        "train/mfu": 0.0038639323180373972,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46507.85643584731,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "5": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 15134883840.0,
+        "total_training_time": 0.5459489515051246,
+        "train/loss": 24.50301742553711,
+        "train/mfu": 0.0027456258988920734,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33047.466834790685,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 15134883840.0,
+        "total_training_time": 0.4011708702892065,
+        "train/loss": 27.821884155273438,
+        "train/mfu": 0.0038266018780916114,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46058.532120930875,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "50": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 151348838400.0,
+        "total_training_time": 1.914246205240488,
+        "train/loss": 2.126776695251465,
+        "train/mfu": 0.002787494945689957,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33551.419662455846,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 151348838400.0,
+        "total_training_time": 1.4016214525327086,
+        "train/loss": 2.809593915939331,
+        "train/mfu": 0.0038153557765640165,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45923.16948197709,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "6": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 18161860608.0,
+        "total_training_time": 0.5764796091243625,
+        "train/loss": 20.723875045776367,
+        "train/mfu": 0.0027865509298474105,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33540.05710492,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 18161860608.0,
+        "total_training_time": 0.423286990262568,
+        "train/loss": 18.391576766967773,
+        "train/mfu": 0.0038467521644941355,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46301.06914021951,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "7": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 21188837376.0,
+        "total_training_time": 0.606964941136539,
+        "train/loss": 15.913263320922852,
+        "train/mfu": 0.002790693975179912,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33589.92447879498,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 21188837376.0,
+        "total_training_time": 0.4455303307622671,
+        "train/loss": 14.937097549438477,
+        "train/mfu": 0.0038247507103931224,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46036.2507157525,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "8": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 24215814144.0,
+        "total_training_time": 0.637591359205544,
+        "train/loss": 14.321819305419922,
+        "train/mfu": 0.002777838145683754,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33435.18650117048,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 24215814144.0,
+        "total_training_time": 0.46768718771636486,
+        "train/loss": 12.174980163574219,
+        "train/mfu": 0.0038396796329908276,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46215.94128271062,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "9": {
+      "m10-rope": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 27242790912.0,
+        "total_training_time": 0.6682850839570165,
+        "train/loss": 12.637199401855469,
+        "train/mfu": 0.0027717467679988553,
+        "train/peak_memory_mib": 28.6318359375,
+        "train/tok_per_sec": 33361.868208936605,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-rope-learned": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 27242790912.0,
+        "total_training_time": 0.4899687198922038,
+        "train/loss": 11.407817840576172,
+        "train/mfu": 0.0038181948937062735,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45957.34224733332,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    }
+  }
+}
