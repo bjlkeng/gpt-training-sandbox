@@ -1132,6 +1132,54 @@ precision, scaling, and checkpointed-activation variants belong to the later
 performance phase. `configs/smoke.yaml` remains the smaller CPU-only,
 byte-tokenizer first-sprint regression.
 
+### Nanochat depth profile
+
+`model.profile: nanochat_depth` provides a delayed, geometry-only depth dial.
+It requires positive `model.depth`, `model.aspect_ratio`, and `model.head_dim`
+values and resolves them once at the configuration boundary:
+
+```text
+n_layer = depth
+n_embd = ceil_to_multiple(depth * aspect_ratio, head_dim)
+n_head = n_embd / head_dim
+```
+
+`model.seq_len` remains the canonical context field. If a config file or CLI
+override explicitly supplies `n_layer`, `n_embd`, or `n_head`, that value must
+match the formula; contradictory fields fail by name. The resolved config,
+checkpoint, config identity, resource estimate, and dry-run output retain both
+the requested depth inputs and resolved dimensions. Selecting the profile does
+not enable RMSNorm, RoPE, ReLU-squared, QK normalization, GQA, FlashAttention,
+KV caching, or any training-budget change, and it does not replace the named
+simple-GPT presets.
+
+This bounded construction/resource matrix uses the default vocabulary,
+context 512, MLP ratio 4, tied embeddings, float32 manual attention, device
+batch 4, `aspect_ratio=64`, and `head_dim=128`. Parameter counts are exact;
+memory is the existing conservative planning estimate rather than observed
+usage. It does not claim compute-optimality.
+
+| Depth | Resolved width | Heads | Unique parameters | Estimated training memory |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 | 128 | 1 | 4,653,696 | 1,144.533 MiB |
+| 4 | 256 | 2 | 11,667,712 | 1,397.059 MiB |
+| 6 | 384 | 3 | 23,401,344 | 1,817.600 MiB |
+
+Reproduce any row without constructing a model, loading data, or starting a
+training run by changing `model.depth` in this dry run:
+
+```bash
+uv run python -m scripts.pretrain --dry-run \
+  --override run.name=nanochat-depth-4-preflight \
+  --override run.device=cpu \
+  --override model.profile=nanochat_depth \
+  --override model.depth=4 \
+  --override model.aspect_ratio=64 \
+  --override model.head_dim=128
+```
+
+### Base-model orchestration and resource preflight
+
 The three named presets and repeatable dotted overrides are the orchestration
 boundary. Hydra is not justified for this matrix: it does not yet need config
 groups, multirun launchers, sweep directories, or another override language.
