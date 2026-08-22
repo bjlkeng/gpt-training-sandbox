@@ -22,6 +22,77 @@ from scratch_llm.config import GPTConfig
 from scratch_llm.kv_cache import KVCacheTransaction
 
 
+def apply_rotary_emb(
+    x: torch.Tensor,
+    cosine: torch.Tensor,
+    sine: torch.Tensor,
+) -> torch.Tensor:
+    """Apply nanochat's split-half, negative-angle rotary convention."""
+
+    if x.shape[-1] % 2 != 0:
+        raise ValueError("rotary input head dimension must be even")
+    half_dimension = x.shape[-1] // 2
+    if cosine.shape != sine.shape:
+        raise ValueError("rotary cosine and sine tables must have matching shapes")
+    if cosine.shape[-1] != half_dimension:
+        raise ValueError("rotary table width must equal half the input head dimension")
+    first, second = x[..., :half_dimension], x[..., half_dimension:]
+    cosine = cosine.to(device=x.device, dtype=x.dtype)
+    sine = sine.to(device=x.device, dtype=x.dtype)
+    return torch.cat(
+        (first * cosine + second * sine, first * -sine + second * cosine),
+        dim=-1,
+    )
+
+
+class RotaryEmbedding(nn.Module):
+    """Deterministic, non-persistent float32 rotary cosine/sine tables."""
+
+    def __init__(self, *, head_dim: int, max_seq_len: int, theta: float) -> None:
+        super().__init__()
+        if head_dim <= 0 or head_dim % 2 != 0:
+            raise ValueError("rotary head_dim must be a positive even integer")
+        if max_seq_len <= 0:
+            raise ValueError("rotary max_seq_len must be a positive integer")
+        self.head_dim = head_dim
+        self.max_seq_len = max_seq_len
+        frequency_indices = torch.arange(0, head_dim, 2, dtype=torch.float32)
+        inverse_frequencies = 1.0 / (float(theta) ** (frequency_indices / head_dim))
+        positions = torch.arange(max_seq_len, dtype=torch.float32)
+        angles = torch.outer(positions, inverse_frequencies)
+        if not torch.isfinite(angles).all():
+            raise ValueError("rotary theta and context produced non-finite angles")
+        self.register_buffer("cosine", angles.cos(), persistent=False)
+        self.register_buffer("sine", angles.sin(), persistent=False)
+
+    def forward(self, x: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+        """Rotate the token axis of a ``(batch, heads, time, channels)`` tensor."""
+
+        if x.ndim != 4 or x.shape[-1] != self.head_dim:
+            raise ValueError(
+                "rotary input must have shape (batch, heads, time, head_dim)"
+            )
+        if positions.ndim != 1 or positions.numel() != x.shape[-2]:
+            raise ValueError("rotary positions must provide one position per token")
+        if positions.dtype == torch.bool or positions.is_floating_point():
+            raise TypeError("rotary positions must use an integer dtype")
+        if positions.numel() == 0:
+            raise ValueError("rotary positions must not be empty")
+        minimum = int(positions.min().item())
+        maximum = int(positions.max().item())
+        if minimum < 0:
+            raise ValueError("rotary positions must be non-negative")
+        if maximum >= self.max_seq_len:
+            raise ValueError(
+                f"rotary position {maximum} exceeds configured context "
+                f"{self.max_seq_len}"
+            )
+        indices = positions.to(device=self.cosine.device, dtype=torch.long)
+        cosine = self.cosine.index_select(0, indices).unsqueeze(0).unsqueeze(0)
+        sine = self.sine.index_select(0, indices).unsqueeze(0).unsqueeze(0)
+        return apply_rotary_emb(x, cosine, sine)
+
+
 class CausalSelfAttention(nn.Module):
     """Multi-head causal attention selected by one canonical backend setting."""
 
@@ -45,6 +116,15 @@ class CausalSelfAttention(nn.Module):
         self._prepared_attention_backend: str | None = None
         self._prepared_flash_provider: FlashAttentionProvider | None = None
         self.layer_index = layer_index
+        self.rotary = (
+            RotaryEmbedding(
+                head_dim=self.head_dim,
+                max_seq_len=config.seq_len,
+                theta=config.rope_theta,
+            )
+            if config.use_rope
+            else None
+        )
         self.last_backend_selection = AttentionBackendSelection(
             requested_backend=config.attention_backend,
             effective_backend=config.attention_backend,
@@ -98,6 +178,7 @@ class CausalSelfAttention(nn.Module):
         self,
         x: torch.Tensor,
         *,
+        positions: torch.Tensor | None = None,
         kv_cache: KVCacheTransaction | None = None,
     ) -> torch.Tensor:
         """Apply causal self-attention to a ``(batch, time, channel)`` tensor."""
@@ -132,6 +213,11 @@ class CausalSelfAttention(nn.Module):
         v = v.view(batch_size, sequence_length, self.n_head, self.head_dim).transpose(
             1, 2
         )
+        if self.rotary is not None:
+            if positions is None:
+                raise ValueError("rotary attention requires absolute positions")
+            q = self.rotary(q, positions)
+            k = self.rotary(k, positions)
         query_start = 0
         if kv_cache is not None:
             if self.layer_index is None:

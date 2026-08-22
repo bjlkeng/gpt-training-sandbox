@@ -1202,6 +1202,35 @@ BPB, training throughput, observed peak memory, identities, and limitations,
 is in
 [`comparisons/gpt-training-sandbox-as7-1-rmsnorm`](comparisons/gpt-training-sandbox-as7-1-rmsnorm/README.md).
 
+### Rotary position embeddings
+
+Set `model.use_rope: true` to omit the learned absolute
+`position_embedding.weight` and rotate each attention head's queries and keys
+at their absolute token positions. `model.rope_theta` is explicit in the
+serialized config and defaults to `10000.0`. The implementation follows the
+[pinned nanochat split-half convention](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/gpt.py):
+
+```text
+RoPE((x1, x2), p) = (x1 * cos(p) + x2 * sin(p),
+                      -x1 * sin(p) + x2 * cos(p))
+```
+
+The cosine and sine tables are derived in float32, move and cast with their
+attention inputs, and are non-persistent: checkpoints contain neither tables
+nor learned position parameters in RoPE mode. The per-head dimension must be
+even, theta must be finite and in the supported `[1, float32_max]` range, and
+context is capped at `2^24` so float32 integer positions remain exact. Full
+forward, prefill, and one-token cached decoding all use the same absolute
+positions and reject context overflow rather than wrapping.
+
+`model.use_rope: false` remains the compatibility default and retains the
+existing learned position module, state key, initialization order, and logits.
+This project flag does not change nanochat's upstream defaults or bundle QK
+normalization or attention sharpening. Resource reports identify the active
+position encoding and theta and account for the exact parameter delta. The
+bounded same-seed RTX 3090 diagnostic and its limitations are in
+[`comparisons/gpt-training-sandbox-as7-2-rope`](comparisons/gpt-training-sandbox-as7-2-rope/README.md).
+
 ### Base-model orchestration and resource preflight
 
 The three named presets and repeatable dotted overrides are the orchestration

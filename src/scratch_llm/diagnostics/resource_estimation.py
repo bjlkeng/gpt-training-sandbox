@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import math
 from types import MappingProxyType
 from typing import Any, Final, Mapping
 
@@ -20,7 +21,7 @@ from scratch_llm.training.loop import derive_grad_accum_steps
 
 
 RESOURCE_ESTIMATE_FORMAT: Final = "scratch_llm_training_resource_estimate"
-RESOURCE_ESTIMATE_FORMAT_VERSION: Final = 3
+RESOURCE_ESTIMATE_FORMAT_VERSION: Final = 4
 _BYTES_PER_MIB = 1024**2
 _MAX_SIGNED_64 = 2**63 - 1
 _HEADROOM_NUMERATOR = 1
@@ -79,6 +80,8 @@ class GPTModelSizeEstimate:
     head_count: int
     embedding_width: int
     norm: str
+    position_encoding: str
+    rope_theta: float | None
     tie_weights: bool
     token_embedding_parameters: int
     position_embedding_parameters: int
@@ -94,6 +97,17 @@ class GPTModelSizeEstimate:
             raise ValueError(f"unsupported model profile {self.profile!r}")
         if self.norm not in {"layernorm", "rmsnorm"}:
             raise ValueError(f"unsupported normalization {self.norm!r}")
+        if self.position_encoding not in {"learned_absolute", "rope"}:
+            raise ValueError(
+                f"unsupported position encoding {self.position_encoding!r}"
+            )
+        if self.position_encoding == "rope":
+            if self.rope_theta is None or not math.isfinite(self.rope_theta):
+                raise ValueError("RoPE estimates require a finite theta")
+            if self.position_embedding_parameters != 0:
+                raise ValueError("RoPE estimates cannot contain position parameters")
+        elif self.rope_theta is not None:
+            raise ValueError("learned position estimates cannot contain a RoPE theta")
         for name in (
             "sequence_length",
             "layer_count",
@@ -186,6 +200,11 @@ class GPTModelSizeEstimate:
             "normalization": {
                 "parameter_free": self.norm == "rmsnorm",
                 "type": self.norm,
+            },
+            "position_encoding": {
+                "parameter_free": self.position_encoding == "rope",
+                "theta": self.rope_theta,
+                "type": self.position_encoding,
             },
             "geometry": {
                 "profile": self.profile,
@@ -637,10 +656,14 @@ def estimate_gpt_model_size(config: GPTConfig) -> GPTModelSizeEstimate:
         channels,
         name="token embedding parameters",
     )
-    position_embeddings = _checked_product(
-        config.seq_len,
-        channels,
-        name="position embedding parameters",
+    position_embeddings = (
+        0
+        if config.use_rope
+        else _checked_product(
+            config.seq_len,
+            channels,
+            name="position embedding parameters",
+        )
     )
     block_matrix_parameters = _checked_product(
         4 + 2 * config.mlp_ratio,
@@ -714,6 +737,8 @@ def estimate_gpt_model_size(config: GPTConfig) -> GPTModelSizeEstimate:
         head_count=config.n_head,
         embedding_width=config.n_embd,
         norm=config.norm,
+        position_encoding="rope" if config.use_rope else "learned_absolute",
+        rope_theta=config.rope_theta if config.use_rope else None,
         tie_weights=config.tie_weights,
         token_embedding_parameters=token_embeddings,
         position_embedding_parameters=position_embeddings,
@@ -1043,12 +1068,11 @@ def _validate_baseline_model(config: GPTConfig) -> None:
         "use_gqa": config.use_gqa,
         "use_kv_cache": config.use_kv_cache,
         "use_qk_norm": config.use_qk_norm,
-        "use_rope": config.use_rope,
     }
     enabled = sorted(name for name, value in unsupported.items() if value)
     if enabled:
         raise ValueError(
-            "resource estimation currently supports LayerNorm/RMSNorm GPTs "
+            "resource estimation currently supports RMSNorm/RoPE GPTs "
             f"before later architecture switches; enabled switches={enabled}"
         )
 

@@ -1,0 +1,73 @@
+{
+  "bead": "gpt-training-sandbox-as7.2",
+  "controls": {
+    "changed_config_fields": [
+      "model.use_rope",
+      "run.name"
+    ],
+    "device": "NVIDIA GeForce RTX 3090",
+    "dtype": "float32",
+    "manual_attention": true,
+    "mfu_peak_flops_basis": "rtx3090_fp32_35.58_tflops",
+    "mfu_peak_flops_per_second": 35580000000000,
+    "rope_convention": "nanochat_split_half_negative_angle",
+    "rope_theta": 10000.0,
+    "seed": 1337,
+    "sequence_length": 128,
+    "source_base_commit": "c4fafdefaf7094ab4e623cec6d95e65cc151c809",
+    "timed_optimizer_steps": 45,
+    "total_optimizer_steps": 50,
+    "total_processed_model_tokens": 51200,
+    "warmup_steps_excluded": 5
+  },
+  "deltas": {
+    "peak_memory_mib": -0.0009765625,
+    "unique_parameters": -16384,
+    "validation_bpb": 7.823381636093417,
+    "validation_bpb_percent": 63.56512367522732,
+    "warm_tokens_per_second_median": -12654.859783392625,
+    "warm_tokens_per_second_percent": -27.41172588039439
+  },
+  "format": "scratch_llm_bounded_architecture_flag_comparison",
+  "format_version": 1,
+  "interpretation": {
+    "all_training_telemetry_finite": true,
+    "claim": "bounded diagnostic only; no quality or throughput improvement claim",
+    "flag_off_regression_suite": "passed",
+    "rope_tiny_overfit": "passed"
+  },
+  "runs": {
+    "learned_absolute": {
+      "checkpoint_identity": "sha256:ec2185c2330bd3d286ddb54a00f284cab2b477d09021fc3e85b9909cb40579f7",
+      "config_identity": "sha256:88f8a55feac494202d6b608169269d049ad1c56f2b42ee44ba30dfea6eb80fac",
+      "final_training_loss": 2.809593915939331,
+      "peak_memory_mib": 28.6328125,
+      "position_encoding": "learned_absolute",
+      "rope_theta": null,
+      "run_directory": "runs/m10-rope-learned",
+      "unique_parameters": 444160,
+      "validation_bpb": 12.307663674289925,
+      "warm_tokens_per_second_mean": 46061.71632445207,
+      "warm_tokens_per_second_median": 46165.86288148943
+    },
+    "rope": {
+      "checkpoint_identity": "sha256:4b30496ccc8557bb3f8764da02ffba6572f8a18dece01a7ee9b94e0f3f58ca18",
+      "config_identity": "sha256:4a128df142a80d8e273de83f4ca4787b2de6d27747d990e349eaf44e4455564b",
+      "final_training_loss": 2.126776695251465,
+      "peak_memory_mib": 28.6318359375,
+      "position_encoding": "rope",
+      "rope_theta": 10000.0,
+      "run_directory": "runs/m10-rope",
+      "unique_parameters": 427776,
+      "validation_bpb": 20.131045310383342,
+      "warm_tokens_per_second_mean": 33761.81879060462,
+      "warm_tokens_per_second_median": 33511.00309809681
+    }
+  },
+  "validation": {
+    "counted_bytes": 261,
+    "protocol": "bounded_contiguous_byte_next_token_bpb_v1",
+    "source_path": "data/fixtures/chat/validation.jsonl",
+    "source_sha256": "b41bd8ad00945ea6c0223a2f1964835de0d6b7105fe76dcfa80639e78823ac3f"
+  }
+}

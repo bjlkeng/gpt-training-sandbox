@@ -111,6 +111,7 @@ class Block(nn.Module):
         super().__init__()
         config.validate()
 
+        self.use_rope = config.use_rope
         self.ln_1 = build_norm(config)
         self.attn = CausalSelfAttention(
             config,
@@ -124,17 +125,31 @@ class Block(nn.Module):
         self,
         x: torch.Tensor,
         *,
+        positions: torch.Tensor | None = None,
         kv_cache: KVCacheTransaction | None = None,
     ) -> torch.Tensor:
         """Apply pre-normalized attention and feed-forward residual updates."""
 
         attention_residual = x
         normalized = self.ln_1(attention_residual)
-        attended = (
-            self.attn(normalized)
-            if kv_cache is None
-            else self.attn(normalized, kv_cache=kv_cache)
-        )
+        if self.use_rope:
+            if positions is None:
+                raise ValueError("rotary block requires absolute positions")
+            attended = (
+                self.attn(normalized, positions=positions)
+                if kv_cache is None
+                else self.attn(
+                    normalized,
+                    positions=positions,
+                    kv_cache=kv_cache,
+                )
+            )
+        else:
+            attended = (
+                self.attn(normalized)
+                if kv_cache is None
+                else self.attn(normalized, kv_cache=kv_cache)
+            )
         x = attention_residual + attended
 
         mlp_residual = x
@@ -157,7 +172,9 @@ class GPT(nn.Module):
         self.max_seq_len = config.seq_len
         self.activation_checkpointing = False
         self.token_embedding = nn.Embedding(config.vocab_size, config.n_embd)
-        self.position_embedding = nn.Embedding(config.seq_len, config.n_embd)
+        self.position_embedding = (
+            None if config.use_rope else nn.Embedding(config.seq_len, config.n_embd)
+        )
         self.embedding_dropout = nn.Dropout(config.dropout)
         self.blocks = nn.ModuleList(
             [
@@ -300,8 +317,11 @@ class GPT(nn.Module):
                 position_start + sequence_length,
                 device=token_ids.device,
             )
-            x = self.token_embedding(token_ids) + self.position_embedding(positions)
+            x = self.token_embedding(token_ids)
+            if self.position_embedding is not None:
+                x = x + self.position_embedding(positions)
             x = self.embedding_dropout(x)
+            rotary_positions = positions if self.config.use_rope else None
             for block_index, block in enumerate(self.blocks):
                 if (
                     self.activation_checkpointing
@@ -313,17 +333,26 @@ class GPT(nn.Module):
                         block,
                         block_index,
                         x,
+                        rotary_positions,
                         use_reentrant=False,
                         preserve_rng_state=True,
                     )
                 elif transaction is None:
-                    x = block(x)
+                    x = (
+                        block(x)
+                        if rotary_positions is None
+                        else block(x, positions=rotary_positions)
+                    )
                 else:
                     if not isinstance(block, Block):
                         raise KVCacheError(
                             "cached decoder block list contains a non-block module"
                         )
-                    x = block(x, kv_cache=transaction)
+                    x = block(
+                        x,
+                        positions=rotary_positions,
+                        kv_cache=transaction,
+                    )
             logits = self.lm_head(self.ln_f(x))
         except Exception:
             if transaction is not None:
@@ -348,9 +377,10 @@ class GPT(nn.Module):
         block: nn.Module,
         block_index: int,
         x: torch.Tensor,
+        positions: torch.Tensor | None,
     ) -> torch.Tensor:
         try:
-            return block(x)
+            return block(x) if positions is None else block(x, positions=positions)
         except Exception as error:
             if type(error).__name__ == "_StopRecomputationError":
                 raise
