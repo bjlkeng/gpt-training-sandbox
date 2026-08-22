@@ -43,6 +43,7 @@ TokenizerType = Literal["byte", "regex_byte_bpe"]
 TokenLoaderStrategy = Literal["flat", "packed"]
 NormType = Literal["layernorm", "rmsnorm"]
 ActivationType = Literal["gelu", "relu_squared"]
+ModelProfile = Literal["simple_gpt", "nanochat_depth"]
 AttentionBackend = Literal["manual", "sdpa", "flash"]
 AttentionFallbackPolicy = Literal["allow", "error"]
 FlashAttentionProvider = Literal["auto", "fa2", "fa3"]
@@ -61,6 +62,7 @@ _TOKENIZER_TYPES: frozenset[str] = frozenset(get_args(TokenizerType))
 _TOKEN_LOADER_STRATEGIES: frozenset[str] = frozenset(get_args(TokenLoaderStrategy))
 _NORM_TYPES: frozenset[str] = frozenset(get_args(NormType))
 _ACTIVATION_TYPES: frozenset[str] = frozenset(get_args(ActivationType))
+_MODEL_PROFILES: frozenset[str] = frozenset(get_args(ModelProfile))
 _ATTENTION_BACKENDS: frozenset[str] = frozenset(get_args(AttentionBackend))
 _ATTENTION_FALLBACK_POLICIES: frozenset[str] = frozenset(
     get_args(AttentionFallbackPolicy)
@@ -82,6 +84,12 @@ _WANDB_ENVIRONMENT_FIELDS = {
     "WANDB_PROJECT": "project",
     "WANDB_ENTITY": "entity",
     "WANDB_RUN_GROUP": "group",
+}
+_MAX_SIGNED_64 = 2**63 - 1
+_SIMPLE_GPT_GEOMETRY = {
+    "n_layer": 6,
+    "n_head": 6,
+    "n_embd": 384,
 }
 
 
@@ -138,6 +146,70 @@ def _parse_dotted_override(override: object) -> DictConfig:
             path=path,
             context="invalid configuration override",
         )
+
+
+def _nanochat_depth_geometry(
+    *,
+    depth: object,
+    aspect_ratio: object,
+    head_dim: object,
+) -> tuple[int, int, int]:
+    """Return ``(layers, width, heads)`` for the pinned depth formula."""
+
+    _require_positive_int(depth, "model.depth")
+    _require_positive_int(aspect_ratio, "model.aspect_ratio")
+    _require_positive_int(head_dim, "model.head_dim")
+    assert isinstance(depth, int) and not isinstance(depth, bool)
+    assert isinstance(aspect_ratio, int) and not isinstance(aspect_ratio, bool)
+    assert isinstance(head_dim, int) and not isinstance(head_dim, bool)
+    if depth > _MAX_SIGNED_64 // aspect_ratio:
+        _fail(
+            "model.aspect_ratio",
+            "depth * aspect_ratio exceeds the supported signed 64-bit range",
+        )
+    base_dim = depth * aspect_ratio
+    head_count = (base_dim + head_dim - 1) // head_dim
+    if head_count > _MAX_SIGNED_64 // head_dim:
+        _fail(
+            "model.head_dim",
+            "rounded embedding width exceeds the supported signed 64-bit range",
+        )
+    embedding_width = head_count * head_dim
+    return depth, embedding_width, head_count
+
+
+def _model_fields(source: DictConfig) -> set[str]:
+    """Return model keys explicitly present in one non-default source."""
+
+    model = source.get("model")
+    return set(model) if isinstance(model, DictConfig) else set()
+
+
+def _resolve_loaded_model_profile(
+    resolved: DictConfig,
+    *,
+    explicit_model_fields: set[str],
+) -> None:
+    """Resolve profile geometry while preserving explicit-conflict provenance."""
+
+    model = resolved.get("model")
+    if not isinstance(model, DictConfig) or model.get("profile") != "nanochat_depth":
+        return
+    n_layer, n_embd, n_head = _nanochat_depth_geometry(
+        depth=model.get("depth"),
+        aspect_ratio=model.get("aspect_ratio"),
+        head_dim=model.get("head_dim"),
+    )
+    derived = {"n_layer": n_layer, "n_embd": n_embd, "n_head": n_head}
+    for field_name, expected in derived.items():
+        actual = model.get(field_name)
+        if field_name in explicit_model_fields and actual != expected:
+            _fail(
+                f"model.{field_name}",
+                f"explicit value {actual!r} contradicts derived "
+                f"nanochat_depth value {expected}",
+            )
+        model[field_name] = expected
 
 
 @dataclass
@@ -353,7 +425,10 @@ class TokenizerConfig(_SerializableConfig):
 class GPTConfig(_SerializableConfig):
     """Dimensions and architecture switches for the decoder-only GPT."""
 
-    profile: str = "simple_gpt"
+    profile: ModelProfile = "simple_gpt"
+    depth: int | None = None
+    aspect_ratio: int | None = None
+    head_dim: int | None = None
     vocab_size: int = 32_768
     seq_len: int = 512
     n_layer: int = 6
@@ -376,7 +451,41 @@ class GPTConfig(_SerializableConfig):
     use_kv_cache: bool = False
 
     def __post_init__(self) -> None:
+        self._resolve_direct_profile_geometry()
         self.validate()
+
+    def _resolve_direct_profile_geometry(self) -> None:
+        """Resolve omitted direct-constructor geometry before validation.
+
+        Config-file loading retains field provenance and performs the stricter
+        explicit-conflict check before constructing this dataclass. A direct
+        constructor uses the established simple-GPT defaults as omission
+        sentinels for the three derived dimensions.
+        """
+
+        _require_choice(self.profile, "model.profile", _MODEL_PROFILES)
+        if self.profile != "nanochat_depth":
+            return
+        n_layer, n_embd, n_head = _nanochat_depth_geometry(
+            depth=self.depth,
+            aspect_ratio=self.aspect_ratio,
+            head_dim=self.head_dim,
+        )
+        for field_name, expected in {
+            "n_layer": n_layer,
+            "n_embd": n_embd,
+            "n_head": n_head,
+        }.items():
+            actual = getattr(self, field_name)
+            if actual == expected:
+                continue
+            if actual != _SIMPLE_GPT_GEOMETRY[field_name]:
+                _fail(
+                    f"model.{field_name}",
+                    f"explicit value {actual!r} contradicts derived "
+                    f"nanochat_depth value {expected}",
+                )
+            setattr(self, field_name, expected)
 
     def parameter_compatibility_dict(self) -> dict[str, Any]:
         """Return config fields that must agree when loading model weights.
@@ -398,7 +507,34 @@ class GPTConfig(_SerializableConfig):
         return values
 
     def validate(self) -> None:
-        _require_non_empty(self.profile, "model.profile")
+        _require_choice(self.profile, "model.profile", _MODEL_PROFILES)
+        if self.profile == "simple_gpt":
+            for field_name in ("depth", "aspect_ratio", "head_dim"):
+                if getattr(self, field_name) is not None:
+                    _fail(
+                        f"model.{field_name}",
+                        "is only valid when model.profile is 'nanochat_depth'",
+                    )
+        else:
+            expected = _nanochat_depth_geometry(
+                depth=self.depth,
+                aspect_ratio=self.aspect_ratio,
+                head_dim=self.head_dim,
+            )
+            actual = (self.n_layer, self.n_embd, self.n_head)
+            if actual != expected:
+                field_names = ("n_layer", "n_embd", "n_head")
+                mismatch = next(
+                    name
+                    for name, actual_value, expected_value in zip(
+                        field_names, actual, expected, strict=True
+                    )
+                    if actual_value != expected_value
+                )
+                _fail(
+                    f"model.{mismatch}",
+                    "must remain equal to the resolved nanochat_depth geometry",
+                )
         for field_name in (
             "vocab_size",
             "seq_len",
@@ -1012,8 +1148,11 @@ def load_config(
     defaults = OmegaConf.structured(ProjectConfig)
     OmegaConf.set_struct(defaults, True)
     sources = [defaults]
+    explicit_model_fields: set[str] = set()
     if path is not None:
-        sources.append(_load_yaml_config(Path(path)))
+        yaml_source = _load_yaml_config(Path(path))
+        sources.append(yaml_source)
+        explicit_model_fields.update(_model_fields(yaml_source))
 
     if environment is not None:
         environment_values: dict[str, str | None] = {}
@@ -1033,7 +1172,10 @@ def load_config(
 
     if isinstance(overrides, str):
         overrides = (overrides,)
-    sources.extend(_parse_dotted_override(override) for override in overrides)
+    for override in overrides:
+        override_source = _parse_dotted_override(override)
+        sources.append(override_source)
+        explicit_model_fields.update(_model_fields(override_source))
 
     dedicated_wandb_values: dict[str, object] = {}
     if wandb_enabled is not None:
@@ -1057,6 +1199,10 @@ def load_config(
         )
     if not isinstance(resolved, DictConfig):
         _fail("config", "resolved configuration must be a mapping")
+    _resolve_loaded_model_profile(
+        resolved,
+        explicit_model_fields=explicit_model_fields,
+    )
 
     try:
         config = OmegaConf.to_object(resolved)
@@ -1101,6 +1247,7 @@ __all__ = [
     "GenerationConfig",
     "GradAccumSteps",
     "JsonlTrackingConfig",
+    "ModelProfile",
     "NormType",
     "ProjectConfig",
     "RunConfig",

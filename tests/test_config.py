@@ -115,6 +115,9 @@ def test_defaults_cover_the_roadmap_sections_and_are_deterministic() -> None:
         },
         "model": {
             "profile": "simple_gpt",
+            "depth": None,
+            "aspect_ratio": None,
+            "head_dim": None,
             "vocab_size": 32_768,
             "seq_len": 512,
             "n_layer": 6,
