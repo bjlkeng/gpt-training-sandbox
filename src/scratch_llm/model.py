@@ -58,6 +58,24 @@ def build_norm(config: GPTConfig) -> nn.Module:
     raise RuntimeError(f"unsupported validated normalization {config.norm!r}")
 
 
+class ReLUSquared(nn.Module):
+    """Elementwise ``relu(x).square()`` activation with no module state."""
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return F.relu(x).square()
+
+
+def build_activation(config: GPTConfig) -> nn.Module:
+    """Construct the selected MLP activation through one explicit boundary."""
+
+    config.validate()
+    if config.activation == "gelu":
+        return nn.GELU()
+    if config.activation == "relu_squared":
+        return ReLUSquared()
+    raise RuntimeError(f"unsupported validated activation {config.activation!r}")
+
+
 class MLP(nn.Module):
     """Expand each token internally, then restore the residual-stream width."""
 
@@ -72,7 +90,7 @@ class MLP(nn.Module):
             hidden_dim,
             bias=config.bias,
         )
-        self.activation = nn.GELU()
+        self.activation = build_activation(config)
         self.out_proj = nn.Linear(
             hidden_dim,
             config.n_embd,
