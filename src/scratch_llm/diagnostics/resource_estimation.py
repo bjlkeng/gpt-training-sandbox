@@ -20,7 +20,7 @@ from scratch_llm.training.loop import derive_grad_accum_steps
 
 
 RESOURCE_ESTIMATE_FORMAT: Final = "scratch_llm_training_resource_estimate"
-RESOURCE_ESTIMATE_FORMAT_VERSION: Final = 2
+RESOURCE_ESTIMATE_FORMAT_VERSION: Final = 3
 _BYTES_PER_MIB = 1024**2
 _MAX_SIGNED_64 = 2**63 - 1
 _HEADROOM_NUMERATOR = 1
@@ -78,6 +78,7 @@ class GPTModelSizeEstimate:
     layer_count: int
     head_count: int
     embedding_width: int
+    norm: str
     tie_weights: bool
     token_embedding_parameters: int
     position_embedding_parameters: int
@@ -91,6 +92,8 @@ class GPTModelSizeEstimate:
     def __post_init__(self) -> None:
         if self.profile not in {"simple_gpt", "nanochat_depth"}:
             raise ValueError(f"unsupported model profile {self.profile!r}")
+        if self.norm not in {"layernorm", "rmsnorm"}:
+            raise ValueError(f"unsupported normalization {self.norm!r}")
         for name in (
             "sequence_length",
             "layer_count",
@@ -180,6 +183,10 @@ class GPTModelSizeEstimate:
             "embedding_fraction": self.embedding_fraction,
             "embedding_parameters": self.embedding_parameters,
             "largest_component": self.largest_component,
+            "normalization": {
+                "parameter_free": self.norm == "rmsnorm",
+                "type": self.norm,
+            },
             "geometry": {
                 "profile": self.profile,
                 "requested": {
@@ -641,16 +648,21 @@ def estimate_gpt_model_size(config: GPTConfig) -> GPTModelSizeEstimate:
         channels,
         name="per-block matrix parameters",
     )
-    block_norm_parameters = _checked_product(
-        2,
-        channels,
-        name="per-block normalization parameters",
-    )
-    block_bias_parameters = (
-        _checked_product(
-            config.mlp_ratio + 7,
+    block_norm_parameters = (
+        0
+        if config.norm == "rmsnorm"
+        else _checked_product(
+            2,
+            2 if config.bias else 1,
             channels,
-            name="per-block bias parameters",
+            name="per-block normalization parameters",
+        )
+    )
+    block_projection_bias_parameters = (
+        _checked_product(
+            config.mlp_ratio + 5,
+            channels,
+            name="per-block projection bias parameters",
         )
         if config.bias
         else 0
@@ -658,7 +670,7 @@ def estimate_gpt_model_size(config: GPTConfig) -> GPTModelSizeEstimate:
     per_block_parameters = _checked_sum(
         block_matrix_parameters,
         block_norm_parameters,
-        block_bias_parameters,
+        block_projection_bias_parameters,
         name="per-block parameters",
     )
     transformer_blocks = _checked_product(
@@ -666,10 +678,14 @@ def estimate_gpt_model_size(config: GPTConfig) -> GPTModelSizeEstimate:
         per_block_parameters,
         name="transformer block parameters",
     )
-    final_norm = _checked_product(
-        2 if config.bias else 1,
-        channels,
-        name="final normalization parameters",
+    final_norm = (
+        0
+        if config.norm == "rmsnorm"
+        else _checked_product(
+            2 if config.bias else 1,
+            channels,
+            name="final normalization parameters",
+        )
     )
     output_head = (
         0
@@ -697,6 +713,7 @@ def estimate_gpt_model_size(config: GPTConfig) -> GPTModelSizeEstimate:
         layer_count=config.n_layer,
         head_count=config.n_head,
         embedding_width=config.n_embd,
+        norm=config.norm,
         tie_weights=config.tie_weights,
         token_embedding_parameters=token_embeddings,
         position_embedding_parameters=position_embeddings,
@@ -1026,14 +1043,13 @@ def _validate_baseline_model(config: GPTConfig) -> None:
         "use_gqa": config.use_gqa,
         "use_kv_cache": config.use_kv_cache,
         "use_qk_norm": config.use_qk_norm,
-        "use_rmsnorm": config.use_rmsnorm,
         "use_rope": config.use_rope,
     }
     enabled = sorted(name for name, value in unsupported.items() if value)
-    if config.norm != "layernorm" or enabled:
+    if enabled:
         raise ValueError(
-            "resource estimation currently supports the baseline LayerNorm GPT "
-            f"only; norm={config.norm!r}, enabled switches={enabled}"
+            "resource estimation currently supports LayerNorm/RMSNorm GPTs "
+            f"before later architecture switches; enabled switches={enabled}"
         )
 
 

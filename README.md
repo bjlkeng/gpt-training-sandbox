@@ -1178,6 +1178,30 @@ uv run python -m scripts.pretrain --dry-run \
   --override model.head_dim=128
 ```
 
+### Parameter-free RMSNorm
+
+Set both `model.norm: rmsnorm` and the serialized-compatibility field
+`model.use_rmsnorm: true` to replace every block pre-norm and the final norm
+with the same parameter-free operation:
+
+```text
+RMSNorm(x) = x / sqrt(mean(x^2) + 1e-5)
+```
+
+The channel mean is taken independently for each token. The explicit `1e-5`
+epsilon, no learned weight or bias, and no persistent buffers are the project
+contract. This keeps the parameter-free behavior of the
+[pinned nanochat implementation](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/gpt.py)
+while making numerical stabilization independent of PyTorch defaults.
+`model.norm: layernorm` with `model.use_rmsnorm: false` remains the default and
+retains its existing modules, state keys, and logits.
+
+Resource reports identify the selected normalization and account for the
+exact parameter delta. The same-seed RTX 3090 diagnostic, including validation
+BPB, training throughput, observed peak memory, identities, and limitations,
+is in
+[`comparisons/gpt-training-sandbox-as7-1-rmsnorm`](comparisons/gpt-training-sandbox-as7-1-rmsnorm/README.md).
+
 ### Base-model orchestration and resource preflight
 
 The three named presets and repeatable dotted overrides are the orchestration
