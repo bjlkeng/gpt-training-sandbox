@@ -1,0 +1,70 @@
+{
+  "bead": "gpt-training-sandbox-as7.1",
+  "controls": {
+    "changed_config_fields": [
+      "model.norm",
+      "model.use_rmsnorm",
+      "run.name"
+    ],
+    "device": "NVIDIA GeForce RTX 3090",
+    "dtype": "float32",
+    "manual_attention": true,
+    "mfu_peak_flops_basis": "rtx3090_fp32_35.58_tflops",
+    "mfu_peak_flops_per_second": 35580000000000,
+    "seed": 1337,
+    "sequence_length": 128,
+    "source_base_commit": "2147290a415d6d20555c8595456521a6f472fdeb",
+    "timed_optimizer_steps": 45,
+    "total_optimizer_steps": 50,
+    "total_processed_model_tokens": 51200,
+    "warmup_steps_excluded": 5
+  },
+  "deltas": {
+    "peak_memory_mib": -0.0146484375,
+    "unique_parameters": -640,
+    "validation_bpb": 0.13101821263739843,
+    "validation_bpb_percent": 1.0645253958977197,
+    "warm_tokens_per_second_median": -8382.72844871194,
+    "warm_tokens_per_second_percent": -18.271810365153364
+  },
+  "format": "scratch_llm_bounded_architecture_flag_comparison",
+  "format_version": 1,
+  "interpretation": {
+    "all_training_telemetry_finite": true,
+    "claim": "bounded diagnostic only; no quality or throughput improvement claim",
+    "layernorm_default_regression_suite": "passed",
+    "rmsnorm_tiny_overfit": "passed"
+  },
+  "runs": {
+    "layernorm": {
+      "checkpoint_identity": "sha256:5470d7f69ecfd07d5eb51fff89d109aea5380b1fe0b3269959930fa0f32df049",
+      "config_identity": "sha256:c753c6d4d4e531e2e0836dcd0de80c61fe4d8d22944700f7e16d5ae514417c26",
+      "final_training_loss": 2.809593915939331,
+      "normalization": "layernorm",
+      "peak_memory_mib": 28.6328125,
+      "run_directory": "runs/m10-rmsnorm-layernorm-r2",
+      "unique_parameters": 444160,
+      "validation_bpb": 12.307664349041783,
+      "warm_tokens_per_second_mean": 45803.93503556,
+      "warm_tokens_per_second_median": 45877.93043594004
+    },
+    "rmsnorm": {
+      "checkpoint_identity": "sha256:01a45db8427199b02bf0d730447b72236a14aae231ccba58cce330b6573acd16",
+      "config_identity": "sha256:c9fc427f3f8f7257ffb5e335c5d33d31a370d00245f9f9a3516f1ca2308a9f50",
+      "final_training_loss": 2.7686166763305664,
+      "normalization": "rmsnorm",
+      "peak_memory_mib": 28.6181640625,
+      "run_directory": "runs/m10-rmsnorm-r2",
+      "unique_parameters": 443520,
+      "validation_bpb": 12.438682561679181,
+      "warm_tokens_per_second_mean": 37406.482676645835,
+      "warm_tokens_per_second_median": 37495.2019872281
+    }
+  },
+  "validation": {
+    "counted_bytes": 261,
+    "protocol": "bounded_contiguous_byte_next_token_bpb_v1",
+    "source_path": "data/fixtures/chat/validation.jsonl",
+    "source_sha256": "b41bd8ad00945ea6c0223a2f1964835de0d6b7105fe76dcfa80639e78823ac3f"
+  }
+}
