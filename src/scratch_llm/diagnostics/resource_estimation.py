@@ -20,7 +20,7 @@ from scratch_llm.training.loop import derive_grad_accum_steps
 
 
 RESOURCE_ESTIMATE_FORMAT: Final = "scratch_llm_training_resource_estimate"
-RESOURCE_ESTIMATE_FORMAT_VERSION: Final = 1
+RESOURCE_ESTIMATE_FORMAT_VERSION: Final = 2
 _BYTES_PER_MIB = 1024**2
 _MAX_SIGNED_64 = 2**63 - 1
 _HEADROOM_NUMERATOR = 1
@@ -70,6 +70,14 @@ class ModuleParameterSummary:
 class GPTModelSizeEstimate:
     """Exact config-only parameter elements for the baseline GPT."""
 
+    profile: str
+    requested_depth: int | None
+    requested_aspect_ratio: int | None
+    requested_head_dim: int | None
+    sequence_length: int
+    layer_count: int
+    head_count: int
+    embedding_width: int
     tie_weights: bool
     token_embedding_parameters: int
     position_embedding_parameters: int
@@ -81,6 +89,30 @@ class GPTModelSizeEstimate:
     non_trainable_parameters: int
 
     def __post_init__(self) -> None:
+        if self.profile not in {"simple_gpt", "nanochat_depth"}:
+            raise ValueError(f"unsupported model profile {self.profile!r}")
+        for name in (
+            "sequence_length",
+            "layer_count",
+            "head_count",
+            "embedding_width",
+        ):
+            require_positive_integer(getattr(self, name), name=name)
+        requested = (
+            self.requested_depth,
+            self.requested_aspect_ratio,
+            self.requested_head_dim,
+        )
+        if self.profile == "simple_gpt":
+            if any(value is not None for value in requested):
+                raise ValueError("simple_gpt profile cannot have depth inputs")
+        else:
+            for name, value in zip(
+                ("requested_depth", "requested_aspect_ratio", "requested_head_dim"),
+                requested,
+                strict=True,
+            ):
+                require_positive_integer(value, name=name)
         if not isinstance(self.tie_weights, bool):
             raise TypeError("tie_weights must be a boolean")
         for name in (
@@ -148,6 +180,20 @@ class GPTModelSizeEstimate:
             "embedding_fraction": self.embedding_fraction,
             "embedding_parameters": self.embedding_parameters,
             "largest_component": self.largest_component,
+            "geometry": {
+                "profile": self.profile,
+                "requested": {
+                    "aspect_ratio": self.requested_aspect_ratio,
+                    "depth": self.requested_depth,
+                    "head_dim": self.requested_head_dim,
+                },
+                "resolved": {
+                    "n_embd": self.embedding_width,
+                    "n_head": self.head_count,
+                    "n_layer": self.layer_count,
+                    "seq_len": self.sequence_length,
+                },
+            },
             "non_trainable_parameters": self.non_trainable_parameters,
             "tie_weights": self.tie_weights,
             "trainable_parameters": self.trainable_parameters,
@@ -643,6 +689,14 @@ def estimate_gpt_model_size(config: GPTConfig) -> GPTModelSizeEstimate:
         name="unique GPT parameters",
     )
     return GPTModelSizeEstimate(
+        profile=config.profile,
+        requested_depth=config.depth,
+        requested_aspect_ratio=config.aspect_ratio,
+        requested_head_dim=config.head_dim,
+        sequence_length=config.seq_len,
+        layer_count=config.n_layer,
+        head_count=config.n_head,
+        embedding_width=config.n_embd,
         tie_weights=config.tie_weights,
         token_embedding_parameters=token_embeddings,
         position_embedding_parameters=position_embeddings,
