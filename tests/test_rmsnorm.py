@@ -9,6 +9,7 @@ import pytest
 import torch
 from torch import nn
 
+import scratch_llm.model as model_module
 from scratch_llm.config import (
     GPTConfig,
     ProjectConfig,
@@ -47,7 +48,10 @@ def test_rmsnorm_matches_parameter_free_reference_and_gradient(
 ) -> None:
     values = torch.linspace(-2.0, 3.0, steps=torch.Size(shape).numel(), dtype=dtype)
     inputs = values.reshape(shape).requires_grad_(True)
-    reference_inputs = inputs.detach().clone().requires_grad_(True)
+    reference_dtype = (
+        torch.float32 if dtype in {torch.float16, torch.bfloat16} else dtype
+    )
+    reference_inputs = inputs.detach().to(reference_dtype).clone().requires_grad_(True)
     norm = RMSNorm(shape[-1])
 
     actual = norm(inputs)
@@ -60,12 +64,17 @@ def test_rmsnorm_matches_parameter_free_reference_and_gradient(
     assert actual.shape == inputs.shape
     assert actual.dtype == inputs.dtype
     assert actual.device == inputs.device
-    torch.testing.assert_close(actual, expected, rtol=rtol, atol=atol)
+    torch.testing.assert_close(
+        actual,
+        expected.to(dtype),
+        rtol=rtol,
+        atol=atol,
+    )
     assert inputs.grad is not None and torch.isfinite(inputs.grad).all()
     assert reference_inputs.grad is not None
     torch.testing.assert_close(
         inputs.grad,
-        reference_inputs.grad,
+        reference_inputs.grad.to(dtype),
         rtol=rtol,
         atol=atol,
     )
@@ -92,6 +101,29 @@ def test_rmsnorm_has_no_parameters_or_persistent_state() -> None:
     assert list(norm.parameters()) == []
     assert list(norm.buffers()) == []
     assert norm.state_dict() == {}
+
+
+def test_rmsnorm_delegates_to_native_parameter_free_operation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[torch.Tensor, tuple[int, ...], object, object]] = []
+
+    def native_rms_norm(
+        inputs: torch.Tensor,
+        normalized_shape: tuple[int, ...],
+        weight: torch.Tensor | None = None,
+        eps: float | None = None,
+    ) -> torch.Tensor:
+        calls.append((inputs, normalized_shape, weight, eps))
+        return torch.full_like(inputs, 7)
+
+    monkeypatch.setattr(model_module.F, "rms_norm", native_rms_norm)
+    inputs = torch.randn(2, 3, 4)
+
+    output = RMSNorm(4)(inputs)
+
+    torch.testing.assert_close(output, torch.full_like(inputs, 7))
+    assert calls == [(inputs, (4,), None, RMS_NORM_EPSILON)]
 
 
 def test_rmsnorm_factory_covers_every_block_and_final_norm() -> None:
@@ -304,6 +336,8 @@ def test_rmsnorm_readme_and_bounded_comparison_are_reproducible() -> None:
         "model.use_rmsnorm",
         "run.name",
     ]
+    assert payload["controls"]["rmsnorm_operation"] == ("torch.nn.functional.rms_norm")
+    assert payload["controls"]["rmsnorm_weight"] is None
     assert payload["runs"]["layernorm"]["unique_parameters"] == 444_160
     assert payload["runs"]["rmsnorm"]["unique_parameters"] == 443_520
     assert payload["deltas"]["unique_parameters"] == -640
@@ -314,4 +348,5 @@ def test_rmsnorm_readme_and_bounded_comparison_are_reproducible() -> None:
         443_520,
     ]
     assert all(not run["rankable"] for run in offline["runs"])
-    assert "does not establish a quality or performance trend" in report
+    assert "do not establish" in report
+    assert "quality or performance trend" in report

@@ -1190,7 +1190,11 @@ RMSNorm(x) = x / sqrt(mean(x^2) + 1e-5)
 
 The channel mean is taken independently for each token. The explicit `1e-5`
 epsilon, no learned weight or bias, and no persistent buffers are the project
-contract. This keeps the parameter-free behavior of the
+contract. The module delegates the calculation to PyTorch's native
+`torch.nn.functional.rms_norm` operation with `weight=None`, allowing the
+active backend to use its optimized kernel instead of dispatching a chain of
+individual square, reduction, reciprocal-root, and multiply operations. This
+keeps the parameter-free behavior of the
 [pinned nanochat implementation](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/gpt.py)
 while making numerical stabilization independent of PyTorch defaults.
 `model.norm: layernorm` with `model.use_rmsnorm: false` remains the default and

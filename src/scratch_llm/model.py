@@ -21,7 +21,7 @@ RMS_NORM_EPSILON = 1e-5
 
 
 class RMSNorm(nn.Module):
-    """Parameter-free root-mean-square normalization over channels."""
+    """Parameter-free native root-mean-square normalization over channels."""
 
     def __init__(self, channels: int, *, eps: float = RMS_NORM_EPSILON) -> None:
         super().__init__()
@@ -44,8 +44,7 @@ class RMSNorm(nn.Module):
             )
         if not x.is_floating_point():
             raise TypeError("RMSNorm input must use a floating-point dtype")
-        mean_square = x.square().mean(dim=-1, keepdim=True)
-        return x * torch.rsqrt(mean_square + self.eps)
+        return F.rms_norm(x, (self.channels,), weight=None, eps=self.eps)
 
 
 def build_norm(config: GPTConfig) -> nn.Module:
