@@ -26,6 +26,9 @@ class OOMAttempt:
     sliding_window_pattern: str
     sliding_window_size: int
     layer_attention_windows: tuple[int | None, ...]
+    use_value_embeddings: bool
+    value_embedding_gate_channels: int
+    value_embedding_layer_indices: tuple[int, ...]
     n_embd: int
     seq_len: int
     device_batch_size: int
@@ -54,6 +57,13 @@ class OOMAttempt:
             "total_batch_size_tokens": self.total_batch_size_tokens,
             "vocab_size": self.vocab_size,
             "use_gqa": self.use_gqa,
+            "value_embeddings": {
+                "enabled": self.use_value_embeddings,
+                "gate_channels": self.value_embedding_gate_channels,
+                "gate_scale": 3.0,
+                "layer_indices": list(self.value_embedding_layer_indices),
+                "placement": "alternating_by_final_layer_parity",
+            },
         }
 
 
@@ -107,7 +117,7 @@ class OOMDiagnostic:
     attempt: OOMAttempt
     memory: AcceleratorMemorySnapshot
     recommendations: tuple[OOMRecommendation, ...]
-    schema_version: int = 3
+    schema_version: int = 4
 
     def to_dict(self) -> dict[str, object]:
         """Return the stable machine-readable diagnostic contract."""
@@ -229,6 +239,9 @@ def diagnose_out_of_memory(
         sliding_window_pattern=config.model.sliding_window_pattern,
         sliding_window_size=config.model.sliding_window_size,
         layer_attention_windows=config.model.layer_attention_windows(),
+        use_value_embeddings=config.model.use_value_embeddings,
+        value_embedding_gate_channels=config.model.value_embedding_gate_channels,
+        value_embedding_layer_indices=(config.model.value_embedding_layer_indices()),
         n_embd=config.model.n_embd,
         seq_len=config.model.seq_len,
         device_batch_size=config.train.device_batch_size,

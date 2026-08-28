@@ -274,6 +274,9 @@ def test_aggregation_records_units_quantiles_formulas_and_fallbacks() -> None:
         "description": "fixture memory peak",
     }
     assert payload["optimization_state"]["attention"]["effective_backend"] == "sdpa"
+    assert payload["optimization_state"]["value_embeddings"] == (
+        _model_config().value_embedding_identity()
+    )
     assert payload["optimization_state"]["compile"]["fallback_reason"] == (
         "compile_execution_failed"
     )

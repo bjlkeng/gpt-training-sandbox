@@ -100,12 +100,14 @@ def test_oom_diagnostic_records_attempt_and_ordered_exact_overrides() -> None:
     assert diagnostic.recommendations[3].cli_overrides == ("model.n_layer=1",)
 
     payload = json.loads(diagnostic.to_json())
-    assert payload["schema_version"] == 3
+    assert payload["schema_version"] == 4
     assert payload["memory"]["allocated_bytes"] == 8_000 * 1024**2
     assert payload["memory"]["capacity_bytes"] == 24 * 1024**3
     assert payload["attempt"]["dtype"] == "float32"
     assert payload["attempt"]["n_kv_head"] == 2
     assert payload["attempt"]["use_gqa"] is False
+    assert payload["attempt"]["value_embeddings"]["enabled"] is False
+    assert payload["attempt"]["value_embeddings"]["layer_indices"] == []
     assert payload["recommendations"][0]["priority"] == 1
     assert diagnostic.to_json() == diagnostic.to_json()
 

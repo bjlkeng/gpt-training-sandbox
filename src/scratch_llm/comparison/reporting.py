@@ -174,6 +174,7 @@ def _run_identities(
             "tie_weights": model.tie_weights,
             "unique_parameters": model.unique_parameters,
             "use_gqa": model.use_gqa,
+            "value_embeddings": snapshot.config.model.value_embedding_identity(),
         },
         "hardware": {
             "device": snapshot.config.run.device,

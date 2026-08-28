@@ -464,6 +464,8 @@ class GPTConfig(_SerializableConfig):
     use_gqa: bool = False
     sliding_window_pattern: str = "L"
     sliding_window_size: int = 1
+    use_value_embeddings: bool = False
+    value_embedding_gate_channels: int = 12
     attention_backend: AttentionBackend = "manual"
     attention_fallback_policy: AttentionFallbackPolicy = "allow"
     flash_attention_provider: FlashAttentionProvider = "auto"
@@ -561,6 +563,34 @@ class GPTConfig(_SerializableConfig):
         if any(window is not None for window in self.layer_attention_windows()):
             return self.sliding_window_size, 0
         return None
+
+    def value_embedding_layer_indices(self) -> tuple[int, ...]:
+        """Return alternating value-embedding layers, ending at the final layer."""
+
+        if not self.use_value_embeddings:
+            return ()
+        final_parity = (self.n_layer - 1) % 2
+        return tuple(
+            layer_index
+            for layer_index in range(self.n_layer)
+            if layer_index % 2 == final_parity
+        )
+
+    def value_embedding_identity(self) -> dict[str, object]:
+        """Return the complete gated value-embedding parameterization."""
+
+        if self.n_kv_head is None:  # pragma: no cover - validated resolution.
+            raise RuntimeError("validated config lost n_kv_head")
+        head_dimension = self.n_embd // self.n_head
+        layer_indices = self.value_embedding_layer_indices()
+        return {
+            "enabled": self.use_value_embeddings,
+            "gate_channels": self.value_embedding_gate_channels,
+            "gate_scale": 3.0,
+            "kv_width": self.n_kv_head * head_dimension,
+            "layer_indices": list(layer_indices),
+            "placement": "alternating_by_final_layer_parity",
+        }
 
     def validate(self) -> None:
         _require_choice(self.profile, "model.profile", _MODEL_PROFILES)
@@ -693,6 +723,20 @@ class GPTConfig(_SerializableConfig):
             _fail(
                 "model.sliding_window_size",
                 "must be less than or equal to model.seq_len",
+            )
+        _require_bool(self.use_value_embeddings, "model.use_value_embeddings")
+        _require_positive_int(
+            self.value_embedding_gate_channels,
+            "model.value_embedding_gate_channels",
+        )
+        if (
+            self.use_value_embeddings
+            and self.value_embedding_gate_channels > self.n_embd
+        ):
+            _fail(
+                "model.value_embedding_gate_channels",
+                "must be less than or equal to model.n_embd when value "
+                "embeddings are enabled",
             )
         expected_rmsnorm = self.norm == "rmsnorm"
         if self.use_rmsnorm is not expected_rmsnorm:

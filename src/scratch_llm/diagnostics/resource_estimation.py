@@ -21,7 +21,7 @@ from scratch_llm.training.loop import derive_grad_accum_steps
 
 
 RESOURCE_ESTIMATE_FORMAT: Final = "scratch_llm_training_resource_estimate"
-RESOURCE_ESTIMATE_FORMAT_VERSION: Final = 8
+RESOURCE_ESTIMATE_FORMAT_VERSION: Final = 9
 _BYTES_PER_MIB = 1024**2
 _MAX_SIGNED_64 = 2**63 - 1
 _HEADROOM_NUMERATOR = 1
@@ -83,6 +83,9 @@ class GPTModelSizeEstimate:
     sliding_window_pattern: str
     sliding_window_size: int
     layer_attention_windows: tuple[int | None, ...]
+    use_value_embeddings: bool
+    value_embedding_gate_channels: int
+    value_embedding_layer_indices: tuple[int, ...]
     embedding_width: int
     norm: str
     activation: str
@@ -92,6 +95,8 @@ class GPTModelSizeEstimate:
     tie_weights: bool
     token_embedding_parameters: int
     position_embedding_parameters: int
+    value_embedding_parameters: int
+    value_embedding_gate_parameters: int
     transformer_block_parameters: int
     final_norm_parameters: int
     output_head_parameters: int
@@ -142,6 +147,25 @@ class GPTModelSizeEstimate:
             or self.layer_attention_windows[-1] is not None
         ):
             raise ValueError("the final attention layer must use full context")
+        if not isinstance(self.use_value_embeddings, bool):
+            raise TypeError("use_value_embeddings must be a boolean")
+        require_positive_integer(
+            self.value_embedding_gate_channels,
+            name="value_embedding_gate_channels",
+        )
+        expected_value_layers = (
+            tuple(
+                index
+                for index in range(self.layer_count)
+                if index % 2 == (self.layer_count - 1) % 2
+            )
+            if self.use_value_embeddings
+            else ()
+        )
+        if self.value_embedding_layer_indices != expected_value_layers:
+            raise ValueError(
+                "value_embedding_layer_indices must alternate by final-layer parity"
+            )
         requested = (
             self.requested_depth,
             self.requested_aspect_ratio,
@@ -162,6 +186,8 @@ class GPTModelSizeEstimate:
         for name in (
             "token_embedding_parameters",
             "position_embedding_parameters",
+            "value_embedding_parameters",
+            "value_embedding_gate_parameters",
             "transformer_block_parameters",
             "final_norm_parameters",
             "output_head_parameters",
@@ -195,12 +221,18 @@ class GPTModelSizeEstimate:
                 "position_embeddings": self.position_embedding_parameters,
                 "token_embeddings": self.token_embedding_parameters,
                 "transformer_blocks": self.transformer_block_parameters,
+                "value_embedding_gates": self.value_embedding_gate_parameters,
+                "value_embeddings": self.value_embedding_parameters,
             }
         )
 
     @property
     def embedding_parameters(self) -> int:
-        return self.token_embedding_parameters + self.position_embedding_parameters
+        return (
+            self.token_embedding_parameters
+            + self.position_embedding_parameters
+            + self.value_embedding_parameters
+        )
 
     @property
     def embedding_fraction(self) -> float:
@@ -250,6 +282,14 @@ class GPTModelSizeEstimate:
                 "type": self.position_encoding,
             },
             "qk_norm": self.qk_norm,
+            "value_embeddings": {
+                "enabled": self.use_value_embeddings,
+                "gate_channels": self.value_embedding_gate_channels,
+                "gate_scale": 3.0,
+                "kv_width": self.n_kv_head * (self.embedding_width // self.head_count),
+                "layer_indices": list(self.value_embedding_layer_indices),
+                "placement": "alternating_by_final_layer_parity",
+            },
             "geometry": {
                 "profile": self.profile,
                 "requested": {
@@ -471,8 +511,9 @@ class TrainingMemoryEstimate:
                     "(8 + 2 * mlp_ratio) saved hidden-width values per "
                     "token/layer at configured dtype, float32 materialized "
                     "attention scores and probabilities, final hidden state "
-                    "at configured dtype, and one bool causal mask using each "
-                    "layer effective key span"
+                    "at configured dtype, token-value plus two per-KV-head "
+                    "gate intermediates for enabled value-embedding layers, "
+                    "and one bool causal mask using each layer effective key span"
                 ),
                 "allocator_headroom": (
                     "max(20% of modeled subtotal, 512 MiB) for allocator "
@@ -809,9 +850,24 @@ def estimate_gpt_model_size(config: GPTConfig) -> GPTModelSizeEstimate:
             name="output head parameters",
         )
     )
+    value_embedding_layer_count = len(config.value_embedding_layer_indices())
+    value_embeddings = _checked_product(
+        value_embedding_layer_count,
+        config.vocab_size,
+        kv_width,
+        name="value embedding parameters",
+    )
+    value_embedding_gates = _checked_product(
+        value_embedding_layer_count,
+        config.value_embedding_gate_channels,
+        config.n_kv_head,
+        name="value embedding gate parameters",
+    )
     unique = _checked_sum(
         token_embeddings,
         position_embeddings,
+        value_embeddings,
+        value_embedding_gates,
         transformer_blocks,
         final_norm,
         output_head,
@@ -830,6 +886,9 @@ def estimate_gpt_model_size(config: GPTConfig) -> GPTModelSizeEstimate:
         sliding_window_pattern=config.sliding_window_pattern,
         sliding_window_size=config.sliding_window_size,
         layer_attention_windows=config.layer_attention_windows(),
+        use_value_embeddings=config.use_value_embeddings,
+        value_embedding_gate_channels=config.value_embedding_gate_channels,
+        value_embedding_layer_indices=config.value_embedding_layer_indices(),
         embedding_width=config.n_embd,
         norm=config.norm,
         activation=config.activation,
@@ -839,6 +898,8 @@ def estimate_gpt_model_size(config: GPTConfig) -> GPTModelSizeEstimate:
         tie_weights=config.tie_weights,
         token_embedding_parameters=token_embeddings,
         position_embedding_parameters=position_embeddings,
+        value_embedding_parameters=value_embeddings,
+        value_embedding_gate_parameters=value_embedding_gates,
         transformer_block_parameters=transformer_blocks,
         final_norm_parameters=final_norm,
         output_head_parameters=output_head,
@@ -1073,10 +1134,18 @@ def _estimate_training_memory(
         channels,
         name="final hidden activation elements",
     )
+    value_embedding_activation_elements = _checked_product(
+        len(config.model.value_embedding_layer_indices()),
+        batch,
+        sequence,
+        model.n_kv_head * (channels // model.head_count) + 2 * model.n_kv_head,
+        name="value embedding activation elements",
+    )
     dense_and_final_activation_bytes = _checked_product(
         _checked_sum(
             dense_activation_elements,
             final_hidden_elements,
+            value_embedding_activation_elements,
             name="configured-dtype activation elements",
         ),
         dtype_bytes,

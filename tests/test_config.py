@@ -137,6 +137,8 @@ def test_defaults_cover_the_roadmap_sections_and_are_deterministic() -> None:
             "use_gqa": False,
             "sliding_window_pattern": "L",
             "sliding_window_size": 1,
+            "use_value_embeddings": False,
+            "value_embedding_gate_channels": 12,
             "attention_backend": "manual",
             "attention_fallback_policy": "allow",
             "flash_attention_provider": "auto",
