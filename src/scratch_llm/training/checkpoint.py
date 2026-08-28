@@ -25,7 +25,7 @@ from scratch_llm.training.best_checkpoint import (
     BestCheckpointError,
     ValidationCheckpointState,
 )
-from scratch_llm.config import ProjectConfig, TrainConfig
+from scratch_llm.config import GPTConfig, ProjectConfig, TrainConfig
 from scratch_llm.evaluation.sft_bpb import (
     SFTValidationCheckpointState,
     SFTValidationError,
@@ -351,6 +351,16 @@ def _validate_save_state(
     active_train = _training_config_for_stage(config, training_stage)
     if model.config != config.model:
         raise ValueError("model configuration does not match the resolved config")
+    weights_are_shared = model.lm_head.weight is model.token_embedding.weight
+    if weights_are_shared is not config.model.tie_weights:
+        expected = "shared" if config.model.tie_weights else "independent"
+        actual = "shared" if weights_are_shared else "independent"
+        configured = str(config.model.tie_weights).lower()
+        raise ValueError(
+            "model weight sharing disagrees with model.tie_weights="
+            f"{configured}: expected {expected} token-embedding/LM-head "
+            f"weights, found {actual} weights"
+        )
     if scheduler.optimizer is not optimizer:
         raise ValueError("scheduler must be attached to the saved optimizer")
     if any(
@@ -849,6 +859,7 @@ def _load_checkpoint(
             f"checkpoint step must be a non-negative integer, got {step!r}"
         )
     config = _restore_config(payload["config"])
+    _validate_checkpoint_weight_sharing(payload["model"], config.model)
     active_train = _training_config_for_stage(config, training_stage)
     if step > active_train.max_steps:
         raise CheckpointError(
@@ -945,6 +956,39 @@ def _load_checkpoint(
         training_stage=training_stage,
         base_checkpoint_identity=base_checkpoint_identity,
         precision=precision,
+    )
+
+
+def _validate_checkpoint_weight_sharing(
+    value: object,
+    config: GPTConfig,
+) -> None:
+    """Reject serialized parameter aliasing that contradicts model identity."""
+
+    if not isinstance(value, dict):
+        return
+    token_embedding = value.get("token_embedding.weight")
+    output_head = value.get("lm_head.weight")
+    if not isinstance(token_embedding, torch.Tensor) or not isinstance(
+        output_head, torch.Tensor
+    ):
+        return
+    weights_are_shared = (
+        token_embedding.shape == output_head.shape
+        and token_embedding.stride() == output_head.stride()
+        and token_embedding.storage_offset() == output_head.storage_offset()
+        and token_embedding.untyped_storage().data_ptr()
+        == output_head.untyped_storage().data_ptr()
+    )
+    if weights_are_shared is config.tie_weights:
+        return
+    expected = "shared" if config.tie_weights else "independent"
+    actual = "shared" if weights_are_shared else "independent"
+    configured = str(config.tie_weights).lower()
+    raise CheckpointError(
+        "checkpoint model weight sharing disagrees with model.tie_weights="
+        f"{configured}: expected {expected} token-embedding/LM-head weights, "
+        f"found {actual} weights"
     )
 
 

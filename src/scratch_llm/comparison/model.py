@@ -17,7 +17,7 @@ from scratch_llm.evaluation.nanochat_bpb import NANOCHAT_COMPAT_TRAIN_METRIC
 
 
 RUN_COMPARISON_FORMAT: Final = "scratch_llm_run_comparison"
-RUN_COMPARISON_FORMAT_VERSION: Final = 1
+RUN_COMPARISON_FORMAT_VERSION: Final = 2
 STEP_METRICS: Final = (
     NANOCHAT_COMPAT_TRAIN_METRIC,
     NANOCHAT_MINIMUM_TRAIN_METRIC,
@@ -35,6 +35,7 @@ IDENTITY_FIELDS: Final = (
     "tokenizer_identity",
     "validation_manifest_identity",
     "config_identity",
+    "parameterization",
     "hardware",
     "precision",
     "code_identity",

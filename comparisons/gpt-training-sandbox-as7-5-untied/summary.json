@@ -1,0 +1,72 @@
+{
+  "bead": "gpt-training-sandbox-as7.5",
+  "controls": {
+    "changed_config_fields": [
+      "model.tie_weights",
+      "run.name"
+    ],
+    "device": "NVIDIA GeForce RTX 3090",
+    "dtype": "float32",
+    "embedding_width": 128,
+    "manual_attention": true,
+    "mfu_peak_flops_basis": "rtx3090_fp32_35.58_tflops",
+    "mfu_peak_flops_per_second": 35580000000000,
+    "seed": 1337,
+    "sequence_length": 128,
+    "source_base_commit": "58a2e05",
+    "timed_optimizer_steps": 45,
+    "total_optimizer_steps": 50,
+    "total_processed_model_tokens": 51200,
+    "vocab_size": 265,
+    "warmup_steps_excluded": 5
+  },
+  "deltas": {
+    "peak_memory_mib": 0.517578125,
+    "unique_parameters": 33920,
+    "validation_bpb": -2.657900774454159,
+    "validation_bpb_percent": -21.595494526117978,
+    "warm_tokens_per_second_median": -404.755773460638,
+    "warm_tokens_per_second_percent": -0.8853726318343618
+  },
+  "format": "scratch_llm_bounded_architecture_flag_comparison",
+  "format_version": 1,
+  "interpretation": {
+    "both_modes_tiny_overfit": "passed",
+    "claim": "bounded diagnostic only; no quality or throughput improvement claim",
+    "parameter_delta_formula": "vocab_size * n_embd"
+  },
+  "runs": {
+    "tied": {
+      "checkpoint_identity": "sha256:e0da4fb421a5ed92a5662fa2d1160a9e2b42fd92d7cd98905b4d4c296e0cbc13",
+      "config_identity": "sha256:f34a5dd541ec833ea1641abcf9bc48686725638d2678c2534f91527346463250",
+      "final_training_loss": 2.809593915939331,
+      "peak_memory_mib": 28.6328125,
+      "run_directory": "runs/m10-weight-tied",
+      "tie_weights": true,
+      "unique_parameters": 444160,
+      "validation_bpb": 12.307663393582612,
+      "warm_tokens_per_second_mean": 45605.79200834572,
+      "warm_tokens_per_second_median": 45715.86684603562
+    },
+    "untied": {
+      "checkpoint_identity": "sha256:a2a8656836e6391668948f253befa96d55f2cf30ba0f7d50825bb8eb0496fc3a",
+      "config_identity": "sha256:116c385872f9d7bcd719646a9fb3e917b9d12877a8e289c873f97a2b772fe24c",
+      "final_training_loss": 1.7324693202972412,
+      "peak_memory_mib": 29.150390625,
+      "run_directory": "runs/m10-weight-untied",
+      "tie_weights": false,
+      "unique_parameters": 478080,
+      "validation_bpb": 9.649762619128452,
+      "warm_tokens_per_second_mean": 45231.08853522531,
+      "warm_tokens_per_second_median": 45311.11107257498
+    }
+  },
+  "validation": {
+    "counted_bytes": 261,
+    "counted_tokens": 261,
+    "processed_model_tokens": 261,
+    "protocol": "bounded_contiguous_byte_next_token_bpb_v1",
+    "source_path": "data/fixtures/chat/validation.jsonl",
+    "source_sha256": "b41bd8ad00945ea6c0223a2f1964835de0d6b7105fe76dcfa80639e78823ac3f"
+  }
+}
