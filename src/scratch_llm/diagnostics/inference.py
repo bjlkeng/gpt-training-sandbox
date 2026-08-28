@@ -45,9 +45,9 @@ from scratch_llm.utils import load_json, save_json
 
 
 INFERENCE_BENCHMARK_FORMAT: Final = "scratch_llm_inference_benchmark"
-INFERENCE_BENCHMARK_FORMAT_VERSION: Final = 3
-INFERENCE_BENCHMARK_PROTOCOL_ID: Final = "shared_generation_value_embedding_kv_cache_v3"
-INFERENCE_FLOPS_FORMULA_ID: Final = "gpt_value_embedding_inference_v3"
+INFERENCE_BENCHMARK_FORMAT_VERSION: Final = 4
+INFERENCE_BENCHMARK_PROTOCOL_ID: Final = "shared_generation_residual_scalar_kv_cache_v4"
+INFERENCE_FLOPS_FORMULA_ID: Final = "gpt_residual_scalar_inference_v4"
 INFERENCE_BYTES_FORMULA_ID: Final = "parameter_and_visible_kv_decode_bytes_v2"
 _REPORT_RELATIVE_PATH = Path("metrics/inference_bench.json")
 _SUMMARY_METHOD = "linear_interpolation_r7"
@@ -527,6 +527,7 @@ def build_inference_benchmark(
             "requested_by_mode": {"cached": True, "naive": False},
         },
         "compile": execution.compile_selection.to_dict(),
+        "residual_scalars": model_config.residual_scalar_identity(),
         "value_embeddings": model_config.value_embedding_identity(),
     }
     protocol = {
@@ -555,7 +556,7 @@ def build_inference_benchmark(
             "non_cuda": "no-op",
         },
         "timed_iterations": settings.timed_iterations,
-        "version": 3,
+        "version": 4,
         "warmup_iterations": settings.warmup_iterations,
     }
     payload: dict[str, object] = {
@@ -914,6 +915,7 @@ def _aggregate_mode(
                     "one multiply-accumulate is two FLOPs",
                     "linear projections include QKV, attention output, MLP, and LM head",
                     "enabled value-gate projections are included",
+                    "residual/input scalar multiplies and additions are excluded",
                     "attention includes QK scores and weighted-value products",
                     "embedding lookup, sigmoid, elementwise mixing, normalization, activation, softmax, and sampling FLOPs are excluded",
                 ],

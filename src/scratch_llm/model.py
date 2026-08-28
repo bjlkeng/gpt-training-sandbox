@@ -20,6 +20,21 @@ from scratch_llm.kv_cache import KVCache, KVCacheError, KVCacheTransaction
 from scratch_llm.normalization import RMS_NORM_EPSILON
 
 
+def normalize_initial_token_representation(x: torch.Tensor) -> torch.Tensor:
+    """Return the parameter-free normalized source used by input scalars."""
+
+    if x.ndim != 3 or x.shape[-1] <= 0:
+        raise ValueError("initial token representation must have shape (B, T, C)")
+    if not x.is_floating_point():
+        raise TypeError("initial token representation must be floating point")
+    return F.rms_norm(
+        x,
+        (x.shape[-1],),
+        weight=None,
+        eps=RMS_NORM_EPSILON,
+    )
+
+
 class RMSNorm(nn.Module):
     """Parameter-free native root-mean-square normalization over channels."""
 
@@ -204,6 +219,15 @@ class GPT(nn.Module):
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         if config.tie_weights:
             self.lm_head.weight = self.token_embedding.weight
+        self.residual_scalars: nn.Parameter | None
+        self.input_scalars: nn.Parameter | None
+        if config.use_residual_scalars:
+            residual_values, input_values = config.residual_scalar_initial_values()
+            self.residual_scalars = nn.Parameter(torch.tensor(residual_values))
+            self.input_scalars = nn.Parameter(torch.tensor(input_values))
+        else:
+            self.register_parameter("residual_scalars", None)
+            self.register_parameter("input_scalars", None)
 
     def attention_backend_selection(self) -> AttentionBackendSelection:
         """Return the common backend outcome observed by all decoder blocks."""
@@ -336,8 +360,23 @@ class GPT(nn.Module):
             if self.position_embedding is not None:
                 x = x + self.position_embedding(positions)
             x = self.embedding_dropout(x)
+            x0 = (
+                normalize_initial_token_representation(x)
+                if self.config.use_residual_scalars
+                else None
+            )
             rotary_positions = positions if self.config.use_rope else None
             for block_index, block in enumerate(self.blocks):
+                if x0 is not None:
+                    if self.residual_scalars is None or self.input_scalars is None:
+                        raise RuntimeError(
+                            "enabled residual scalars lost their parameter vectors"
+                        )
+                    residual_scale = self.residual_scalars[block_index].to(
+                        dtype=x.dtype
+                    )
+                    input_scale = self.input_scalars[block_index].to(dtype=x.dtype)
+                    x = residual_scale * x + input_scale * x0
                 value_token_ids = (
                     token_ids if self.config.use_value_embeddings else None
                 )

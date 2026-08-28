@@ -29,6 +29,10 @@ class OOMAttempt:
     use_value_embeddings: bool
     value_embedding_gate_channels: int
     value_embedding_layer_indices: tuple[int, ...]
+    use_residual_scalars: bool
+    residual_scalar_init: str
+    residual_scalar_initial_values: tuple[float, ...]
+    input_scalar_initial_values: tuple[float, ...]
     n_embd: int
     seq_len: int
     device_batch_size: int
@@ -49,6 +53,18 @@ class OOMAttempt:
             "n_kv_head": self.n_kv_head,
             "n_layer": self.n_layer,
             "seq_len": self.seq_len,
+            "residual_scalars": {
+                "enabled": self.use_residual_scalars,
+                "initializer": self.residual_scalar_init,
+                "input_initial_values": list(self.input_scalar_initial_values),
+                "input_source": (
+                    "parameter_free_rmsnorm_initial_token_representation"
+                ),
+                "placement": "before_each_transformer_block",
+                "residual_initial_values": list(
+                    self.residual_scalar_initial_values
+                ),
+            },
             "sliding_window": {
                 "layer_attention_windows": list(self.layer_attention_windows),
                 "pattern": self.sliding_window_pattern,
@@ -117,7 +133,7 @@ class OOMDiagnostic:
     attempt: OOMAttempt
     memory: AcceleratorMemorySnapshot
     recommendations: tuple[OOMRecommendation, ...]
-    schema_version: int = 4
+    schema_version: int = 5
 
     def to_dict(self) -> dict[str, object]:
         """Return the stable machine-readable diagnostic contract."""
@@ -227,6 +243,10 @@ def diagnose_out_of_memory(
     )
     if config.model.n_kv_head is None:  # pragma: no cover - validated resolution.
         raise RuntimeError("validated config lost n_kv_head")
+    residual_values, input_values = config.model.residual_scalar_initial_values()
+    if not config.model.use_residual_scalars:
+        residual_values = ()
+        input_values = ()
     attempt = OOMAttempt(
         device=config.run.device,
         dtype=config.train.dtype,
@@ -242,6 +262,10 @@ def diagnose_out_of_memory(
         use_value_embeddings=config.model.use_value_embeddings,
         value_embedding_gate_channels=config.model.value_embedding_gate_channels,
         value_embedding_layer_indices=(config.model.value_embedding_layer_indices()),
+        use_residual_scalars=config.model.use_residual_scalars,
+        residual_scalar_init=config.model.residual_scalar_init,
+        residual_scalar_initial_values=residual_values,
+        input_scalar_initial_values=input_values,
         n_embd=config.model.n_embd,
         seq_len=config.model.seq_len,
         device_batch_size=config.train.device_batch_size,

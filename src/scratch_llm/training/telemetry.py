@@ -16,13 +16,14 @@ from scratch_llm._validation import (
 from scratch_llm.config import GPTConfig, TrainConfig
 
 
-TRAINING_FLOPS_FORMULA_ID: Final = "gpt_value_embedding_training_v3"
+TRAINING_FLOPS_FORMULA_ID: Final = "gpt_residual_scalar_training_v4"
 _TRAINING_FLOPS_ASSUMPTIONS: Final = (
     "one multiply-accumulate is two FLOPs",
     "backward costs twice the modeled forward matrix multiplications",
     "full-context layers execute sequence-length score and value products",
     "short-window layers use their declared maximum visible key span",
     "enabled value-gate projections are included",
+    "residual/input scalar multiplies and additions are excluded",
     "embedding lookup, sigmoid, elementwise mixing, normalization, activation, "
     "bias, softmax, dropout, loss, clipping, optimizer, and scheduler FLOPs "
     "are excluded",
@@ -44,6 +45,10 @@ class GPTTrainingFlopsEstimate:
     use_value_embeddings: bool
     value_embedding_gate_channels: int
     value_embedding_layer_indices: tuple[int, ...]
+    use_residual_scalars: bool
+    residual_scalar_init: str
+    residual_scalar_initial_values: tuple[float, ...]
+    input_scalar_initial_values: tuple[float, ...]
     sequence_length: int
     executed_weight_elements: int
     linear_flops_per_token: int
@@ -77,6 +82,18 @@ class GPTTrainingFlopsEstimate:
                 "layer_key_spans": list(self.layer_key_spans),
                 "pattern": self.sliding_window_pattern,
                 "short_window_size": self.sliding_window_size,
+            },
+            "residual_scalars": {
+                "enabled": self.use_residual_scalars,
+                "initializer": self.residual_scalar_init,
+                "input_initial_values": list(self.input_scalar_initial_values),
+                "input_source": (
+                    "parameter_free_rmsnorm_initial_token_representation"
+                ),
+                "placement": "before_each_transformer_block",
+                "residual_initial_values": list(
+                    self.residual_scalar_initial_values
+                ),
             },
             "value_embeddings": {
                 "enabled": self.use_value_embeddings,
@@ -310,6 +327,12 @@ def estimate_gpt_training_flops(config: GPTConfig) -> GPTTrainingFlopsEstimate:
         for window in config.layer_attention_windows()
     )
     attention_flops_per_token = 12 * channels * sum(layer_key_spans)
+    residual_initial_values, input_initial_values = (
+        config.residual_scalar_initial_values()
+    )
+    if not config.use_residual_scalars:
+        residual_initial_values = ()
+        input_initial_values = ()
     return GPTTrainingFlopsEstimate(
         formula_id=TRAINING_FLOPS_FORMULA_ID,
         tie_weights=config.tie_weights,
@@ -322,6 +345,10 @@ def estimate_gpt_training_flops(config: GPTConfig) -> GPTTrainingFlopsEstimate:
         use_value_embeddings=config.use_value_embeddings,
         value_embedding_gate_channels=config.value_embedding_gate_channels,
         value_embedding_layer_indices=config.value_embedding_layer_indices(),
+        use_residual_scalars=config.use_residual_scalars,
+        residual_scalar_init=config.residual_scalar_init,
+        residual_scalar_initial_values=residual_initial_values,
+        input_scalar_initial_values=input_initial_values,
         sequence_length=config.seq_len,
         executed_weight_elements=executed_weight_elements,
         linear_flops_per_token=linear_flops_per_token,

@@ -1466,6 +1466,43 @@ throughput, cached decode latency, parameter/cache memory, and observed peak
 memory in
 [`comparisons/gpt-training-sandbox-as7-9-value-embeddings`](comparisons/gpt-training-sandbox-as7-9-value-embeddings/README.md).
 
+### Residual and input scalars
+
+Per-layer residual and input scalars are experimental and remain off by
+default with `model.use_residual_scalars: false`. When enabled, the model
+computes one immutable, parameter-free RMS-normalized copy of the initial
+token representation and applies the following recurrence immediately before
+each transformer block:
+
+```text
+x0 = rms_norm(initial_token_representation)
+x = residual_scalars[layer] * x + input_scalars[layer] * x0
+```
+
+The two learned parameter vectors each have length `n_layer`. The `neutral`
+initializer uses residual scalars of one and input scalars of zero, so enabling
+it preserves baseline logits exactly before learning. The `nanochat_depth`
+initializer follows the
+[pinned nanochat depth schedule](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/gpt.py):
+
+```text
+residual[layer] = 1.15 - 0.10 * layer / max(n_layer - 1, 1)
+input[layer]    = 0.20 - 0.15 * layer / max(n_layer - 1, 1)
+```
+
+Disabled mode creates no scalar parameter or state key and preserves the prior
+forward path and initialization sequence exactly. Both learned absolute
+positions and RoPE are supported, as are MHA/GQA, sliding windows, gated value
+embeddings, activation checkpointing, and cached decoding. Resource, FLOP,
+OOM, run-comparison, checkpoint, and inference identities record whether the
+recurrence is enabled, its initializer, placement, normalization source, and
+initial values.
+
+The bounded same-seed RTX 3090 disabled/neutral/pinned comparison records BPB,
+training throughput, learned vectors, cached decode latency, parameter/cache
+memory, and observed peak memory in
+[`comparisons/gpt-training-sandbox-as7-10-residual-scalars`](comparisons/gpt-training-sandbox-as7-10-residual-scalars/README.md).
+
 ### Base-model orchestration and resource preflight
 
 The three named presets and repeatable dotted overrides are the orchestration
