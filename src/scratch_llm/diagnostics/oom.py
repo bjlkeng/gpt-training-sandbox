@@ -21,6 +21,8 @@ class OOMAttempt:
     vocab_size: int
     n_layer: int
     n_head: int
+    n_kv_head: int
+    use_gqa: bool
     n_embd: int
     seq_len: int
     device_batch_size: int
@@ -38,10 +40,12 @@ class OOMAttempt:
             "model_profile": self.model_profile,
             "n_embd": self.n_embd,
             "n_head": self.n_head,
+            "n_kv_head": self.n_kv_head,
             "n_layer": self.n_layer,
             "seq_len": self.seq_len,
             "total_batch_size_tokens": self.total_batch_size_tokens,
             "vocab_size": self.vocab_size,
+            "use_gqa": self.use_gqa,
         }
 
 
@@ -95,7 +99,7 @@ class OOMDiagnostic:
     attempt: OOMAttempt
     memory: AcceleratorMemorySnapshot
     recommendations: tuple[OOMRecommendation, ...]
-    schema_version: int = 1
+    schema_version: int = 2
 
     def to_dict(self) -> dict[str, object]:
         """Return the stable machine-readable diagnostic contract."""
@@ -203,6 +207,8 @@ def diagnose_out_of_memory(
     grad_accum_steps = config.train.total_batch_size_tokens // (
         config.train.device_batch_size * config.model.seq_len
     )
+    if config.model.n_kv_head is None:  # pragma: no cover - validated resolution.
+        raise RuntimeError("validated config lost n_kv_head")
     attempt = OOMAttempt(
         device=config.run.device,
         dtype=config.train.dtype,
@@ -210,6 +216,8 @@ def diagnose_out_of_memory(
         vocab_size=config.model.vocab_size,
         n_layer=config.model.n_layer,
         n_head=config.model.n_head,
+        n_kv_head=config.model.n_kv_head,
+        use_gqa=config.model.use_gqa,
         n_embd=config.model.n_embd,
         seq_len=config.model.seq_len,
         device_batch_size=config.train.device_batch_size,

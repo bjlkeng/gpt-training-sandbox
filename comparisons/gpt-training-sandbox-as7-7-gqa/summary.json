@@ -1,0 +1,99 @@
+{
+  "bead": "gpt-training-sandbox-as7.7",
+  "controls": {
+    "attention_backend": "manual",
+    "changed_config_fields": [
+      "model.n_kv_head",
+      "model.use_gqa",
+      "run.name"
+    ],
+    "device": "NVIDIA GeForce RTX 3090",
+    "dtype": "float32",
+    "inference_generated_tokens": 64,
+    "inference_prompt_tokens": 16,
+    "inference_timed_iterations": 10,
+    "inference_warmup_iterations": 2,
+    "memory_bandwidth_basis": "rtx3090_936.2_gbps",
+    "memory_bandwidth_bytes_per_second": 936200000000,
+    "mfu_peak_flops_basis": "rtx3090_fp32_35.58_tflops",
+    "mfu_peak_flops_per_second": 35580000000000,
+    "n_head": 4,
+    "seed": 1337,
+    "sequence_length": 128,
+    "source_base_commit": "300ae5d",
+    "timed_optimizer_steps": 45,
+    "total_optimizer_steps": 50,
+    "total_processed_model_tokens": 51200,
+    "warmup_steps_excluded": 5
+  },
+  "deltas": {
+    "cache_allocated_bytes": -131072,
+    "cache_bytes_per_token": -1024,
+    "cached_decode_ms_per_token_p50": 0.03681042128139067,
+    "cached_decode_ms_per_token_percent": 3.1926288955860276,
+    "cached_peak_memory_mib": -0.25,
+    "peak_training_memory_mib": -0.5,
+    "unique_parameters": -32768,
+    "validation_bpb": 5.6880941644546645,
+    "validation_bpb_percent": 45.75268291959309,
+    "warm_tokens_per_second_mean": 1562.9429224776977,
+    "warm_tokens_per_second_mean_percent": 3.457123239793763,
+    "warm_tokens_per_second_median": -2378.9457774534458,
+    "warm_tokens_per_second_median_percent": -5.252780487207102
+  },
+  "format": "scratch_llm_bounded_architecture_flag_comparison",
+  "format_version": 1,
+  "interpretation": {
+    "all_training_telemetry_finite": true,
+    "cache_storage_reduction_is_exact": true,
+    "claim": "bounded diagnostic only; no quality or throughput improvement claim",
+    "mha_gqa_mqa_tiny_overfit": "passed",
+    "timing_note": "mean and median training throughput disagree on direction"
+  },
+  "runs": {
+    "gqa": {
+      "cache_allocated_bytes": 131072,
+      "cache_bytes_per_token": 1024,
+      "cached_decode_ms_per_token_p50": 1.1897919448240408,
+      "cached_peak_memory_mib": 9.9541015625,
+      "cached_tokens_per_second_p50": 840.4830819302558,
+      "checkpoint_identity": "sha256:b85bf9a346f1219a4ad3b6e821b1a500650b2d9e4fe315e2c1d9ff2d63d7ed01",
+      "config_identity": "sha256:abf6491c4c0427ecf392168802339f68402055b19d72cc0016a4e3cd39046e95",
+      "final_training_loss": 2.7927446365356445,
+      "n_kv_head": 2,
+      "peak_training_memory_mib": 28.6328125,
+      "run_directory": "runs/m10-gqa-2kv",
+      "unique_parameters": 411392,
+      "use_gqa": true,
+      "validation_bpb": 18.120357807771633,
+      "warm_tokens_per_second_mean": 46772.29225915151,
+      "warm_tokens_per_second_median": 42910.3211783475
+    },
+    "mha": {
+      "cache_allocated_bytes": 262144,
+      "cache_bytes_per_token": 2048,
+      "cached_decode_ms_per_token_p50": 1.1529815235426502,
+      "cached_peak_memory_mib": 10.2041015625,
+      "cached_tokens_per_second_p50": 867.3167066421232,
+      "checkpoint_identity": "sha256:33e38eff1682ae76ccbf1b453c61d9f034616f7b6f9bba731bd6fd57a8b9fc67",
+      "config_identity": "sha256:160ab5233fa46720ce85e308d8029ef9b837748aa3681a0c34ea9fb419d32bc5",
+      "final_training_loss": 2.7741048336029053,
+      "n_kv_head": 4,
+      "peak_training_memory_mib": 29.1328125,
+      "run_directory": "runs/m10-gqa-mha",
+      "unique_parameters": 444160,
+      "use_gqa": false,
+      "validation_bpb": 12.432263643316968,
+      "warm_tokens_per_second_mean": 45209.34933667381,
+      "warm_tokens_per_second_median": 45289.266955800944
+    }
+  },
+  "validation": {
+    "counted_bytes": 261,
+    "counted_tokens": 261,
+    "processed_model_tokens": 261,
+    "protocol": "bounded_contiguous_byte_next_token_bpb_v1",
+    "source_path": "data/fixtures/chat/validation.jsonl",
+    "source_sha256": "b41bd8ad00945ea6c0223a2f1964835de0d6b7105fe76dcfa80639e78823ac3f"
+  }
+}

@@ -96,6 +96,7 @@ train:
         "n_layer": 4,
         "n_embd": 256,
         "n_head": 2,
+        "n_kv_head": 2,
     }
 
 

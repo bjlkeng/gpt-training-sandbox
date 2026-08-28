@@ -45,7 +45,7 @@ def _linear_modules(model: GPT) -> dict[str, nn.Linear]:
 
 def _expected_projection_names(layer_count: int) -> set[str]:
     return {
-        *(f"blocks.{index}.attn.qkv" for index in range(layer_count)),
+        *(f"blocks.{index}.attn.qkv_projection" for index in range(layer_count)),
         *(f"blocks.{index}.attn.out_proj" for index in range(layer_count)),
         *(f"blocks.{index}.mlp.in_proj" for index in range(layer_count)),
         *(f"blocks.{index}.mlp.out_proj" for index in range(layer_count)),
@@ -178,9 +178,9 @@ def test_bias_architecture_mismatch_fails_with_exact_missing_or_unexpected_keys(
     biased = GPT(_config(bias=True))
     expected = _expected_added_bias_keys(biased.config)
 
-    with pytest.raises(RuntimeError, match="Missing key.*attn.qkv.bias"):
+    with pytest.raises(RuntimeError, match="Missing key.*attn.qkv_projection.bias"):
         biased.load_state_dict(bias_free.state_dict(), strict=True)
-    with pytest.raises(RuntimeError, match="Unexpected key.*attn.qkv.bias"):
+    with pytest.raises(RuntimeError, match="Unexpected key.*attn.qkv_projection.bias"):
         bias_free.load_state_dict(biased.state_dict(), strict=True)
     assert set(biased.state_dict()) - set(bias_free.state_dict()) == expected
 
