@@ -41,6 +41,7 @@ model:
   norm: layernorm
   activation: gelu
   use_rope: false
+  rope_theta: 10000.0
   use_rmsnorm: false
   use_qk_norm: false
   use_gqa: false
