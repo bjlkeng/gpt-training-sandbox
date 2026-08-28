@@ -1,0 +1,178 @@
+{
+  "bead": "gpt-training-sandbox-as7.10",
+  "controls": {
+    "attention_backend": "manual",
+    "changed_config_fields": [
+      "model.residual_scalar_init",
+      "model.use_residual_scalars",
+      "run.name"
+    ],
+    "device": "cuda",
+    "dtype": "float32",
+    "inference": {
+      "generated_tokens": 64,
+      "prompt_tokens": 16,
+      "timed_iterations": 10,
+      "warmup_iterations": 2
+    },
+    "mfu_peak_flops_basis": "rtx3090_fp32_35.58_tflops",
+    "seed": 1337,
+    "sequence_length": 128,
+    "source_base_commit": "b1a2dca",
+    "training_steps": 50
+  },
+  "deltas_vs_off": {
+    "neutral": {
+      "cache_allocated_bytes": 0,
+      "cache_read_bytes": 0,
+      "cache_write_bytes": 0,
+      "decode_latency_p50_ms_per_token": 0.06934593889921437,
+      "final_training_loss": -0.27025771141052246,
+      "inference_peak_memory_mib": 0.0087890625,
+      "parameter_bytes": 16,
+      "training_peak_memory_mib": 0.3798828125,
+      "unique_parameters": 4,
+      "validation_bpb": 0.05348722052476518,
+      "warm_tokens_per_second_mean": -5897.52268218901,
+      "warm_tokens_per_second_median": -5850.729687816885
+    },
+    "pinned": {
+      "cache_allocated_bytes": 0,
+      "cache_read_bytes": 0,
+      "cache_write_bytes": 0,
+      "decode_latency_p50_ms_per_token": 0.06939101934669512,
+      "final_training_loss": -0.2058882713317871,
+      "inference_peak_memory_mib": 0.0087890625,
+      "parameter_bytes": 16,
+      "training_peak_memory_mib": 0.3798828125,
+      "unique_parameters": 4,
+      "validation_bpb": 0.7279640806430763,
+      "warm_tokens_per_second_mean": -5496.533192716321,
+      "warm_tokens_per_second_median": -5840.124220661746
+    }
+  },
+  "format": "scratch_llm_bounded_architecture_flag_comparison",
+  "format_version": 1,
+  "interpretation": "Both scalar initializers improved final training loss at this 50-step budget, but neutral slightly regressed fixture BPB and the pinned schedule regressed it more. Both added four parameters, left KV-cache traffic unchanged, reduced observed training and decode throughput, and slightly increased peak memory, so the feature remains experimental and disabled by default.",
+  "runs": {
+    "neutral": {
+      "cache_allocated_bytes": 262144,
+      "cache_read_bytes": 6193152,
+      "cache_write_bytes": 129024,
+      "checkpoint_identity": "sha256:6f96fb5c9abae9d4893508eff7ea90463b7d0544a64484ec749c27bb1b05bf34",
+      "config_identity": "sha256:4cf8c7028bcc6f719ab30fbfb321e1a1bd4cfa2cb71d884c3acb75e11b020ef5",
+      "decode_latency_p50_ms_per_token": 1.2367261972810542,
+      "final_training_loss": 2.5393362045288086,
+      "inference_peak_memory_mib": 10.212890625,
+      "initial_input_scalars": [
+        0.0,
+        0.0
+      ],
+      "initial_residual_scalars": [
+        1.0,
+        1.0
+      ],
+      "initializer": "neutral",
+      "learned_input_scalar_summary": {
+        "max": -0.033345021307468414,
+        "mean": -0.0518595315515995,
+        "min": -0.07037404179573059
+      },
+      "learned_input_scalars": [
+        -0.033345021307468414,
+        -0.07037404179573059
+      ],
+      "learned_residual_scalar_summary": {
+        "max": 0.9848489165306091,
+        "mean": 0.9753838777542114,
+        "min": 0.9659188389778137
+      },
+      "learned_residual_scalars": [
+        0.9659188389778137,
+        0.9848489165306091
+      ],
+      "parameter_bytes": 1776656,
+      "parameter_delta": 4,
+      "run_directory": "runs/m10-scalars-neutral",
+      "training_peak_memory_mib": 29.0126953125,
+      "unique_parameters": 444164,
+      "validation_bpb": 12.361150614107377,
+      "warm_tokens_per_second_mean": 39839.663540199756,
+      "warm_tokens_per_second_median": 40005.738198523
+    },
+    "off": {
+      "cache_allocated_bytes": 262144,
+      "cache_read_bytes": 6193152,
+      "cache_write_bytes": 129024,
+      "checkpoint_identity": "sha256:1808d05eb5c76a4392d989835fe9c01de89cabe90baeb707021a2e3ee104c136",
+      "config_identity": "sha256:4b8a22c19517d8a51ba9af0c6f9c732722419f897a1cdc78151207e06a694fbc",
+      "decode_latency_p50_ms_per_token": 1.1673802583818398,
+      "final_training_loss": 2.809593915939331,
+      "inference_peak_memory_mib": 10.2041015625,
+      "initial_input_scalars": [],
+      "initial_residual_scalars": [],
+      "initializer": "disabled",
+      "learned_input_scalars": [],
+      "learned_residual_scalars": [],
+      "parameter_bytes": 1776640,
+      "parameter_delta": 0,
+      "run_directory": "runs/m10-scalars-off",
+      "training_peak_memory_mib": 28.6328125,
+      "unique_parameters": 444160,
+      "validation_bpb": 12.307663393582612,
+      "warm_tokens_per_second_mean": 45737.186222388766,
+      "warm_tokens_per_second_median": 45856.46788633989
+    },
+    "pinned": {
+      "cache_allocated_bytes": 262144,
+      "cache_read_bytes": 6193152,
+      "cache_write_bytes": 129024,
+      "checkpoint_identity": "sha256:9bfd482fc9d923f91d5b97d6f34293ac5420bf3c480d183a146c6a2482f1719b",
+      "config_identity": "sha256:4e1d0193fc06b83e50395a43220ba3a5714e882b595c2a41b6e7726e5eb59735",
+      "decode_latency_p50_ms_per_token": 1.236771277728535,
+      "final_training_loss": 2.603705644607544,
+      "inference_peak_memory_mib": 10.212890625,
+      "initial_input_scalars": [
+        0.2,
+        0.05
+      ],
+      "initial_residual_scalars": [
+        1.15,
+        1.05
+      ],
+      "initializer": "nanochat_depth",
+      "learned_input_scalar_summary": {
+        "max": 0.15310832858085632,
+        "mean": 0.06041586957871914,
+        "min": -0.032276589423418045
+      },
+      "learned_input_scalars": [
+        0.15310832858085632,
+        -0.032276589423418045
+      ],
+      "learned_residual_scalar_summary": {
+        "max": 1.1020845174789429,
+        "mean": 1.05956369638443,
+        "min": 1.017042875289917
+      },
+      "learned_residual_scalars": [
+        1.1020845174789429,
+        1.017042875289917
+      ],
+      "parameter_bytes": 1776656,
+      "parameter_delta": 4,
+      "run_directory": "runs/m10-scalars-pinned",
+      "training_peak_memory_mib": 29.0126953125,
+      "unique_parameters": 444164,
+      "validation_bpb": 13.035627474225688,
+      "warm_tokens_per_second_mean": 40240.653029672445,
+      "warm_tokens_per_second_median": 40016.34366567814
+    }
+  },
+  "validation": {
+    "fixture_bytes": 261,
+    "fixture_sha256": "b41bd8ad00945ea6c0223a2f1964835de0d6b7105fe76dcfa80639e78823ac3f",
+    "fixture_source": "data/fixtures/chat/validation.jsonl",
+    "scope": "bounded diagnostic; not CORE or full-corpus evaluation"
+  }
+}

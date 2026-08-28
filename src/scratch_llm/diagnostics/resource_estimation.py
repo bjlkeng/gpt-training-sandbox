@@ -21,7 +21,7 @@ from scratch_llm.training.loop import derive_grad_accum_steps
 
 
 RESOURCE_ESTIMATE_FORMAT: Final = "scratch_llm_training_resource_estimate"
-RESOURCE_ESTIMATE_FORMAT_VERSION: Final = 9
+RESOURCE_ESTIMATE_FORMAT_VERSION: Final = 10
 _BYTES_PER_MIB = 1024**2
 _MAX_SIGNED_64 = 2**63 - 1
 _HEADROOM_NUMERATOR = 1
@@ -86,6 +86,10 @@ class GPTModelSizeEstimate:
     use_value_embeddings: bool
     value_embedding_gate_channels: int
     value_embedding_layer_indices: tuple[int, ...]
+    use_residual_scalars: bool
+    residual_scalar_init: str
+    residual_scalar_initial_values: tuple[float, ...]
+    input_scalar_initial_values: tuple[float, ...]
     embedding_width: int
     norm: str
     activation: str
@@ -97,6 +101,7 @@ class GPTModelSizeEstimate:
     position_embedding_parameters: int
     value_embedding_parameters: int
     value_embedding_gate_parameters: int
+    residual_scalar_parameters: int
     transformer_block_parameters: int
     final_norm_parameters: int
     output_head_parameters: int
@@ -166,6 +171,17 @@ class GPTModelSizeEstimate:
             raise ValueError(
                 "value_embedding_layer_indices must alternate by final-layer parity"
             )
+        if not isinstance(self.use_residual_scalars, bool):
+            raise TypeError("use_residual_scalars must be a boolean")
+        if self.residual_scalar_init not in {"neutral", "nanochat_depth"}:
+            raise ValueError("residual_scalar_init is invalid")
+        expected_scalar_length = self.layer_count if self.use_residual_scalars else 0
+        if len(self.residual_scalar_initial_values) != expected_scalar_length:
+            raise ValueError(
+                "residual_scalar_initial_values must match enabled layer count"
+            )
+        if len(self.input_scalar_initial_values) != expected_scalar_length:
+            raise ValueError("input_scalar_initial_values must match enabled layer count")
         requested = (
             self.requested_depth,
             self.requested_aspect_ratio,
@@ -188,6 +204,7 @@ class GPTModelSizeEstimate:
             "position_embedding_parameters",
             "value_embedding_parameters",
             "value_embedding_gate_parameters",
+            "residual_scalar_parameters",
             "transformer_block_parameters",
             "final_norm_parameters",
             "output_head_parameters",
@@ -219,6 +236,7 @@ class GPTModelSizeEstimate:
                 "final_norm": self.final_norm_parameters,
                 "output_head": self.output_head_parameters,
                 "position_embeddings": self.position_embedding_parameters,
+                "residual_scalars": self.residual_scalar_parameters,
                 "token_embeddings": self.token_embedding_parameters,
                 "transformer_blocks": self.transformer_block_parameters,
                 "value_embedding_gates": self.value_embedding_gate_parameters,
@@ -282,6 +300,18 @@ class GPTModelSizeEstimate:
                 "type": self.position_encoding,
             },
             "qk_norm": self.qk_norm,
+            "residual_scalars": {
+                "enabled": self.use_residual_scalars,
+                "initializer": self.residual_scalar_init,
+                "input_initial_values": list(self.input_scalar_initial_values),
+                "input_source": (
+                    "parameter_free_rmsnorm_initial_token_representation"
+                ),
+                "placement": "before_each_transformer_block",
+                "residual_initial_values": list(
+                    self.residual_scalar_initial_values
+                ),
+            },
             "value_embeddings": {
                 "enabled": self.use_value_embeddings,
                 "gate_channels": self.value_embedding_gate_channels,
@@ -513,6 +543,7 @@ class TrainingMemoryEstimate:
                     "attention scores and probabilities, final hidden state "
                     "at configured dtype, token-value plus two per-KV-head "
                     "gate intermediates for enabled value-embedding layers, "
+                    "one normalized x0 copy when residual scalars are enabled, "
                     "and one bool causal mask using each layer effective key span"
                 ),
                 "allocator_headroom": (
@@ -863,11 +894,27 @@ def estimate_gpt_model_size(config: GPTConfig) -> GPTModelSizeEstimate:
         config.n_kv_head,
         name="value embedding gate parameters",
     )
+    residual_scalar_parameters = (
+        _checked_product(
+            2,
+            config.n_layer,
+            name="residual and input scalar parameters",
+        )
+        if config.use_residual_scalars
+        else 0
+    )
+    residual_initial_values, input_initial_values = (
+        config.residual_scalar_initial_values()
+    )
+    if not config.use_residual_scalars:
+        residual_initial_values = ()
+        input_initial_values = ()
     unique = _checked_sum(
         token_embeddings,
         position_embeddings,
         value_embeddings,
         value_embedding_gates,
+        residual_scalar_parameters,
         transformer_blocks,
         final_norm,
         output_head,
@@ -889,6 +936,10 @@ def estimate_gpt_model_size(config: GPTConfig) -> GPTModelSizeEstimate:
         use_value_embeddings=config.use_value_embeddings,
         value_embedding_gate_channels=config.value_embedding_gate_channels,
         value_embedding_layer_indices=config.value_embedding_layer_indices(),
+        use_residual_scalars=config.use_residual_scalars,
+        residual_scalar_init=config.residual_scalar_init,
+        residual_scalar_initial_values=residual_initial_values,
+        input_scalar_initial_values=input_initial_values,
         embedding_width=config.n_embd,
         norm=config.norm,
         activation=config.activation,
@@ -900,6 +951,7 @@ def estimate_gpt_model_size(config: GPTConfig) -> GPTModelSizeEstimate:
         position_embedding_parameters=position_embeddings,
         value_embedding_parameters=value_embeddings,
         value_embedding_gate_parameters=value_embedding_gates,
+        residual_scalar_parameters=residual_scalar_parameters,
         transformer_block_parameters=transformer_blocks,
         final_norm_parameters=final_norm,
         output_head_parameters=output_head,
@@ -1141,11 +1193,22 @@ def _estimate_training_memory(
         model.n_kv_head * (channels // model.head_count) + 2 * model.n_kv_head,
         name="value embedding activation elements",
     )
+    residual_scalar_activation_elements = (
+        _checked_product(
+            batch,
+            sequence,
+            channels,
+            name="residual scalar x0 activation elements",
+        )
+        if config.model.use_residual_scalars
+        else 0
+    )
     dense_and_final_activation_bytes = _checked_product(
         _checked_sum(
             dense_activation_elements,
             final_hidden_elements,
             value_embedding_activation_elements,
+            residual_scalar_activation_elements,
             name="configured-dtype activation elements",
         ),
         dtype_bytes,

@@ -277,6 +277,9 @@ def test_aggregation_records_units_quantiles_formulas_and_fallbacks() -> None:
     assert payload["optimization_state"]["value_embeddings"] == (
         _model_config().value_embedding_identity()
     )
+    assert payload["optimization_state"]["residual_scalars"] == (
+        _model_config().residual_scalar_identity()
+    )
     assert payload["optimization_state"]["compile"]["fallback_reason"] == (
         "compile_execution_failed"
     )

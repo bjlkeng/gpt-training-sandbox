@@ -47,6 +47,7 @@ ModelProfile = Literal["simple_gpt", "nanochat_depth"]
 AttentionBackend = Literal["manual", "sdpa", "flash"]
 AttentionFallbackPolicy = Literal["allow", "error"]
 FlashAttentionProvider = Literal["auto", "fa2", "fa3"]
+ResidualScalarInit = Literal["neutral", "nanochat_depth"]
 TrainDType = Literal["float32", "float16", "bfloat16"]
 CompileMode = Literal["default", "reduce-overhead", "max-autotune"]
 CompileFallbackPolicy = Literal["eager", "error"]
@@ -68,6 +69,7 @@ _ATTENTION_FALLBACK_POLICIES: frozenset[str] = frozenset(
     get_args(AttentionFallbackPolicy)
 )
 _FLASH_ATTENTION_PROVIDERS: frozenset[str] = frozenset(get_args(FlashAttentionProvider))
+_RESIDUAL_SCALAR_INITS: frozenset[str] = frozenset(get_args(ResidualScalarInit))
 _TRAIN_DTYPES: frozenset[str] = frozenset(get_args(TrainDType))
 _COMPILE_MODES: frozenset[str] = frozenset(get_args(CompileMode))
 _COMPILE_FALLBACK_POLICIES: frozenset[str] = frozenset(get_args(CompileFallbackPolicy))
@@ -466,6 +468,8 @@ class GPTConfig(_SerializableConfig):
     sliding_window_size: int = 1
     use_value_embeddings: bool = False
     value_embedding_gate_channels: int = 12
+    use_residual_scalars: bool = False
+    residual_scalar_init: ResidualScalarInit = "neutral"
     attention_backend: AttentionBackend = "manual"
     attention_fallback_policy: AttentionFallbackPolicy = "allow"
     flash_attention_provider: FlashAttentionProvider = "auto"
@@ -590,6 +594,41 @@ class GPTConfig(_SerializableConfig):
             "kv_width": self.n_kv_head * head_dimension,
             "layer_indices": list(layer_indices),
             "placement": "alternating_by_final_layer_parity",
+        }
+
+    def residual_scalar_initial_values(
+        self,
+    ) -> tuple[tuple[float, ...], tuple[float, ...]]:
+        """Return residual-stream and normalized-input initializer values."""
+
+        if self.residual_scalar_init == "neutral":
+            return (1.0,) * self.n_layer, (0.0,) * self.n_layer
+        denominator = max(self.n_layer - 1, 1)
+        residual = tuple(
+            1.15 - 0.10 * layer_index / denominator
+            for layer_index in range(self.n_layer)
+        )
+        input_values = tuple(
+            0.20 - 0.15 * layer_index / denominator
+            for layer_index in range(self.n_layer)
+        )
+        return residual, input_values
+
+    def residual_scalar_identity(self) -> dict[str, object]:
+        """Return the complete per-layer scalar recurrence identity."""
+
+        residual, input_values = self.residual_scalar_initial_values()
+        return {
+            "enabled": self.use_residual_scalars,
+            "initializer": self.residual_scalar_init,
+            "input_initial_values": list(input_values)
+            if self.use_residual_scalars
+            else [],
+            "input_source": "parameter_free_rmsnorm_initial_token_representation",
+            "placement": "before_each_transformer_block",
+            "residual_initial_values": list(residual)
+            if self.use_residual_scalars
+            else [],
         }
 
     def validate(self) -> None:
@@ -738,6 +777,12 @@ class GPTConfig(_SerializableConfig):
                 "must be less than or equal to model.n_embd when value "
                 "embeddings are enabled",
             )
+        _require_bool(self.use_residual_scalars, "model.use_residual_scalars")
+        _require_choice(
+            self.residual_scalar_init,
+            "model.residual_scalar_init",
+            _RESIDUAL_SCALAR_INITS,
+        )
         expected_rmsnorm = self.norm == "rmsnorm"
         if self.use_rmsnorm is not expected_rmsnorm:
             _fail(
@@ -1418,6 +1463,7 @@ __all__ = [
     "ModelProfile",
     "NormType",
     "ProjectConfig",
+    "ResidualScalarInit",
     "RunConfig",
     "SFTConfig",
     "SFTSourceConfig",

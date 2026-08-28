@@ -60,6 +60,7 @@ def test_gpt_training_flops_matches_hand_calculation_without_tie_aliasing(
         "full-context layers execute sequence-length score and value products",
         "short-window layers use their declared maximum visible key span",
         "enabled value-gate projections are included",
+        "residual/input scalar multiplies and additions are excluded",
         "embedding lookup, sigmoid, elementwise mixing, normalization, activation, "
         "bias, softmax, dropout, loss, clipping, optimizer, and scheduler FLOPs "
         "are excluded",

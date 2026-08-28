@@ -17,7 +17,7 @@ from scratch_llm.evaluation.nanochat_bpb import NANOCHAT_COMPAT_TRAIN_METRIC
 
 
 RUN_COMPARISON_FORMAT: Final = "scratch_llm_run_comparison"
-RUN_COMPARISON_FORMAT_VERSION: Final = 5
+RUN_COMPARISON_FORMAT_VERSION: Final = 6
 STEP_METRICS: Final = (
     NANOCHAT_COMPAT_TRAIN_METRIC,
     NANOCHAT_MINIMUM_TRAIN_METRIC,
