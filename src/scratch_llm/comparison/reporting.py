@@ -26,7 +26,10 @@ from scratch_llm.evaluation.nanochat_bpb import (
     NANOCHAT_COMPAT_PROTOCOL_ID,
     NANOCHAT_COMPAT_TRAIN_METRIC,
 )
-from scratch_llm.diagnostics.resource_estimation import estimate_gpt_model_size
+from scratch_llm.diagnostics.resource_estimation import (
+    GPTModelSizeEstimate,
+    estimate_gpt_model_size,
+)
 
 
 def build_comparison_payload(
@@ -91,7 +94,7 @@ def _run_payload(snapshot: RunSnapshot) -> dict[str, Any]:
             NANOCHAT_COMPAT_PROTOCOL_ID: _protocol_summary(compatibility),
             FULL_DOCUMENT_PROTOCOL_ID: _protocol_summary(full_document),
         },
-        "identities": _run_identities(snapshot, evaluation),
+        "identities": _run_identities(snapshot, evaluation, model),
         "path": str(snapshot.path),
         "rankable": not blockers,
         "ranking_blockers": blockers,
@@ -153,6 +156,7 @@ def _run_payload(snapshot: RunSnapshot) -> dict[str, Any]:
 def _run_identities(
     snapshot: RunSnapshot,
     evaluation: Mapping[str, Any] | None,
+    model: GPTModelSizeEstimate,
 ) -> dict[str, Any]:
     report_identities = {} if evaluation is None else evaluation.get("identities", {})
     checkpoint = report_identities.get("checkpoint")
@@ -163,6 +167,10 @@ def _run_identities(
         "code_identity": None,
         "config_identity": report_identities.get("config")
         or project_config_identity(snapshot.config),
+        "parameterization": {
+            "tie_weights": model.tie_weights,
+            "unique_parameters": model.unique_parameters,
+        },
         "hardware": {
             "device": snapshot.config.run.device,
             "mfu_peak_flops_basis": snapshot.config.train.mfu_peak_flops_basis,
@@ -283,6 +291,9 @@ def _protocol_comparison_key(
             "reference_commit": result["reference_commit"],
             "reference_config": result["reference_config"],
             "run_kind": evaluation.get("run_kind"),
+            "unique_parameters": estimate_gpt_model_size(
+                snapshot.config.model
+            ).unique_parameters,
             "tokenizer_identity": result["tokenizer_identity"],
             "validation_manifest_identity": result["validation_manifest_identity"],
         }

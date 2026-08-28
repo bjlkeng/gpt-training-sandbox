@@ -238,6 +238,52 @@ def test_version_one_byte_checkpoint_remains_readable(tmp_path: Path) -> None:
     assert isinstance(loaded.tokenizer, ByteTokenizer)
 
 
+def test_save_rejects_model_whose_weight_sharing_disagrees_with_config(
+    tmp_path: Path,
+) -> None:
+    config, tokenizer, model, optimizer, scheduler, _ = _checkpoint_state()
+    model.lm_head.weight = torch.nn.Parameter(model.lm_head.weight.detach().clone())
+
+    with pytest.raises(
+        ValueError,
+        match=r"model weight sharing.*tie_weights=true.*independent",
+    ):
+        save_checkpoint(
+            tmp_path / "invalid-topology.pt",
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            config=config,
+            step=0,
+            tokenizer=tokenizer,
+        )
+
+
+def test_load_rejects_checkpoint_whose_weight_sharing_disagrees_with_config(
+    tmp_path: Path,
+) -> None:
+    config, tokenizer, model, optimizer, scheduler, _ = _checkpoint_state()
+    checkpoint_path = save_checkpoint(
+        tmp_path / "valid.pt",
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        config=config,
+        step=0,
+        tokenizer=tokenizer,
+    )
+    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    payload["config"]["model"]["tie_weights"] = False
+    tampered_path = tmp_path / "mismatched-topology.pt"
+    torch.save(payload, tampered_path)
+
+    with pytest.raises(
+        CheckpointError,
+        match=r"checkpoint model weight sharing.*tie_weights=false.*shared",
+    ):
+        load_model_checkpoint(tampered_path)
+
+
 def test_model_only_load_preserves_python_numpy_and_torch_rng(
     tmp_path: Path,
 ) -> None:

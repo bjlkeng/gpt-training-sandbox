@@ -481,6 +481,13 @@ def test_legacy_flash_boolean_cannot_contradict_the_canonical_backend() -> None:
         GPTConfig(use_flash_attention=True)
 
 
+def test_gpt_config_requires_boolean_weight_tying() -> None:
+    with pytest.raises(ConfigValidationError) as error:
+        GPTConfig(tie_weights=1)  # type: ignore[arg-type]
+
+    assert error.value.path == "model.tie_weights"
+
+
 @pytest.mark.parametrize("mode", ["online", "offline", "disabled"])
 def test_tracking_schema_accepts_every_wandb_mode_with_jsonl_always_on(
     mode: WandbMode,

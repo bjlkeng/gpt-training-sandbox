@@ -10,7 +10,13 @@ import sys
 
 import pytest
 
-from scratch_llm.config import ProjectConfig, RunConfig, TrainConfig, dump_config
+from scratch_llm.config import (
+    GPTConfig,
+    ProjectConfig,
+    RunConfig,
+    TrainConfig,
+    dump_config,
+)
 from scratch_llm.comparison.pipeline import (
     RUN_COMPARISON_FORMAT,
     RUN_COMPARISON_FORMAT_VERSION,
@@ -32,12 +38,14 @@ def _write_run(
     status: str = "completed",
     include_peak_memory: bool = True,
     max_steps: int = 2,
+    tie_weights: bool = True,
 ) -> Path:
     run_dir = root / name
     metrics_dir = run_dir / "metrics"
     metrics_dir.mkdir(parents=True)
     config = ProjectConfig(
         run=RunConfig(name=name, output_dir=str(root)),
+        model=GPTConfig(tie_weights=tie_weights),
         train=TrainConfig(
             max_steps=max_steps,
             warmup_steps=0,
@@ -166,6 +174,50 @@ def _write_run(
         encoding="utf-8",
     )
     return run_dir
+
+
+def test_parameter_mismatched_weight_tying_is_displayed_and_not_ranked(
+    tmp_path: Path,
+) -> None:
+    tied = _write_run(
+        tmp_path / "runs",
+        name="tied",
+        compatibility_bpb=1.5,
+        full_document_bpb=1.0,
+    )
+    untied = _write_run(
+        tmp_path / "runs",
+        name="untied",
+        compatibility_bpb=1.25,
+        full_document_bpb=0.9,
+        tie_weights=False,
+    )
+
+    artifacts = compare_training_runs(
+        (tied, untied),
+        output_dir=tmp_path / "comparison",
+    )
+
+    payload = json.loads(artifacts.json_path.read_text(encoding="utf-8"))
+    identities = {
+        run["run"]: run["identities"]["parameterization"] for run in payload["runs"]
+    }
+    assert identities["tied"]["tie_weights"] is True
+    assert identities["untied"]["tie_weights"] is False
+    assert (
+        identities["tied"]["unique_parameters"]
+        < (identities["untied"]["unique_parameters"])
+    )
+    assert payload["rankings"] == {
+        "full_documents_v1": [],
+        "nanochat_compat_v1": [],
+    }
+    assert any(
+        difference["field"] == "parameterization"
+        for difference in payload["identity_differences"]
+    )
+    markdown = artifacts.markdown_path.read_text(encoding="utf-8")
+    assert "parameterization" in markdown
 
 
 def test_comparison_ranks_only_protocol_matched_results_and_keeps_full_separate(

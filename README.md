@@ -1280,6 +1280,41 @@ comparison, including mixed quality/performance evidence and exact identities,
 is in
 [`comparisons/gpt-training-sandbox-as7-4-relu2`](comparisons/gpt-training-sandbox-as7-4-relu2/README.md).
 
+### Tied and untied token embeddings
+
+`model.tie_weights: true` remains the compatibility default. It installs the
+same `torch.nn.Parameter`—and therefore the same storage—at both
+`token_embedding.weight` and `lm_head.weight`. Optimizer construction and
+resource estimates deduplicate that parameter. Set `model.tie_weights: false`
+to retain the independently constructed bias-free LM-head matrix instead:
+
+```text
+token embedding: (vocab_size, n_embd), PyTorch Embedding initialization
+untied LM head:  (vocab_size, n_embd), PyTorch Linear initialization
+extra parameters = vocab_size * n_embd
+```
+
+The untied head uses the standard `nn.Linear` uniform initialization bounded
+by `1 / sqrt(n_embd)`; the token embedding keeps the standard `nn.Embedding`
+normal initialization. Constructing either mode consumes the same random draws
+before the final alias is installed, so the tied default retains its existing
+initialization and exact logits. Checkpoints preserve the selected topology,
+and loading rejects a payload whose serialized shared storage contradicts its
+`model.tie_weights` identity instead of silently copying one matrix over the
+other.
+
+Vocabulary matrices are unusually visible in these educational 32K-token
+models. For example, the tied token table contributes 4,194,304 of the
+4,604,544 unique parameters in `base_smoke`, and 12,582,912 of the 23,401,344
+in `tiny_20m_3090`. Untying adds a second table of exactly the same size. This
+happens because each table scales as `vocab_size * n_embd`, while the shallow
+transformer stack has too few width-squared blocks to amortize a 32K
+vocabulary. It is a capacity/cost experiment, not an assumed improvement.
+
+The bounded same-seed RTX 3090 comparison records BPB, throughput, peak
+allocated memory, parameter counts, and the fixed 51,200-token budget in
+[`comparisons/gpt-training-sandbox-as7-5-untied`](comparisons/gpt-training-sandbox-as7-5-untied/README.md).
+
 ### Base-model orchestration and resource preflight
 
 The three named presets and repeatable dotted overrides are the orchestration

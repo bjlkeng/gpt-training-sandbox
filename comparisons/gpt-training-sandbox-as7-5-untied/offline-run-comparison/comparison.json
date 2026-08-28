@@ -1,0 +1,1551 @@
+{
+  "aligned_steps": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    49,
+    50
+  ],
+  "format": "scratch_llm_run_comparison",
+  "format_version": 2,
+  "identity_differences": [
+    {
+      "field": "config_identity",
+      "values": {
+        "m10-weight-tied": "sha256:f34a5dd541ec833ea1641abcf9bc48686725638d2678c2534f91527346463250",
+        "m10-weight-untied": "sha256:116c385872f9d7bcd719646a9fb3e917b9d12877a8e289c873f97a2b772fe24c"
+      }
+    },
+    {
+      "field": "parameterization",
+      "values": {
+        "m10-weight-tied": {
+          "tie_weights": true,
+          "unique_parameters": 444160
+        },
+        "m10-weight-untied": {
+          "tie_weights": false,
+          "unique_parameters": 478080
+        }
+      }
+    }
+  ],
+  "numeric_deltas": [
+    {
+      "baseline": "m10-weight-tied",
+      "field": "best_compatibility_bpb",
+      "values": {
+        "m10-weight-tied": null,
+        "m10-weight-untied": null
+      }
+    },
+    {
+      "baseline": "m10-weight-tied",
+      "field": "best_full_document_bpb",
+      "values": {
+        "m10-weight-tied": null,
+        "m10-weight-untied": null
+      }
+    },
+    {
+      "baseline": "m10-weight-tied",
+      "field": "best_loss",
+      "values": {
+        "m10-weight-tied": 0.0,
+        "m10-weight-untied": -0.9810471534729004
+      }
+    },
+    {
+      "baseline": "m10-weight-tied",
+      "field": "latest_loss",
+      "values": {
+        "m10-weight-tied": 0.0,
+        "m10-weight-untied": -1.0771245956420898
+      }
+    },
+    {
+      "baseline": "m10-weight-tied",
+      "field": "tokens_per_second",
+      "values": {
+        "m10-weight-tied": 0.0,
+        "m10-weight-untied": -986.854512158141
+      }
+    },
+    {
+      "baseline": "m10-weight-tied",
+      "field": "mfu",
+      "values": {
+        "m10-weight-tied": 0.0,
+        "m10-weight-untied": -8.198913764148e-05
+      }
+    },
+    {
+      "baseline": "m10-weight-tied",
+      "field": "peak_memory_mib",
+      "values": {
+        "m10-weight-tied": 0.0,
+        "m10-weight-untied": 0.517578125
+      }
+    }
+  ],
+  "rankings": {
+    "full_documents_v1": [],
+    "nanochat_compat_v1": []
+  },
+  "run_count": 2,
+  "runs": [
+    {
+      "evaluation": {
+        "full_documents_v1": null,
+        "nanochat_compat_v1": null
+      },
+      "identities": {
+        "checkpoint_identity": null,
+        "code_identity": null,
+        "config_identity": "sha256:f34a5dd541ec833ea1641abcf9bc48686725638d2678c2534f91527346463250",
+        "hardware": {
+          "device": "cuda",
+          "mfu_peak_flops_basis": "rtx3090_fp32_35.58_tflops",
+          "mfu_peak_flops_per_second": 35580000000000.0
+        },
+        "parameterization": {
+          "tie_weights": true,
+          "unique_parameters": 444160
+        },
+        "precision": {
+          "activation_checkpointing": false,
+          "compile": false,
+          "dtype": "float32"
+        },
+        "tokenizer_identity": null,
+        "validation_manifest_identity": null
+      },
+      "path": "/home/bojji/code/gpt-training-sandbox-as7-5/runs/m10-weight-tied",
+      "rankable": false,
+      "ranking_blockers": [
+        "base_eval.json is missing",
+        "nanochat_compat_v1 result is missing",
+        "full_documents_v1 result is missing"
+      ],
+      "run": "m10-weight-tied",
+      "status": "completed",
+      "training": {
+        "best_compatibility_bpb": null,
+        "best_full_document_bpb": null,
+        "best_loss": 2.5712201595306396,
+        "configured_parameters": 478080,
+        "cumulative_processed_model_tokens": 51200,
+        "latest_compatibility_bpb": null,
+        "latest_full_document_bpb": null,
+        "latest_loss": 2.809593915939331,
+        "latest_step": 50,
+        "mfu": 0.003732288012040336,
+        "peak_memory_mib": 28.6328125,
+        "tokens_per_second": 44923.33217921699,
+        "total_training_flops": 151348838400.0,
+        "total_training_time": 1.4009915832430124,
+        "unique_parameters": 444160
+      }
+    },
+    {
+      "evaluation": {
+        "full_documents_v1": null,
+        "nanochat_compat_v1": null
+      },
+      "identities": {
+        "checkpoint_identity": null,
+        "code_identity": null,
+        "config_identity": "sha256:116c385872f9d7bcd719646a9fb3e917b9d12877a8e289c873f97a2b772fe24c",
+        "hardware": {
+          "device": "cuda",
+          "mfu_peak_flops_basis": "rtx3090_fp32_35.58_tflops",
+          "mfu_peak_flops_per_second": 35580000000000.0
+        },
+        "parameterization": {
+          "tie_weights": false,
+          "unique_parameters": 478080
+        },
+        "precision": {
+          "activation_checkpointing": false,
+          "compile": false,
+          "dtype": "float32"
+        },
+        "tokenizer_identity": null,
+        "validation_manifest_identity": null
+      },
+      "path": "/home/bojji/code/gpt-training-sandbox-as7-5/runs/m10-weight-untied",
+      "rankable": false,
+      "ranking_blockers": [
+        "base_eval.json is missing",
+        "nanochat_compat_v1 result is missing",
+        "full_documents_v1 result is missing"
+      ],
+      "run": "m10-weight-untied",
+      "status": "completed",
+      "training": {
+        "best_compatibility_bpb": null,
+        "best_full_document_bpb": null,
+        "best_loss": 1.5901730060577393,
+        "configured_parameters": 478080,
+        "cumulative_processed_model_tokens": 51200,
+        "latest_compatibility_bpb": null,
+        "latest_full_document_bpb": null,
+        "latest_loss": 1.7324693202972412,
+        "latest_step": 50,
+        "mfu": 0.003650298874398856,
+        "peak_memory_mib": 29.150390625,
+        "tokens_per_second": 43936.47766705885,
+        "total_training_flops": 151348838400.0,
+        "total_training_time": 1.4093068540096283,
+        "unique_parameters": 478080
+      }
+    }
+  ],
+  "step_series": {
+    "1": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 3026976768.0,
+        "total_training_time": 0.3144247932359576,
+        "train/loss": 85.1033935546875,
+        "train/mfu": 0.0002705741856492095,
+        "train/peak_memory_mib": 25.244140625,
+        "train/tok_per_sec": 3256.7406325096863,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 3026976768.0,
+        "total_training_time": 0.31396149657666683,
+        "train/loss": 5.795902252197266,
+        "train/mfu": 0.0002709734579092428,
+        "train/peak_memory_mib": 25.5029296875,
+        "train/tok_per_sec": 3261.5464353602592,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "10": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 30269767680.0,
+        "total_training_time": 0.5022588120773435,
+        "train/loss": 8.622888565063477,
+        "train/mfu": 0.003802057540389884,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45763.10651815409,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 30269767680.0,
+        "total_training_time": 0.5033012460917234,
+        "train/loss": 2.7568273544311523,
+        "train/mfu": 0.003772819714636498,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45411.188189697066,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "11": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 33296744448.0,
+        "total_training_time": 0.5246364874765277,
+        "train/loss": 9.508438110351562,
+        "train/mfu": 0.0038017904389140303,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45759.891576465074,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 33296744448.0,
+        "total_training_time": 0.5258336430415511,
+        "train/loss": 2.8545610904693604,
+        "train/mfu": 0.003775684964505783,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45445.67549915419,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "12": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 36323721216.0,
+        "total_training_time": 0.5471481755375862,
+        "train/loss": 7.500082969665527,
+        "train/mfu": 0.003779158281999577,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45487.48175714774,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 36323721216.0,
+        "total_training_time": 0.5482557024806738,
+        "train/loss": 2.7830889225006104,
+        "train/mfu": 0.0037942648670932747,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45669.310741960406,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "13": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 39350697984.0,
+        "total_training_time": 0.5695366319268942,
+        "train/loss": 7.309387683868408,
+        "train/mfu": 0.0037999597157743112,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45737.85625028755,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 39350697984.0,
+        "total_training_time": 0.5711847059428692,
+        "train/loss": 2.464999198913574,
+        "train/mfu": 0.0037103763588334578,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 44659.59463473143,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "14": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 42377674752.0,
+        "total_training_time": 0.5919161010533571,
+        "train/loss": 5.384531021118164,
+        "train/mfu": 0.0038014857232311124,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45756.22389492501,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 42377674752.0,
+        "total_training_time": 0.5938175516203046,
+        "train/loss": 2.466186046600342,
+        "train/mfu": 0.003758927780900261,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45243.97924123666,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "15": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 45404651520.0,
+        "total_training_time": 0.6142215114086866,
+        "train/loss": 6.050620079040527,
+        "train/mfu": 0.0038141074753826696,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45908.144422697515,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 45404651520.0,
+        "total_training_time": 0.6165604144334793,
+        "train/loss": 2.4986257553100586,
+        "train/mfu": 0.0037407442095837217,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45025.11440234369,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "16": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 48431628288.0,
+        "total_training_time": 0.6366826836019754,
+        "train/loss": 5.265465259552002,
+        "train/mfu": 0.003787657725323882,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45589.784504032345,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 48431628288.0,
+        "total_training_time": 0.6391493985429406,
+        "train/loss": 2.4555604457855225,
+        "train/mfu": 0.003766226580420094,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45331.83055235767,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "17": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 51458605056.0,
+        "total_training_time": 0.6589853875339031,
+        "train/loss": 6.197723388671875,
+        "train/mfu": 0.003814570315662484,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45913.715356014814,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 51458605056.0,
+        "total_training_time": 0.661776072345674,
+        "train/loss": 2.2747573852539062,
+        "train/mfu": 0.0037599531031142002,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45256.32043523319,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "18": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 54485581824.0,
+        "total_training_time": 0.6813994729891419,
+        "train/loss": 5.711137294769287,
+        "train/mfu": 0.003795614706102397,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45685.55795171476,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 54485581824.0,
+        "total_training_time": 0.6843878785148263,
+        "train/loss": 2.3185629844665527,
+        "train/mfu": 0.0037624253339745423,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45286.077208505936,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "19": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 57512558592.0,
+        "total_training_time": 0.7037208415567875,
+        "train/loss": 4.992448806762695,
+        "train/mfu": 0.0038113806561599194,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45875.323320644005,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 57512558592.0,
+        "total_training_time": 0.707041603513062,
+        "train/loss": 2.297801971435547,
+        "train/mfu": 0.0037554632796313217,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45202.279098900966,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "2": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 6053953536.0,
+        "total_training_time": 0.32919230312108994,
+        "train/loss": 79.5208740234375,
+        "train/mfu": 0.0057609734504659215,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 69341.41286954183,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 6053953536.0,
+        "total_training_time": 0.32778649125248194,
+        "train/loss": 5.550362586975098,
+        "train/mfu": 0.006153726230836641,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 74068.74461885651,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "20": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 60539535360.0,
+        "total_training_time": 0.7260778089985251,
+        "train/loss": 4.887629985809326,
+        "train/mfu": 0.0038053118160791127,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45802.276300153324,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 60539535360.0,
+        "total_training_time": 0.7295259600505233,
+        "train/loss": 2.2475922107696533,
+        "train/mfu": 0.0037837521494553826,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45542.775408934176,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "21": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 63566512128.0,
+        "total_training_time": 0.748623700812459,
+        "train/loss": 4.116624355316162,
+        "train/mfu": 0.003773425024827005,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45418.47394863954,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 63566512128.0,
+        "total_training_time": 0.7521605398505926,
+        "train/loss": 1.9855066537857056,
+        "train/mfu": 0.0037586397949159064,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45240.5129251334,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "22": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 66593488896.0,
+        "total_training_time": 0.7709536664187908,
+        "train/loss": 4.404341697692871,
+        "train/mfu": 0.003809913274278246,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45857.661317204955,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 66593488896.0,
+        "total_training_time": 0.7746824268251657,
+        "train/loss": 2.1264877319335938,
+        "train/mfu": 0.0037774469108112,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45466.88299946093,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "23": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 69620465664.0,
+        "total_training_time": 0.7936215987429023,
+        "train/loss": 4.002126693725586,
+        "train/mfu": 0.003753109510003581,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45173.94817306694,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 69620465664.0,
+        "total_training_time": 0.7974896403029561,
+        "train/loss": 2.145340919494629,
+        "train/mfu": 0.0037301896814613713,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 44898.075821369865,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "24": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 72647442432.0,
+        "total_training_time": 0.8162166737020016,
+        "train/loss": 4.0112996101379395,
+        "train/mfu": 0.003765211336175698,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45319.61066088978,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 72647442432.0,
+        "total_training_time": 0.8200694071128964,
+        "train/loss": 2.106821060180664,
+        "train/mfu": 0.0037677639939260777,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45350.33548482894,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "25": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 75674419200.0,
+        "total_training_time": 0.8385545238852501,
+        "train/loss": 4.017584323883057,
+        "train/mfu": 0.0038085684915883026,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45841.47496735888,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 75674419200.0,
+        "total_training_time": 0.8424156429246068,
+        "train/loss": 2.0676677227020264,
+        "train/mfu": 0.0038071392915829403,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45824.27253646815,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "26": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 78701395968.0,
+        "total_training_time": 0.8609406845644116,
+        "train/loss": 4.105955123901367,
+        "train/mfu": 0.0038003494032334763,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45742.54668658766,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 78701395968.0,
+        "total_training_time": 0.8651740457862616,
+        "train/loss": 2.0163073539733887,
+        "train/mfu": 0.0037381899290078084,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 44994.370045418254,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "27": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 81728372736.0,
+        "total_training_time": 0.8833031114190817,
+        "train/loss": 3.64558744430542,
+        "train/mfu": 0.0038043828127703257,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45791.09443956229,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 81728372736.0,
+        "total_training_time": 0.887861916795373,
+        "train/loss": 1.8436956405639648,
+        "train/mfu": 0.0037498111807658927,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45134.248144692094,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "28": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 84755349504.0,
+        "total_training_time": 0.9057566085830331,
+        "train/loss": 3.6088037490844727,
+        "train/mfu": 0.0037889524182596703,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45605.367953283014,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 84755349504.0,
+        "total_training_time": 0.9104719990864396,
+        "train/loss": 1.938959002494812,
+        "train/mfu": 0.003762712195494925,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45289.529990104784,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "29": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 87782326272.0,
+        "total_training_time": 0.928093858063221,
+        "train/loss": 3.655888080596924,
+        "train/mfu": 0.0038086709132741747,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45842.70775630816,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 87782326272.0,
+        "total_training_time": 0.9330103071406484,
+        "train/loss": 1.8416420221328735,
+        "train/mfu": 0.0037746947185706577,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45433.75649747499,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "3": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 9080930304.0,
+        "total_training_time": 0.3449894115328789,
+        "train/loss": 69.28909301757812,
+        "train/mfu": 0.005385493987890279,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 64821.989778573494,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 9080930304.0,
+        "total_training_time": 0.34531675558537245,
+        "train/loss": 5.132248878479004,
+        "train/mfu": 0.00485304903350037,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 58413.2663692217,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "30": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 90809303040.0,
+        "total_training_time": 0.9504325604066253,
+        "train/loss": 3.152106285095215,
+        "train/mfu": 0.0038084232051580898,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45839.72624096249,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 90809303040.0,
+        "total_training_time": 0.9554848847910762,
+        "train/loss": 2.04636812210083,
+        "train/mfu": 0.003785398493400424,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45562.591472347754,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "31": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 93836279808.0,
+        "total_training_time": 0.9746910287067294,
+        "train/loss": 3.5918846130371094,
+        "train/mfu": 0.0035070323206422343,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 42212.06332287699,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 93836279808.0,
+        "total_training_time": 0.9785899305716157,
+        "train/loss": 1.782680630683899,
+        "train/mfu": 0.003682106202507328,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 44319.32356794876,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "32": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 96863256576.0,
+        "total_training_time": 0.9973727166652679,
+        "train/loss": 3.5659730434417725,
+        "train/mfu": 0.0037508333830028598,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45146.55178538045,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 96863256576.0,
+        "total_training_time": 1.0012054946273565,
+        "train/loss": 1.8310480117797852,
+        "train/mfu": 0.0037618001553290656,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45278.5523047816,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "33": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 99890233344.0,
+        "total_training_time": 1.0197151554748416,
+        "train/loss": 3.194762945175171,
+        "train/mfu": 0.003807786298659835,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45832.06017604577,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 99890233344.0,
+        "total_training_time": 1.023772488348186,
+        "train/loss": 2.131805419921875,
+        "train/mfu": 0.003769896576840684,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45376.00411767922,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "34": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 102917210112.0,
+        "total_training_time": 1.0421340288594365,
+        "train/loss": 3.180426597595215,
+        "train/mfu": 0.0037948040884248704,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45675.80102859404,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 102917210112.0,
+        "total_training_time": 1.0462524676695466,
+        "train/loss": 2.031339645385742,
+        "train/mfu": 0.0037844889072874456,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45551.64332500031,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "35": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 105944186880.0,
+        "total_training_time": 1.0646283645182848,
+        "train/loss": 3.5209083557128906,
+        "train/mfu": 0.0037820735703423826,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45522.57134996575,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 105944186880.0,
+        "total_training_time": 1.068851781077683,
+        "train/loss": 1.7774708271026611,
+        "train/mfu": 0.0037645051794852717,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45311.11107257498,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "36": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 108971163648.0,
+        "total_training_time": 1.0872275279834867,
+        "train/loss": 3.3846354484558105,
+        "train/mfu": 0.003764530156558183,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45311.41170675424,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 108971163648.0,
+        "total_training_time": 1.0916190100833774,
+        "train/loss": 1.7706890106201172,
+        "train/mfu": 0.0037367407494544834,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 44976.92713258534,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "37": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 111998140416.0,
+        "total_training_time": 1.1097213933244348,
+        "train/loss": 3.0680618286132812,
+        "train/mfu": 0.003782152648654312,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45523.52316859913,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 111998140416.0,
+        "total_training_time": 1.1140962829813361,
+        "train/loss": 1.8149700164794922,
+        "train/mfu": 0.003784944586648067,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45557.12806659002,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "38": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 115025117184.0,
+        "total_training_time": 1.132120618596673,
+        "train/loss": 2.9518768787384033,
+        "train/mfu": 0.003798132807887025,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45715.86684603562,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 115025117184.0,
+        "total_training_time": 1.1365104671567678,
+        "train/loss": 1.9194438457489014,
+        "train/mfu": 0.0037955979888392097,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45685.35673595518,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "39": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 118052093952.0,
+        "total_training_time": 1.1543967528268695,
+        "train/loss": 3.3071935176849365,
+        "train/mfu": 0.003819120117458097,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45968.47861564391,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 118052093952.0,
+        "total_training_time": 1.1591930771246552,
+        "train/loss": 1.9030423164367676,
+        "train/mfu": 0.003750680918032996,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45144.7166551695,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "4": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 12107907072.0,
+        "total_training_time": 0.3678841609507799,
+        "train/loss": 48.50537109375,
+        "train/mfu": 0.0037159276489491227,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 44726.41221394416,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 12107907072.0,
+        "total_training_time": 0.3679053680971265,
+        "train/loss": 4.518243312835693,
+        "train/mfu": 0.003766288537353554,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45332.57629113604,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "40": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 121079070720.0,
+        "total_training_time": 1.176791900768876,
+        "train/loss": 2.9890830516815186,
+        "train/mfu": 0.003798824307749477,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45724.190018824695,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 121079070720.0,
+        "total_training_time": 1.181899992749095,
+        "train/loss": 1.9866739511489868,
+        "train/mfu": 0.0037466661604261585,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45096.39340438897,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "41": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 124106047488.0,
+        "total_training_time": 1.199212197214365,
+        "train/loss": 2.9745395183563232,
+        "train/mfu": 0.0037945632246471853,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45672.90189448113,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 124106047488.0,
+        "total_training_time": 1.2044528080150485,
+        "train/loss": 1.704246163368225,
+        "train/mfu": 0.0037722666272255873,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45404.53100530928,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "42": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 127133024256.0,
+        "total_training_time": 1.220983250066638,
+        "train/loss": 3.034579038619995,
+        "train/mfu": 0.003907722467765637,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 47034.93243750452,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 127133024256.0,
+        "total_training_time": 1.2270643841475248,
+        "train/loss": 1.7632180452346802,
+        "train/mfu": 0.0037624636106436335,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45286.5379220186,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "43": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 130160001024.0,
+        "total_training_time": 1.2434360971674323,
+        "train/loss": 2.9080352783203125,
+        "train/mfu": 0.0037890621174154165,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45606.688336811145,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 130160001024.0,
+        "total_training_time": 1.2495712721720338,
+        "train/loss": 1.7561860084533691,
+        "train/mfu": 0.003779964261833859,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45497.182857306245,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "44": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 133186977792.0,
+        "total_training_time": 1.2661094097420573,
+        "train/loss": 2.862245559692383,
+        "train/mfu": 0.0037522189180663793,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45163.228647322416,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 133186977792.0,
+        "total_training_time": 1.2722846595570445,
+        "train/loss": 1.7087504863739014,
+        "train/mfu": 0.0037455986170466206,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45083.54401932007,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "45": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 136213954560.0,
+        "total_training_time": 1.2886663228273392,
+        "train/loss": 2.7677173614501953,
+        "train/mfu": 0.0037715813354466045,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45396.28255553058,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 136213954560.0,
+        "total_training_time": 1.2948124073445797,
+        "train/loss": 1.7194091081619263,
+        "train/mfu": 0.0037764641712125886,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45455.05434709228,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "46": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 139240931328.0,
+        "total_training_time": 1.3110000360757113,
+        "train/loss": 3.0300443172454834,
+        "train/mfu": 0.003809273963161567,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45849.96630932566,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 139240931328.0,
+        "total_training_time": 1.3173238756135106,
+        "train/loss": 1.732115387916565,
+        "train/mfu": 0.0037791951800476937,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45487.92587701924,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "47": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 142267908096.0,
+        "total_training_time": 1.3334601176902652,
+        "train/loss": 2.871114730834961,
+        "train/mfu": 0.003787841640014893,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45591.99817584177,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 142267908096.0,
+        "total_training_time": 1.339900235645473,
+        "train/loss": 1.7232329845428467,
+        "train/mfu": 0.003768332550388786,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45357.17886099778,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "48": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 145294884864.0,
+        "total_training_time": 1.3559116516262293,
+        "train/loss": 2.5712201595306396,
+        "train/mfu": 0.0037892837353737377,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45609.355820436846,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 145294884864.0,
+        "total_training_time": 1.3626434095203876,
+        "train/loss": 1.8173171281814575,
+        "train/mfu": 0.00374069304687403,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45024.498587220296,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "49": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 148321861632.0,
+        "total_training_time": 1.3781971922144294,
+        "train/loss": 2.6941380500793457,
+        "train/mfu": 0.0038175081300377586,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45949.07608129528,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 148321861632.0,
+        "total_training_time": 1.3860004795715213,
+        "train/loss": 1.5901730060577393,
+        "train/mfu": 0.003642376042521275,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 43841.11524939749,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "5": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 15134883840.0,
+        "total_training_time": 0.3904066598042846,
+        "train/loss": 27.821884155273438,
+        "train/mfu": 0.0037773442871993756,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45465.64778004899,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 15134883840.0,
+        "total_training_time": 0.39046086836606264,
+        "train/loss": 3.9787800312042236,
+        "train/mfu": 0.0037718175772366905,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45399.12605752626,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "50": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 151348838400.0,
+        "total_training_time": 1.4009915832430124,
+        "train/loss": 2.809593915939331,
+        "train/mfu": 0.003732288012040336,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 44923.33217921699,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 151348838400.0,
+        "total_training_time": 1.4093068540096283,
+        "train/loss": 1.7324693202972412,
+        "train/mfu": 0.003650298874398856,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 43936.47766705885,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "6": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 18161860608.0,
+        "total_training_time": 0.41253623738884926,
+        "train/loss": 18.391576766967773,
+        "train/mfu": 0.003844412847585488,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 46272.91217317392,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 18161860608.0,
+        "total_training_time": 0.41297641303390265,
+        "train/loss": 3.6337316036224365,
+        "train/mfu": 0.0037785109635503156,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45479.69036976603,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "7": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 21188837376.0,
+        "total_training_time": 0.43505049031227827,
+        "train/loss": 14.937097549438477,
+        "train/mfu": 0.0037787277537958386,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45482.29974508258,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 21188837376.0,
+        "total_training_time": 0.435508418828249,
+        "train/loss": 3.434178590774536,
+        "train/mfu": 0.0037757505103734328,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45446.46443579999,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "8": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 24215814144.0,
+        "total_training_time": 0.45742549281567335,
+        "train/loss": 12.174980163574219,
+        "train/mfu": 0.0038022445970601064,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45765.358008099574,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 24215814144.0,
+        "total_training_time": 0.45809647906571627,
+        "train/loss": 3.2000441551208496,
+        "train/mfu": 0.0037663806224770124,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45333.68466502802,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    },
+    "9": {
+      "m10-weight-tied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 27242790912.0,
+        "total_training_time": 0.4798827087506652,
+        "train/loss": 11.407817840576172,
+        "train/mfu": 0.003788324992020932,
+        "train/peak_memory_mib": 28.6328125,
+        "train/tok_per_sec": 45597.81599661464,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      },
+      "m10-weight-untied": {
+        "min_val_bpb": null,
+        "min_val_bpb_full_documents": null,
+        "total_training_flops": 27242790912.0,
+        "total_training_time": 0.4807517370209098,
+        "train/loss": 3.197901725769043,
+        "train/mfu": 0.003755209168043816,
+        "train/peak_memory_mib": 29.150390625,
+        "train/tok_per_sec": 45199.220508776285,
+        "val_bpb": null,
+        "val_bpb_full_documents": null
+      }
+    }
+  }
+}
