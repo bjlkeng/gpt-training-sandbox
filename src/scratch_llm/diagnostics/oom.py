@@ -23,6 +23,9 @@ class OOMAttempt:
     n_head: int
     n_kv_head: int
     use_gqa: bool
+    sliding_window_pattern: str
+    sliding_window_size: int
+    layer_attention_windows: tuple[int | None, ...]
     n_embd: int
     seq_len: int
     device_batch_size: int
@@ -43,6 +46,11 @@ class OOMAttempt:
             "n_kv_head": self.n_kv_head,
             "n_layer": self.n_layer,
             "seq_len": self.seq_len,
+            "sliding_window": {
+                "layer_attention_windows": list(self.layer_attention_windows),
+                "pattern": self.sliding_window_pattern,
+                "short_window_size": self.sliding_window_size,
+            },
             "total_batch_size_tokens": self.total_batch_size_tokens,
             "vocab_size": self.vocab_size,
             "use_gqa": self.use_gqa,
@@ -99,7 +107,7 @@ class OOMDiagnostic:
     attempt: OOMAttempt
     memory: AcceleratorMemorySnapshot
     recommendations: tuple[OOMRecommendation, ...]
-    schema_version: int = 2
+    schema_version: int = 3
 
     def to_dict(self) -> dict[str, object]:
         """Return the stable machine-readable diagnostic contract."""
@@ -218,6 +226,9 @@ def diagnose_out_of_memory(
         n_head=config.model.n_head,
         n_kv_head=config.model.n_kv_head,
         use_gqa=config.model.use_gqa,
+        sliding_window_pattern=config.model.sliding_window_pattern,
+        sliding_window_size=config.model.sliding_window_size,
+        layer_attention_windows=config.model.layer_attention_windows(),
         n_embd=config.model.n_embd,
         seq_len=config.model.seq_len,
         device_batch_size=config.train.device_batch_size,

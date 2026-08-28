@@ -170,6 +170,7 @@ def _run_identities(
         "parameterization": {
             "n_head": model.head_count,
             "n_kv_head": model.n_kv_head,
+            "sliding_window": snapshot.config.model.attention_window_identity(),
             "tie_weights": model.tie_weights,
             "unique_parameters": model.unique_parameters,
             "use_gqa": model.use_gqa,

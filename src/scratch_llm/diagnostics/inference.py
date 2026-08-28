@@ -45,10 +45,10 @@ from scratch_llm.utils import load_json, save_json
 
 
 INFERENCE_BENCHMARK_FORMAT: Final = "scratch_llm_inference_benchmark"
-INFERENCE_BENCHMARK_FORMAT_VERSION: Final = 1
-INFERENCE_BENCHMARK_PROTOCOL_ID: Final = "shared_generation_naive_vs_kv_cache_v1"
-INFERENCE_FLOPS_FORMULA_ID: Final = "baseline_gpt_dense_inference_v1"
-INFERENCE_BYTES_FORMULA_ID: Final = "parameter_and_external_kv_decode_bytes_v1"
+INFERENCE_BENCHMARK_FORMAT_VERSION: Final = 2
+INFERENCE_BENCHMARK_PROTOCOL_ID: Final = "shared_generation_layer_window_kv_cache_v2"
+INFERENCE_FLOPS_FORMULA_ID: Final = "gpt_layer_window_inference_v2"
+INFERENCE_BYTES_FORMULA_ID: Final = "parameter_and_visible_kv_decode_bytes_v2"
 _REPORT_RELATIVE_PATH = Path("metrics/inference_bench.json")
 _SUMMARY_METHOD = "linear_interpolation_r7"
 _QUANTILES = (0.5, 0.9, 0.95)
@@ -516,8 +516,10 @@ def build_inference_benchmark(
         "pytorch": dict(execution.pytorch_identity),
         "tokenizer": execution.tokenizer_identity,
     }
+    attention_identity = execution.attention_selection.to_dict()
+    attention_identity["window"] = model_config.attention_window_identity()
     optimization_state = {
-        "attention": execution.attention_selection.to_dict(),
+        "attention": attention_identity,
         "cache": {
             "canonical_checkpoint_default": model_config.use_kv_cache,
             "compared_modes": ["naive", "cached"],
@@ -552,7 +554,7 @@ def build_inference_benchmark(
             "non_cuda": "no-op",
         },
         "timed_iterations": settings.timed_iterations,
-        "version": 1,
+        "version": 2,
         "warmup_iterations": settings.warmup_iterations,
     }
     payload: dict[str, object] = {
@@ -846,6 +848,15 @@ def _aggregate_mode(
         )
         for item in iterations
     ]
+    cache_traffic = [
+        _estimate_decode_cache_traffic(
+            item,
+            mode=mode,
+            model_config=model_config,
+            cache_metadata=cache_metadata,
+        )
+        for item in iterations
+    ]
     mfu = _utilization_summary(
         numerators=flops,
         iterations=iterations,
@@ -873,6 +884,11 @@ def _aggregate_mode(
             ),
             "capacity": cache_metadata.get("capacity") if mode == "cached" else 0,
             "enabled": mode == "cached",
+            "layer_window_sizes": (
+                cache_metadata.get("layer_window_sizes") if mode == "cached" else []
+            ),
+            "read_bytes_per_iteration": cache_traffic[0][0],
+            "write_bytes_per_iteration": cache_traffic[0][1],
         },
         "counts": {
             "generated_tokens": len(sequence.generated_token_ids),
@@ -930,10 +946,14 @@ def _aggregate_mode(
 
 def _estimate_decode_flops(config: GPTConfig, iteration: InferenceIteration) -> int:
     channels = config.n_embd
-    executed_weights = (
-        config.n_layer * (4 + 2 * config.mlp_ratio) * channels**2
-        + channels * config.vocab_size
+    if config.n_kv_head is None:  # pragma: no cover - validated resolution.
+        raise RuntimeError("validated config lost n_kv_head")
+    kv_width = config.n_kv_head * (channels // config.n_head)
+    per_layer_weights = (
+        2 * channels**2 + 2 * channels * kv_width + 2 * config.mlp_ratio * channels**2
     )
+    executed_weights = config.n_layer * per_layer_weights + channels * config.vocab_size
+    layer_windows = config.layer_attention_windows()
     total = 0
     for decode_index, query_length in enumerate(iteration.forward_query_lengths[1:], 1):
         if iteration.mode == "cached":
@@ -941,7 +961,11 @@ def _estimate_decode_flops(config: GPTConfig, iteration: InferenceIteration) -> 
         else:
             key_length = query_length
         total += 2 * executed_weights * query_length
-        total += 4 * config.n_layer * channels * query_length * key_length
+        for window in layer_windows:
+            effective_key_length = (
+                key_length if window is None else min(key_length, window + 1)
+            )
+            total += 4 * channels * query_length * effective_key_length
     return total
 
 
@@ -956,13 +980,62 @@ def _estimate_decode_bytes(
     total = parameter_bytes * decode_calls
     if mode == "naive" or decode_calls == 0:
         return total
+    read_bytes, write_bytes = _estimate_decode_cache_traffic(
+        iteration,
+        mode=mode,
+        model_config=None,
+        cache_metadata=cache_metadata,
+    )
+    return total + read_bytes + write_bytes
+
+
+def _estimate_decode_cache_traffic(
+    iteration: InferenceIteration,
+    *,
+    mode: GenerationMode,
+    model_config: GPTConfig | None,
+    cache_metadata: Mapping[str, object],
+) -> tuple[int, int]:
+    """Return logical external K/V read bytes and physical append bytes."""
+
+    decode_calls = iteration.decode_token_count
+    if mode == "naive" or decode_calls == 0:
+        return 0, 0
     bytes_per_token = cache_metadata.get("bytes_per_token")
     if isinstance(bytes_per_token, bool) or not isinstance(bytes_per_token, int):
         raise ValueError("cache metadata bytes_per_token must be an integer")
+    layer_windows = cache_metadata.get("layer_window_sizes")
+    if layer_windows is None:
+        if model_config is None:
+            layer_count = cache_metadata.get("layer_count")
+            if isinstance(layer_count, bool) or not isinstance(layer_count, int):
+                layer_count = 1
+            active_windows: list[int | None] = [None] * layer_count
+        else:
+            active_windows = list(model_config.layer_attention_windows())
+    elif not isinstance(layer_windows, list) or not layer_windows:
+        raise ValueError("cache metadata layer_window_sizes must be a non-empty list")
+    else:
+        active_windows = []
+        for index, window in enumerate(layer_windows):
+            if window is not None and (
+                isinstance(window, bool) or not isinstance(window, int) or window <= 0
+            ):
+                raise ValueError(
+                    f"cache metadata layer_window_sizes[{index}] is invalid"
+                )
+            active_windows.append(window)
+    if bytes_per_token % len(active_windows):
+        raise ValueError("cache bytes_per_token must divide evenly across layers")
+    bytes_per_layer_token = bytes_per_token // len(active_windows)
+    read_bytes = 0
     for decode_index in range(1, decode_calls + 1):
         visible_tokens = iteration.prompt_context_tokens + decode_index
-        total += bytes_per_token * (visible_tokens + 1)
-    return total
+        read_bytes += bytes_per_layer_token * sum(
+            visible_tokens if window is None else min(visible_tokens, window + 1)
+            for window in active_windows
+        )
+    return read_bytes, bytes_per_token * decode_calls
 
 
 def _utilization_summary(
@@ -1099,6 +1172,7 @@ def _tracking_metrics(payload: dict[str, object]) -> dict[str, object]:
         "inference/kv_cache_bytes_per_token": cached_cache["bytes_per_token"],
         "inference/kv_cache_capacity": cached_cache["capacity"],
         "inference/kv_cache_enabled": True,
+        "inference/kv_cache_read_bytes": cached_cache["read_bytes_per_iteration"],
         "inference/mbu": utilization("mbu"),
         "inference/mfu": utilization("mfu"),
         "inference/naive/decode_ms_per_token": p50(

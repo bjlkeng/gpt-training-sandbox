@@ -21,7 +21,7 @@ from scratch_llm.training.loop import derive_grad_accum_steps
 
 
 RESOURCE_ESTIMATE_FORMAT: Final = "scratch_llm_training_resource_estimate"
-RESOURCE_ESTIMATE_FORMAT_VERSION: Final = 7
+RESOURCE_ESTIMATE_FORMAT_VERSION: Final = 8
 _BYTES_PER_MIB = 1024**2
 _MAX_SIGNED_64 = 2**63 - 1
 _HEADROOM_NUMERATOR = 1
@@ -80,6 +80,9 @@ class GPTModelSizeEstimate:
     head_count: int
     n_kv_head: int
     use_gqa: bool
+    sliding_window_pattern: str
+    sliding_window_size: int
+    layer_attention_windows: tuple[int | None, ...]
     embedding_width: int
     norm: str
     activation: str
@@ -132,6 +135,13 @@ class GPTModelSizeEstimate:
             raise TypeError("use_gqa must be a boolean")
         if self.use_gqa is not (self.n_kv_head < self.head_count):
             raise ValueError("use_gqa must agree with reduced KV-head geometry")
+        if len(self.layer_attention_windows) != self.layer_count:
+            raise ValueError("layer_attention_windows must match layer_count")
+        if (
+            not self.layer_attention_windows
+            or self.layer_attention_windows[-1] is not None
+        ):
+            raise ValueError("the final attention layer must use full context")
         requested = (
             self.requested_depth,
             self.requested_aspect_ratio,
@@ -214,6 +224,16 @@ class GPTModelSizeEstimate:
                 "n_head": self.head_count,
                 "n_kv_head": self.n_kv_head,
                 "use_gqa": self.use_gqa,
+                "window": {
+                    "final_layer_forced_full": True,
+                    "pattern": self.sliding_window_pattern,
+                    "resolved_layer_types": [
+                        "S" if window is not None else "L"
+                        for window in self.layer_attention_windows
+                    ],
+                    "resolved_left_windows": list(self.layer_attention_windows),
+                    "short_window_size": self.sliding_window_size,
+                },
             },
             "component_parameters": dict(self.component_parameters),
             "embedding_dominated": self.embedding_dominated,
@@ -358,6 +378,7 @@ class TrainingMemoryEstimate:
     sequence_length: int
     layer_count: int
     head_count: int
+    layer_key_spans: tuple[int, ...]
     embedding_width: int
     mlp_ratio: int
     vocabulary_size: int
@@ -392,6 +413,12 @@ class TrainingMemoryEstimate:
             "allocator_headroom_bytes",
         ):
             require_positive_integer(getattr(self, name), name=name)
+        if len(self.layer_key_spans) != self.layer_count:
+            raise ValueError("layer_key_spans must contain one value per layer")
+        for index, span in enumerate(self.layer_key_spans):
+            require_positive_integer(span, name=f"layer_key_spans[{index}]")
+            if span > self.sequence_length:
+                raise ValueError("layer key spans cannot exceed sequence_length")
         _bounded_signed_64(self.subtotal_bytes, name="memory subtotal bytes")
         _bounded_signed_64(self.total_bytes, name="memory total bytes")
         if not isinstance(self.compiled_graph_requested, bool):
@@ -444,7 +471,8 @@ class TrainingMemoryEstimate:
                     "(8 + 2 * mlp_ratio) saved hidden-width values per "
                     "token/layer at configured dtype, float32 materialized "
                     "attention scores and probabilities, final hidden state "
-                    "at configured dtype, and one bool causal mask per layer"
+                    "at configured dtype, and one bool causal mask using each "
+                    "layer effective key span"
                 ),
                 "allocator_headroom": (
                     "max(20% of modeled subtotal, 512 MiB) for allocator "
@@ -480,6 +508,7 @@ class TrainingMemoryEstimate:
                 "device_batch_size": self.device_batch_size,
                 "embedding_width": self.embedding_width,
                 "head_count": self.head_count,
+                "layer_key_spans": list(self.layer_key_spans),
                 "layer_count": self.layer_count,
                 "mlp_ratio": self.mlp_ratio,
                 "sequence_length": self.sequence_length,
@@ -798,6 +827,9 @@ def estimate_gpt_model_size(config: GPTConfig) -> GPTModelSizeEstimate:
         head_count=config.n_head,
         n_kv_head=config.n_kv_head,
         use_gqa=config.use_gqa,
+        sliding_window_pattern=config.sliding_window_pattern,
+        sliding_window_size=config.sliding_window_size,
+        layer_attention_windows=config.layer_attention_windows(),
         embedding_width=config.n_embd,
         norm=config.norm,
         activation=config.activation,
@@ -1019,12 +1051,19 @@ def _estimate_training_memory(
         8 + 2 * ratio,
         name="dense activation elements",
     )
+    layer_key_spans = tuple(
+        sequence if window is None else min(sequence, window + 1)
+        for window in config.model.layer_attention_windows()
+    )
+    total_layer_key_spans = _checked_sum(
+        *layer_key_spans,
+        name="total layer attention key spans",
+    )
     attention_activation_elements = _checked_product(
-        layers,
+        total_layer_key_spans,
         2,
         batch,
         heads,
-        sequence,
         sequence,
         name="attention activation elements",
     )
@@ -1049,8 +1088,7 @@ def _estimate_training_memory(
         name="float32 attention activation bytes",
     )
     causal_mask_bytes = _checked_product(
-        layers,
-        sequence,
+        total_layer_key_spans,
         sequence,
         name="causal mask bytes",
     )
@@ -1113,6 +1151,7 @@ def _estimate_training_memory(
         sequence_length=sequence,
         layer_count=layers,
         head_count=heads,
+        layer_key_spans=layer_key_spans,
         embedding_width=channels,
         mlp_ratio=ratio,
         vocabulary_size=vocab,

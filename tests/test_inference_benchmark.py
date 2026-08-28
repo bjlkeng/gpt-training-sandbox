@@ -263,6 +263,9 @@ def test_aggregation_records_units_quantiles_formulas_and_fallbacks() -> None:
         "bytes_per_token": 128,
         "capacity": 8,
         "enabled": True,
+        "layer_window_sizes": None,
+        "read_bytes_per_iteration": 384,
+        "write_bytes_per_iteration": 128,
     }
     assert cached["utilization"]["mfu"]["value"]["p50"] is not None
     assert cached["utilization"]["mfu"]["unavailable_reason"] is None

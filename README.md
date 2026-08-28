@@ -1386,6 +1386,45 @@ throughput, cached decode latency, cache bytes, peak memory, and parameter
 delta—is in
 [`comparisons/gpt-training-sandbox-as7-7-gqa`](comparisons/gpt-training-sandbox-as7-7-gqa/README.md).
 
+### Sliding-window attention
+
+Sliding-window attention is experimental and off by default. The default
+`model.sliding_window_pattern: L` gives every block ordinary full causal
+context. A pattern is a non-empty uppercase string containing only `L` (long,
+full causal context) and `S` (short causal context). It tiles over model depth,
+then the final transformer block is always forced to `L`:
+
+```text
+pattern SLL, depth 7 -> S L L S L L L
+```
+
+`model.sliding_window_size` is the number of preceding positions visible in
+an `S` layer. It must be positive and no larger than `model.seq_len`; the
+current token is visible in addition to those preceding positions. With a
+size of 16, token 40 can attend only to positions 24 through 40 in an `S`
+layer. Future positions remain masked. `L` layers retain the exact baseline
+path, including the final block.
+
+Manual attention materializes only the local band for aligned training and
+prefill inputs. SDPA consumes the same explicit position mask, while
+FlashAttention receives `window_size=(sliding_window_size, 0)`. A Flash
+provider that lacks local-window support is rejected; an allowed SDPA/manual
+fallback still applies the declared mask rather than silently restoring full
+context.
+
+The KV cache keeps its physical full-context capacity and absolute token
+positions. During single-token decode, each `S` layer slices its cache read to
+the current token plus its preceding window, while `L` layers read the full
+prefix. Inference reports therefore distinguish allocated cache bytes and
+capacity from logical K/V bytes read. The feature does not change parameter or
+state keys, but its pattern, resolved per-layer windows, FLOPs, resource
+estimate, checkpoint config, and benchmark identity are all explicit.
+
+The bounded same-seed RTX 3090 full-context versus `S`/`L` comparison records
+BPB, training throughput, cached decode latency, cache-read bytes, peak memory,
+and the unchanged parameter count in
+[`comparisons/gpt-training-sandbox-as7-8-sliding-window`](comparisons/gpt-training-sandbox-as7-8-sliding-window/README.md).
+
 ### Base-model orchestration and resource preflight
 
 The three named presets and repeatable dotted overrides are the orchestration

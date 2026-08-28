@@ -1,0 +1,97 @@
+{
+  "bead": "gpt-training-sandbox-as7.8",
+  "controls": {
+    "attention_backend": "manual",
+    "changed_config_fields": [
+      "model.sliding_window_pattern",
+      "model.sliding_window_size",
+      "run.name"
+    ],
+    "device": "cuda",
+    "dtype": "float32",
+    "inference": {
+      "generated_tokens": 64,
+      "prompt_tokens": 16,
+      "timed_iterations": 10,
+      "warmup_iterations": 2
+    },
+    "mfu_peak_flops_basis": "rtx3090_fp32_35.58_tflops",
+    "seed": 1337,
+    "sequence_length": 128,
+    "source_base_commit": "5c07be1",
+    "training_steps": 50
+  },
+  "deltas": {
+    "cache_read_bytes": -1999872,
+    "decode_latency_p50_ms_per_token": 0.046602206393366874,
+    "final_training_loss": 0.029610872268676758,
+    "inference_peak_memory_mib": 0.09033203125,
+    "training_peak_memory_mib": 3.75439453125,
+    "validation_bpb": -0.1813880328016957,
+    "warm_tokens_per_second_mean": -4654.305814411397,
+    "warm_tokens_per_second_median": -4692.994428629492
+  },
+  "format": "scratch_llm_bounded_architecture_flag_comparison",
+  "format_version": 1,
+  "interpretation": "The short-window layer reduced logical cached K/V reads while physical cache capacity and writes stayed fixed. This bounded manual-attention run did not improve observed speed or memory, and its small BPB change is not evidence of a quality trend.",
+  "runs": {
+    "full": {
+      "cache_capacity_bytes": 262144,
+      "cache_read_bytes": 6193152,
+      "cache_write_bytes": 129024,
+      "checkpoint_identity": "sha256:cb1d252986e4d35c74263ef9100d6ce9347112d2e7b55eb994d0f6ab6a2d0e71",
+      "config_identity": "sha256:f0cb9c64728577ed5e518b61b79b4c478fd2ee02e44a0b25d6cc9601831b5f2d",
+      "decode_latency_p50_ms_per_token": 1.1593571361449975,
+      "final_training_loss": 2.809593915939331,
+      "inference_peak_memory_mib": 10.2041015625,
+      "pattern": "L",
+      "resolved_layer_types": [
+        "L",
+        "L"
+      ],
+      "resolved_left_windows": [
+        null,
+        null
+      ],
+      "run_directory": "runs/m10-window-full",
+      "short_window_size": 64,
+      "training_peak_memory_mib": 28.6328125,
+      "unique_parameters": 444160,
+      "validation_bpb": 12.307663393582612,
+      "warm_tokens_per_second_mean": 45186.510003438714,
+      "warm_tokens_per_second_median": 45274.45988185859
+    },
+    "sliding": {
+      "cache_capacity_bytes": 262144,
+      "cache_read_bytes": 4193280,
+      "cache_write_bytes": 129024,
+      "checkpoint_identity": "sha256:950edbddeab383fba7a4c6879dd3b90e3c2e06b1ab5a00a8f4ade4a4ea34bb5d",
+      "config_identity": "sha256:d86ad409a3948d35b3771c9d284c0aef21ac62488fab1c058396d37ec13586f2",
+      "decode_latency_p50_ms_per_token": 1.2059593425383643,
+      "final_training_loss": 2.839204788208008,
+      "inference_peak_memory_mib": 10.29443359375,
+      "pattern": "S",
+      "resolved_layer_types": [
+        "S",
+        "L"
+      ],
+      "resolved_left_windows": [
+        16,
+        null
+      ],
+      "run_directory": "runs/m10-window-s16",
+      "short_window_size": 16,
+      "training_peak_memory_mib": 32.38720703125,
+      "unique_parameters": 444160,
+      "validation_bpb": 12.126275360780916,
+      "warm_tokens_per_second_mean": 40532.20418902732,
+      "warm_tokens_per_second_median": 40581.465453229095
+    }
+  },
+  "validation": {
+    "fixture_bytes": 261,
+    "fixture_sha256": "b41bd8ad00945ea6c0223a2f1964835de0d6b7105fe76dcfa80639e78823ac3f",
+    "fixture_source": "data/fixtures/chat/validation.jsonl",
+    "scope": "bounded diagnostic; not CORE or full-corpus evaluation"
+  }
+}

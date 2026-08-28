@@ -44,6 +44,7 @@ def _integration_config(tmp_path: Path, *, run_name: str) -> ProjectConfig:
     config.data.profile = "tiny_text"
     config.data.base_dir = str(PROJECT_ROOT / "data")
     config.model.seq_len = 16
+    config.model.sliding_window_size = 16
     config.model.n_layer = 1
     config.model.n_head = 1
     config.model.n_kv_head = 1

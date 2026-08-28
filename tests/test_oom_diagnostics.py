@@ -100,7 +100,7 @@ def test_oom_diagnostic_records_attempt_and_ordered_exact_overrides() -> None:
     assert diagnostic.recommendations[3].cli_overrides == ("model.n_layer=1",)
 
     payload = json.loads(diagnostic.to_json())
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert payload["memory"]["allocated_bytes"] == 8_000 * 1024**2
     assert payload["memory"]["capacity_bytes"] == 24 * 1024**3
     assert payload["attempt"]["dtype"] == "float32"
@@ -115,6 +115,7 @@ def test_batch_advice_uses_explicit_valid_budget_when_halving_is_not_divisible()
 ):
     config = load_config(BASE_SMOKE_CONFIG)
     config.model.seq_len = 8
+    config.model.sliding_window_size = 8
     config.train.device_batch_size = 5
     config.train.total_batch_size_tokens = 120
     config.train.grad_accum_steps = "auto"

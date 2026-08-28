@@ -21,6 +21,7 @@ class KVCacheMetadata:
     device: torch.device
     dtype: torch.dtype
     layer_shape: tuple[int, int, int, int]
+    layer_window_sizes: tuple[int | None, ...]
     bytes_per_token: int
     allocated_bytes: int
 
@@ -36,6 +37,7 @@ class KVCacheMetadata:
             "kv_head_count": self.kv_head_count,
             "layer_count": self.layer_count,
             "layer_shape": list(self.layer_shape),
+            "layer_window_sizes": list(self.layer_window_sizes),
         }
 
 
@@ -52,6 +54,7 @@ class KVCache:
         capacity: int,
         device: str | torch.device,
         dtype: torch.dtype,
+        layer_window_sizes: tuple[int | None, ...] | None = None,
     ) -> None:
         for name, value in (
             ("layer_count", layer_count),
@@ -64,6 +67,27 @@ class KVCache:
                 raise KVCacheError(f"{name} must be a positive integer")
         if not isinstance(dtype, torch.dtype) or not dtype.is_floating_point:
             raise KVCacheError("dtype must be a floating-point torch dtype")
+        active_layer_windows: tuple[int | None, ...]
+        if layer_window_sizes is None:
+            active_layer_windows = (None,) * layer_count
+        else:
+            if (
+                not isinstance(layer_window_sizes, tuple)
+                or len(layer_window_sizes) != layer_count
+            ):
+                raise KVCacheError(
+                    "layer_window_sizes must contain one entry per cache layer"
+                )
+            for index, window in enumerate(layer_window_sizes):
+                if window is not None and (
+                    isinstance(window, bool)
+                    or not isinstance(window, int)
+                    or window <= 0
+                ):
+                    raise KVCacheError(
+                        f"layer_window_sizes[{index}] must be positive or None"
+                    )
+            active_layer_windows = layer_window_sizes
         resolved_device = torch.device(device)
         shape = (
             layer_count,
@@ -94,6 +118,7 @@ class KVCache:
             device=resolved_device,
             dtype=dtype,
             layer_shape=layer_shape,
+            layer_window_sizes=active_layer_windows,
             bytes_per_token=bytes_per_token,
             allocated_bytes=bytes_per_token * capacity,
         )
