@@ -23,6 +23,52 @@ from scratch_llm.kv_cache import KVCacheTransaction
 from scratch_llm.normalization import RMS_NORM_EPSILON
 
 
+VALUE_EMBEDDING_GATE_SCALE = 3.0
+
+
+def mix_token_value_embeddings(
+    projected_value: torch.Tensor,
+    embedded_value: torch.Tensor,
+    gate_logits: torch.Tensor,
+) -> torch.Tensor:
+    """Add token-indexed values through one input-dependent gate per KV head."""
+
+    if projected_value.ndim != 4:
+        raise ValueError("projected_value must have shape (batch, heads, time, width)")
+    batch_size, kv_heads, sequence_length, head_dimension = projected_value.shape
+    if embedded_value.shape != (
+        batch_size,
+        sequence_length,
+        kv_heads,
+        head_dimension,
+    ):
+        raise ValueError(
+            "embedded_value must have shape (batch, time, KV heads, head dimension)"
+        )
+    if gate_logits.shape != (batch_size, sequence_length, kv_heads):
+        raise ValueError("gate_logits must have shape (batch, time, KV heads)")
+    for name, value in (
+        ("projected_value", projected_value),
+        ("embedded_value", embedded_value),
+        ("gate_logits", gate_logits),
+    ):
+        if not value.is_floating_point():
+            raise TypeError(f"{name} must use a floating-point dtype")
+        if value.device != projected_value.device:
+            raise ValueError("value embedding tensors must use the same device")
+        if value.dtype != projected_value.dtype:
+            raise TypeError("value embedding tensors must use the same dtype")
+    gate = VALUE_EMBEDDING_GATE_SCALE * torch.sigmoid(gate_logits)
+    return projected_value + gate.transpose(1, 2).unsqueeze(
+        -1
+    ) * embedded_value.permute(
+        0,
+        2,
+        1,
+        3,
+    )
+
+
 def build_causal_attention_mask(
     query_positions: torch.Tensor,
     key_positions: torch.Tensor,
@@ -287,6 +333,29 @@ class CausalSelfAttention(nn.Module):
         )
         self.attention_dropout = nn.Dropout(config.dropout)
         self.output_dropout = nn.Dropout(config.dropout)
+        value_embedding_enabled = (
+            active_layer_index in config.value_embedding_layer_indices()
+        )
+        self.value_embedding: nn.Embedding | None
+        self.value_gate: nn.Linear | None
+        if value_embedding_enabled:
+            kv_width = self.n_kv_head * self.head_dim
+            self.value_embedding = nn.Embedding(config.vocab_size, kv_width)
+            self.value_gate = nn.Linear(
+                config.value_embedding_gate_channels,
+                self.n_kv_head,
+                bias=False,
+            )
+            embedding_bound = math.sqrt(3.0 / config.n_embd)
+            nn.init.uniform_(
+                self.value_embedding.weight,
+                -embedding_bound,
+                embedding_bound,
+            )
+            nn.init.uniform_(self.value_gate.weight, 0.0, 0.02)
+        else:
+            self.value_embedding = None
+            self.value_gate = None
 
         self.causal_mask: torch.Tensor | None
         if self.attention_backend == "manual" and self.left_window is None:
@@ -385,6 +454,7 @@ class CausalSelfAttention(nn.Module):
         self,
         x: torch.Tensor,
         *,
+        token_ids: torch.Tensor | None = None,
         positions: torch.Tensor | None = None,
         kv_cache: KVCacheTransaction | None = None,
     ) -> torch.Tensor:
@@ -416,6 +486,35 @@ class CausalSelfAttention(nn.Module):
             n_kv_head=self.n_kv_head,
             head_dim=self.head_dim,
         )
+        if self.value_embedding is not None:
+            if self.value_gate is None:  # pragma: no cover - constructor invariant.
+                raise RuntimeError("value embedding lost its input-dependent gate")
+            if token_ids is None:
+                raise ValueError("enabled value embeddings require token_ids")
+            if token_ids.shape != (batch_size, sequence_length):
+                raise ValueError(
+                    "token_ids must match the attention batch and sequence dimensions"
+                )
+            if token_ids.dtype == torch.bool or token_ids.is_floating_point():
+                raise TypeError("token_ids must use an integer dtype")
+            if token_ids.device != x.device:
+                raise ValueError(
+                    "token_ids and attention input must use the same device"
+                )
+            embedded_value = (
+                self.value_embedding(token_ids)
+                .view(
+                    batch_size,
+                    sequence_length,
+                    self.n_kv_head,
+                    self.head_dim,
+                )
+                .to(dtype=v.dtype)
+            )
+            gate_logits = self.value_gate(
+                x[..., : self._config.value_embedding_gate_channels]
+            ).to(dtype=v.dtype)
+            v = mix_token_value_embeddings(v, embedded_value, gate_logits)
         if self.rotary is not None:
             if positions is None:
                 raise ValueError("rotary attention requires absolute positions")

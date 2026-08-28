@@ -45,9 +45,9 @@ from scratch_llm.utils import load_json, save_json
 
 
 INFERENCE_BENCHMARK_FORMAT: Final = "scratch_llm_inference_benchmark"
-INFERENCE_BENCHMARK_FORMAT_VERSION: Final = 2
-INFERENCE_BENCHMARK_PROTOCOL_ID: Final = "shared_generation_layer_window_kv_cache_v2"
-INFERENCE_FLOPS_FORMULA_ID: Final = "gpt_layer_window_inference_v2"
+INFERENCE_BENCHMARK_FORMAT_VERSION: Final = 3
+INFERENCE_BENCHMARK_PROTOCOL_ID: Final = "shared_generation_value_embedding_kv_cache_v3"
+INFERENCE_FLOPS_FORMULA_ID: Final = "gpt_value_embedding_inference_v3"
 INFERENCE_BYTES_FORMULA_ID: Final = "parameter_and_visible_kv_decode_bytes_v2"
 _REPORT_RELATIVE_PATH = Path("metrics/inference_bench.json")
 _SUMMARY_METHOD = "linear_interpolation_r7"
@@ -527,6 +527,7 @@ def build_inference_benchmark(
             "requested_by_mode": {"cached": True, "naive": False},
         },
         "compile": execution.compile_selection.to_dict(),
+        "value_embeddings": model_config.value_embedding_identity(),
     }
     protocol = {
         "clock": "time.perf_counter",
@@ -554,7 +555,7 @@ def build_inference_benchmark(
             "non_cuda": "no-op",
         },
         "timed_iterations": settings.timed_iterations,
-        "version": 2,
+        "version": 3,
         "warmup_iterations": settings.warmup_iterations,
     }
     payload: dict[str, object] = {
@@ -912,8 +913,9 @@ def _aggregate_mode(
                 "assumptions": [
                     "one multiply-accumulate is two FLOPs",
                     "linear projections include QKV, attention output, MLP, and LM head",
+                    "enabled value-gate projections are included",
                     "attention includes QK scores and weighted-value products",
-                    "embedding, normalization, activation, softmax, and sampling FLOPs are excluded",
+                    "embedding lookup, sigmoid, elementwise mixing, normalization, activation, softmax, and sampling FLOPs are excluded",
                 ],
                 "estimated_flops_per_iteration": flops[0],
                 "formula_id": INFERENCE_FLOPS_FORMULA_ID,
@@ -952,7 +954,16 @@ def _estimate_decode_flops(config: GPTConfig, iteration: InferenceIteration) -> 
     per_layer_weights = (
         2 * channels**2 + 2 * channels * kv_width + 2 * config.mlp_ratio * channels**2
     )
-    executed_weights = config.n_layer * per_layer_weights + channels * config.vocab_size
+    value_gate_weights = (
+        len(config.value_embedding_layer_indices())
+        * config.value_embedding_gate_channels
+        * config.n_kv_head
+    )
+    executed_weights = (
+        config.n_layer * per_layer_weights
+        + value_gate_weights
+        + channels * config.vocab_size
+    )
     layer_windows = config.layer_attention_windows()
     total = 0
     for decode_index, query_length in enumerate(iteration.forward_query_lengths[1:], 1):

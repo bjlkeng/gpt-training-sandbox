@@ -1,0 +1,94 @@
+{
+  "bead": "gpt-training-sandbox-as7.9",
+  "controls": {
+    "attention_backend": "manual",
+    "changed_config_fields": [
+      "model.use_value_embeddings",
+      "run.name"
+    ],
+    "device": "cuda",
+    "dtype": "float32",
+    "inference": {
+      "generated_tokens": 64,
+      "prompt_tokens": 16,
+      "timed_iterations": 10,
+      "warmup_iterations": 2
+    },
+    "mfu_peak_flops_basis": "rtx3090_fp32_35.58_tflops",
+    "seed": 1337,
+    "sequence_length": 128,
+    "source_base_commit": "00f7e2c",
+    "training_steps": 50
+  },
+  "deltas": {
+    "cache_allocated_bytes": 0,
+    "cache_read_bytes": 0,
+    "cache_write_bytes": 0,
+    "decode_latency_p50_ms_per_token": 0.08996566461901812,
+    "final_training_loss": 0.005461931228637695,
+    "inference_peak_memory_mib": 0.1298828125,
+    "parameter_bytes": 135776,
+    "training_peak_memory_mib": 0.6484375,
+    "unique_parameters": 33944,
+    "validation_bpb": 1.507091301177324,
+    "warm_tokens_per_second_mean": -2182.056296777795,
+    "warm_tokens_per_second_median": -5148.984297166149
+  },
+  "format": "scratch_llm_bounded_architecture_flag_comparison",
+  "format_version": 1,
+  "interpretation": "The selected value table and gate added 7.64% parameters without changing KV-cache traffic. This bounded run regressed BPB, median training throughput, decode latency, and observed memory, so the feature remains experimental and disabled by default.",
+  "runs": {
+    "off": {
+      "cache_allocated_bytes": 262144,
+      "cache_read_bytes": 6193152,
+      "cache_write_bytes": 129024,
+      "checkpoint_identity": "sha256:db349f520c6fac306d3bc5331ad23c3ce3e31db9c5dab157b2da62bd0bbc9900",
+      "config_identity": "sha256:706645c44923bdec1bfea39b1315790c7df85e75e8b61b3a55a60f7878b30585",
+      "decode_latency_p50_ms_per_token": 1.1867891760572555,
+      "final_training_loss": 2.809593915939331,
+      "gate_parameters": 0,
+      "inference_peak_memory_mib": 10.2041015625,
+      "layer_indices": [],
+      "parameter_bytes": 1776640,
+      "run_directory": "runs/m10-value-off",
+      "training_peak_memory_mib": 28.6328125,
+      "unique_parameters": 444160,
+      "validation_bpb": 12.307663393582612,
+      "value_embedding_parameters": 0,
+      "warm_tokens_per_second_mean": 45101.35662352952,
+      "warm_tokens_per_second_median": 45191.66500140876
+    },
+    "on": {
+      "cache_allocated_bytes": 262144,
+      "cache_read_bytes": 6193152,
+      "cache_write_bytes": 129024,
+      "checkpoint_identity": "sha256:2a989f902074a8f51ac4c9163e6372fdb34713d3f0d87867643d058949997a50",
+      "config_identity": "sha256:f64c5d31674dc87fbfb5a32cc30a35bc4c44ef372be9ea855fa3e001a405eadf",
+      "decode_latency_p50_ms_per_token": 1.2767548406762737,
+      "final_training_loss": 2.8150558471679688,
+      "gate_channels": 12,
+      "gate_parameters": 24,
+      "gate_scale": 3.0,
+      "inference_peak_memory_mib": 10.333984375,
+      "kv_width": 128,
+      "layer_indices": [
+        1
+      ],
+      "parameter_bytes": 1912416,
+      "placement": "alternating_by_final_layer_parity",
+      "run_directory": "runs/m10-value-on",
+      "training_peak_memory_mib": 29.28125,
+      "unique_parameters": 478104,
+      "validation_bpb": 13.814754694759936,
+      "value_embedding_parameters": 33920,
+      "warm_tokens_per_second_mean": 42919.30032675173,
+      "warm_tokens_per_second_median": 40042.68070424261
+    }
+  },
+  "validation": {
+    "fixture_bytes": 261,
+    "fixture_sha256": "b41bd8ad00945ea6c0223a2f1964835de0d6b7105fe76dcfa80639e78823ac3f",
+    "fixture_source": "data/fixtures/chat/validation.jsonl",
+    "scope": "bounded diagnostic; not CORE or full-corpus evaluation"
+  }
+}

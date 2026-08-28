@@ -1425,6 +1425,47 @@ BPB, training throughput, cached decode latency, cache-read bytes, peak memory,
 and the unchanged parameter count in
 [`comparisons/gpt-training-sandbox-as7-8-sliding-window`](comparisons/gpt-training-sandbox-as7-8-sliding-window/README.md).
 
+### Gated value embeddings
+
+Gated value embeddings are an experimental capacity switch and remain off by
+default with `model.use_value_embeddings: false`. When enabled, transformer
+blocks alternate by the parity of the final block, which is always included:
+
+```text
+depth 1 -> 0
+depth 2 -> 1
+depth 3 -> 0, 2
+depth 4 -> 1, 3
+```
+
+Each selected attention layer owns a token embedding of shape
+`(vocab_size, n_kv_head * head_dim)` and a bias-free gate from the first
+`model.value_embedding_gate_channels` normalized input channels to one value
+per KV head. The configured gate width defaults to 12 and must not exceed
+`n_embd` when the feature is enabled. Following the
+[pinned nanochat semantics](https://github.com/karpathy/nanochat/blob/92d63d4e8bb4df75c3b71618f31ddde2378b2bcd/nanochat/gpt.py),
+the layer modifies only projected values:
+
+```text
+gate = 3 * sigmoid(gate_projection(normalized_x[..., :gate_channels]))
+V = V_projection(normalized_x) + gate[..., None] * value_embedding(token_ids)
+```
+
+Queries and keys are unchanged. The compact value width follows MHA, GQA, or
+MQA geometry, and the same token-indexed values feed manual attention, SDPA,
+FlashAttention, full forward, cache prefill, and cached decode. Value tables
+initialize with the pinned value-projection bound `sqrt(3 / n_embd)`; gate
+weights initialize uniformly in `[0, 0.02]`. Disabled mode creates no module,
+parameter, or state key and preserves the prior initialization sequence and
+logits exactly.
+
+Resource, FLOP, OOM, run-comparison, checkpoint, and inference identities
+record the exact layer placement, compact width, gate width, and parameter
+cost. The bounded same-seed RTX 3090 off/on comparison records BPB, training
+throughput, cached decode latency, parameter/cache memory, and observed peak
+memory in
+[`comparisons/gpt-training-sandbox-as7-9-value-embeddings`](comparisons/gpt-training-sandbox-as7-9-value-embeddings/README.md).
+
 ### Base-model orchestration and resource preflight
 
 The three named presets and repeatable dotted overrides are the orchestration

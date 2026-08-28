@@ -16,14 +16,16 @@ from scratch_llm._validation import (
 from scratch_llm.config import GPTConfig, TrainConfig
 
 
-TRAINING_FLOPS_FORMULA_ID: Final = "gpt_layer_window_training_v2"
+TRAINING_FLOPS_FORMULA_ID: Final = "gpt_value_embedding_training_v3"
 _TRAINING_FLOPS_ASSUMPTIONS: Final = (
     "one multiply-accumulate is two FLOPs",
     "backward costs twice the modeled forward matrix multiplications",
     "full-context layers execute sequence-length score and value products",
     "short-window layers use their declared maximum visible key span",
-    "embedding lookup, normalization, activation, bias, softmax, dropout, "
-    "loss, clipping, optimizer, and scheduler FLOPs are excluded",
+    "enabled value-gate projections are included",
+    "embedding lookup, sigmoid, elementwise mixing, normalization, activation, "
+    "bias, softmax, dropout, loss, clipping, optimizer, and scheduler FLOPs "
+    "are excluded",
 )
 
 
@@ -39,6 +41,9 @@ class GPTTrainingFlopsEstimate:
     sliding_window_pattern: str
     sliding_window_size: int
     layer_key_spans: tuple[int, ...]
+    use_value_embeddings: bool
+    value_embedding_gate_channels: int
+    value_embedding_layer_indices: tuple[int, ...]
     sequence_length: int
     executed_weight_elements: int
     linear_flops_per_token: int
@@ -72,6 +77,13 @@ class GPTTrainingFlopsEstimate:
                 "layer_key_spans": list(self.layer_key_spans),
                 "pattern": self.sliding_window_pattern,
                 "short_window_size": self.sliding_window_size,
+            },
+            "value_embeddings": {
+                "enabled": self.use_value_embeddings,
+                "gate_channels": self.value_embedding_gate_channels,
+                "gate_scale": 3.0,
+                "layer_indices": list(self.value_embedding_layer_indices),
+                "placement": "alternating_by_final_layer_parity",
             },
             "tie_weights": self.tie_weights,
             "use_gqa": self.use_gqa,
@@ -284,7 +296,12 @@ def estimate_gpt_training_flops(config: GPTConfig) -> GPTTrainingFlopsEstimate:
     per_layer_weights = (
         2 * channels**2 + 2 * channels * kv_width + 2 * config.mlp_ratio * channels**2
     )
-    transformer_weights = config.n_layer * per_layer_weights
+    value_gate_weights = (
+        len(config.value_embedding_layer_indices())
+        * config.value_embedding_gate_channels
+        * config.n_kv_head
+    )
+    transformer_weights = config.n_layer * per_layer_weights + value_gate_weights
     output_weights = channels * config.vocab_size
     executed_weight_elements = transformer_weights + output_weights
     linear_flops_per_token = 6 * executed_weight_elements
@@ -302,6 +319,9 @@ def estimate_gpt_training_flops(config: GPTConfig) -> GPTTrainingFlopsEstimate:
         sliding_window_pattern=config.sliding_window_pattern,
         sliding_window_size=config.sliding_window_size,
         layer_key_spans=layer_key_spans,
+        use_value_embeddings=config.use_value_embeddings,
+        value_embedding_gate_channels=config.value_embedding_gate_channels,
+        value_embedding_layer_indices=config.value_embedding_layer_indices(),
         sequence_length=config.seq_len,
         executed_weight_elements=executed_weight_elements,
         linear_flops_per_token=linear_flops_per_token,

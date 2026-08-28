@@ -44,6 +44,8 @@ model:
   n_kv_head: 12
   sliding_window_pattern: L
   sliding_window_size: 64
+  use_value_embeddings: false
+  value_embedding_gate_channels: 12
   n_embd: 768
   mlp_ratio: 4
   dropout: 0.0

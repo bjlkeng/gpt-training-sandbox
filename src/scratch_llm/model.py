@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -127,6 +129,7 @@ class Block(nn.Module):
         config.validate()
 
         self.use_rope = config.use_rope
+        self.use_value_embeddings = config.use_value_embeddings
         self.ln_1 = build_norm(config)
         self.attn = CausalSelfAttention(
             config,
@@ -140,6 +143,7 @@ class Block(nn.Module):
         self,
         x: torch.Tensor,
         *,
+        token_ids: torch.Tensor | None = None,
         positions: torch.Tensor | None = None,
         kv_cache: KVCacheTransaction | None = None,
     ) -> torch.Tensor:
@@ -147,24 +151,16 @@ class Block(nn.Module):
 
         attention_residual = x
         normalized = self.ln_1(attention_residual)
+        attention_kwargs: dict[str, Any] = {}
+        if self.use_value_embeddings:
+            attention_kwargs["token_ids"] = token_ids
         if self.use_rope:
             if positions is None:
                 raise ValueError("rotary block requires absolute positions")
-            attended = (
-                self.attn(normalized, positions=positions)
-                if kv_cache is None
-                else self.attn(
-                    normalized,
-                    positions=positions,
-                    kv_cache=kv_cache,
-                )
-            )
-        else:
-            attended = (
-                self.attn(normalized)
-                if kv_cache is None
-                else self.attn(normalized, kv_cache=kv_cache)
-            )
+            attention_kwargs["positions"] = positions
+        if kv_cache is not None:
+            attention_kwargs["kv_cache"] = kv_cache
+        attended = self.attn(normalized, **attention_kwargs)
         x = attention_residual + attended
 
         mlp_residual = x
@@ -342,6 +338,9 @@ class GPT(nn.Module):
             x = self.embedding_dropout(x)
             rotary_positions = positions if self.config.use_rope else None
             for block_index, block in enumerate(self.blocks):
+                value_token_ids = (
+                    token_ids if self.config.use_value_embeddings else None
+                )
                 if (
                     self.activation_checkpointing
                     and self.training
@@ -352,26 +351,31 @@ class GPT(nn.Module):
                         block,
                         block_index,
                         x,
+                        value_token_ids,
                         rotary_positions,
                         use_reentrant=False,
                         preserve_rng_state=True,
                     )
                 elif transaction is None:
-                    x = (
-                        block(x)
-                        if rotary_positions is None
-                        else block(x, positions=rotary_positions)
-                    )
+                    block_kwargs: dict[str, Any] = {}
+                    if value_token_ids is not None:
+                        block_kwargs["token_ids"] = value_token_ids
+                    if rotary_positions is not None:
+                        block_kwargs["positions"] = rotary_positions
+                    x = block(x, **block_kwargs)
                 else:
                     if not isinstance(block, Block):
                         raise KVCacheError(
                             "cached decoder block list contains a non-block module"
                         )
-                    x = block(
-                        x,
-                        positions=rotary_positions,
-                        kv_cache=transaction,
-                    )
+                    cached_block_kwargs: dict[str, Any] = {
+                        "kv_cache": transaction,
+                    }
+                    if value_token_ids is not None:
+                        cached_block_kwargs["token_ids"] = value_token_ids
+                    if rotary_positions is not None:
+                        cached_block_kwargs["positions"] = rotary_positions
+                    x = block(x, **cached_block_kwargs)
             logits = self.lm_head(self.ln_f(x))
         except Exception:
             if transaction is not None:
@@ -396,10 +400,16 @@ class GPT(nn.Module):
         block: nn.Module,
         block_index: int,
         x: torch.Tensor,
+        token_ids: torch.Tensor | None,
         positions: torch.Tensor | None,
     ) -> torch.Tensor:
         try:
-            return block(x) if positions is None else block(x, positions=positions)
+            block_kwargs: dict[str, Any] = {}
+            if token_ids is not None:
+                block_kwargs["token_ids"] = token_ids
+            if positions is not None:
+                block_kwargs["positions"] = positions
+            return block(x, **block_kwargs)
         except Exception as error:
             if type(error).__name__ == "_StopRecomputationError":
                 raise
