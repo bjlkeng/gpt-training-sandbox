@@ -168,8 +168,11 @@ def _run_identities(
         "config_identity": report_identities.get("config")
         or project_config_identity(snapshot.config),
         "parameterization": {
+            "n_head": model.head_count,
+            "n_kv_head": model.n_kv_head,
             "tie_weights": model.tie_weights,
             "unique_parameters": model.unique_parameters,
+            "use_gqa": model.use_gqa,
         },
         "hardware": {
             "device": snapshot.config.run.device,

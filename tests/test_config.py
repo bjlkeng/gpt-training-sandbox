@@ -122,6 +122,7 @@ def test_defaults_cover_the_roadmap_sections_and_are_deterministic() -> None:
             "seq_len": 512,
             "n_layer": 6,
             "n_head": 6,
+            "n_kv_head": 6,
             "n_embd": 384,
             "mlp_ratio": 4,
             "dropout": 0.0,

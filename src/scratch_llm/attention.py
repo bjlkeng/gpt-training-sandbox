@@ -23,6 +23,69 @@ from scratch_llm.kv_cache import KVCacheTransaction
 from scratch_llm.normalization import RMS_NORM_EPSILON
 
 
+def split_query_key_value(
+    projected: torch.Tensor,
+    *,
+    n_head: int,
+    n_kv_head: int,
+    head_dim: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Split one compact projection into query heads and compact K/V heads."""
+
+    if projected.ndim != 3:
+        raise ValueError("projected QKV input must have shape (batch, time, channels)")
+    for name, value in (
+        ("n_head", n_head),
+        ("n_kv_head", n_kv_head),
+        ("head_dim", head_dim),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{name} must be a positive integer")
+    if n_head % n_kv_head != 0:
+        raise ValueError("n_head must be divisible by n_kv_head")
+    query_width = n_head * head_dim
+    kv_width = n_kv_head * head_dim
+    expected_width = query_width + 2 * kv_width
+    if projected.shape[-1] != expected_width:
+        raise ValueError(
+            f"projected QKV width must be {expected_width}, got {projected.shape[-1]}"
+        )
+    batch_size, sequence_length, _ = projected.shape
+    query, key, value = projected.split((query_width, kv_width, kv_width), dim=-1)
+    query = query.view(batch_size, sequence_length, n_head, head_dim).transpose(1, 2)
+    key = key.view(batch_size, sequence_length, n_kv_head, head_dim).transpose(1, 2)
+    value = value.view(batch_size, sequence_length, n_kv_head, head_dim).transpose(1, 2)
+    return query, key, value
+
+
+def expand_kv_heads(
+    key: torch.Tensor,
+    value: torch.Tensor,
+    *,
+    query_head_count: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Repeat compact K/V groups only for backends that require equal heads."""
+
+    if key.ndim != 4 or value.ndim != 4 or key.shape != value.shape:
+        raise ValueError("key and value must have one matching (B,H,T,D) shape")
+    if (
+        isinstance(query_head_count, bool)
+        or not isinstance(query_head_count, int)
+        or query_head_count <= 0
+    ):
+        raise ValueError("query_head_count must be a positive integer")
+    kv_head_count = key.shape[1]
+    if query_head_count % kv_head_count != 0:
+        raise ValueError("query head count must be divisible by KV head count")
+    repeats = query_head_count // kv_head_count
+    if repeats == 1:
+        return key, value
+    return (
+        key.repeat_interleave(repeats, dim=1),
+        value.repeat_interleave(repeats, dim=1),
+    )
+
+
 def normalize_query_key(
     query: torch.Tensor,
     key: torch.Tensor,
@@ -141,6 +204,9 @@ class CausalSelfAttention(nn.Module):
         config.validate()
 
         self.n_head = config.n_head
+        if config.n_kv_head is None:  # pragma: no cover - validated resolution.
+            raise RuntimeError("validated config lost n_kv_head")
+        self.n_kv_head = config.n_kv_head
         self.n_embd = config.n_embd
         self.head_dim = config.n_embd // config.n_head
         self.max_seq_len = config.seq_len
@@ -165,9 +231,10 @@ class CausalSelfAttention(nn.Module):
             effective_backend=config.attention_backend,
         )
 
-        self.qkv = nn.Linear(
+        projection_width = self.n_embd + 2 * self.n_kv_head * self.head_dim
+        self.qkv_projection = nn.Linear(
             config.n_embd,
-            3 * config.n_embd,
+            projection_width,
             bias=config.bias,
         )
         self.out_proj = nn.Linear(
@@ -186,6 +253,65 @@ class CausalSelfAttention(nn.Module):
             self.register_buffer("causal_mask", causal_mask, persistent=False)
         else:
             self.register_buffer("causal_mask", None, persistent=False)
+
+    @property
+    def qkv(self) -> nn.Linear:
+        """Return the projection under its legacy public attribute name."""
+
+        return self.qkv_projection
+
+    def _load_from_state_dict(
+        self,
+        state_dict: dict[str, torch.Tensor],
+        prefix: str,
+        local_metadata: dict[str, object],
+        strict: bool,
+        missing_keys: list[str],
+        unexpected_keys: list[str],
+        error_msgs: list[str],
+    ) -> None:
+        legacy_prefix = f"{prefix}qkv."
+        current_prefix = f"{prefix}qkv_projection."
+        legacy_keys = [
+            key for key in tuple(state_dict) if key.startswith(legacy_prefix)
+        ]
+        if legacy_keys:
+            if self.n_kv_head != self.n_head:
+                error_msgs.append(
+                    "legacy fused QKV state can only load into ordinary MHA; "
+                    f"configured n_head={self.n_head}, n_kv_head={self.n_kv_head}"
+                )
+            else:
+                for legacy_key in legacy_keys:
+                    suffix = legacy_key.removeprefix(legacy_prefix)
+                    current_key = f"{current_prefix}{suffix}"
+                    if current_key in state_dict:
+                        error_msgs.append(
+                            "checkpoint contains both legacy and current QKV keys "
+                            f"for {prefix or '<root>'}"
+                        )
+                        continue
+                    state_dict[current_key] = state_dict.pop(legacy_key)
+        projection_weight = state_dict.get(f"{current_prefix}weight")
+        if (
+            isinstance(projection_weight, torch.Tensor)
+            and projection_weight.shape != self.qkv_projection.weight.shape
+        ):
+            error_msgs.append(
+                "attention projection state is incompatible with configured "
+                f"n_head={self.n_head}, n_kv_head={self.n_kv_head}: expected "
+                f"weight shape {tuple(self.qkv_projection.weight.shape)}, got "
+                f"{tuple(projection_weight.shape)}"
+            )
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
 
     def prepare_attention_backend(
         self,
@@ -238,15 +364,11 @@ class CausalSelfAttention(nn.Module):
                 f"context length {self.max_seq_len}"
             )
 
-        q, k, v = self.qkv(x).chunk(3, dim=-1)
-        q = q.view(batch_size, sequence_length, self.n_head, self.head_dim).transpose(
-            1, 2
-        )
-        k = k.view(batch_size, sequence_length, self.n_head, self.head_dim).transpose(
-            1, 2
-        )
-        v = v.view(batch_size, sequence_length, self.n_head, self.head_dim).transpose(
-            1, 2
+        q, k, v = split_query_key_value(
+            self.qkv_projection(x),
+            n_head=self.n_head,
+            n_kv_head=self.n_kv_head,
+            head_dim=self.head_dim,
         )
         if self.rotary is not None:
             if positions is None:
@@ -404,12 +526,23 @@ class CausalSelfAttention(nn.Module):
             key_positions = torch.arange(key_length, device=q.device)
             attention_mask = key_positions.unsqueeze(0) <= query_positions.unsqueeze(1)
             is_causal = False
+        dropout_p = self.attention_dropout.p if self.training else 0.0
+        if q.shape[1] != k.shape[1]:
+            return F.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=attention_mask,
+                dropout_p=dropout_p,
+                is_causal=is_causal,
+                enable_gqa=True,
+            )
         return F.scaled_dot_product_attention(
             q,
             k,
             v,
             attn_mask=attention_mask,
-            dropout_p=self.attention_dropout.p if self.training else 0.0,
+            dropout_p=dropout_p,
             is_causal=is_causal,
         )
 
@@ -421,6 +554,7 @@ class CausalSelfAttention(nn.Module):
         *,
         query_start: int = 0,
     ) -> torch.Tensor:
+        k, v = expand_kv_heads(k, v, query_head_count=q.shape[1])
         scores = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)
         query_length = q.shape[-2]
         key_length = k.shape[-2]

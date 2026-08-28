@@ -46,6 +46,7 @@ def _integration_config(tmp_path: Path, *, run_name: str) -> ProjectConfig:
     config.model.seq_len = 16
     config.model.n_layer = 1
     config.model.n_head = 1
+    config.model.n_kv_head = 1
     config.model.n_embd = 16
     config.model.mlp_ratio = 2
     config.train.device_batch_size = 2

@@ -32,6 +32,9 @@ class GPTTrainingFlopsEstimate:
 
     formula_id: str
     tie_weights: bool
+    n_head: int
+    n_kv_head: int
+    use_gqa: bool
     sequence_length: int
     executed_weight_elements: int
     linear_flops_per_token: int
@@ -58,8 +61,11 @@ class GPTTrainingFlopsEstimate:
             "flops_per_token": self.flops_per_token,
             "formula_id": self.formula_id,
             "linear_flops_per_token": self.linear_flops_per_token,
+            "n_head": self.n_head,
+            "n_kv_head": self.n_kv_head,
             "sequence_length": self.sequence_length,
             "tie_weights": self.tie_weights,
+            "use_gqa": self.use_gqa,
         }
 
 
@@ -263,7 +269,13 @@ def estimate_gpt_training_flops(config: GPTConfig) -> GPTTrainingFlopsEstimate:
     config.validate()
 
     channels = config.n_embd
-    transformer_weights = config.n_layer * (4 + 2 * config.mlp_ratio) * channels**2
+    if config.n_kv_head is None:  # pragma: no cover - validated resolution.
+        raise RuntimeError("validated config lost n_kv_head")
+    kv_width = config.n_kv_head * (channels // config.n_head)
+    per_layer_weights = (
+        2 * channels**2 + 2 * channels * kv_width + 2 * config.mlp_ratio * channels**2
+    )
+    transformer_weights = config.n_layer * per_layer_weights
     output_weights = channels * config.vocab_size
     executed_weight_elements = transformer_weights + output_weights
     linear_flops_per_token = 6 * executed_weight_elements
@@ -271,6 +283,9 @@ def estimate_gpt_training_flops(config: GPTConfig) -> GPTTrainingFlopsEstimate:
     return GPTTrainingFlopsEstimate(
         formula_id=TRAINING_FLOPS_FORMULA_ID,
         tie_weights=config.tie_weights,
+        n_head=config.n_head,
+        n_kv_head=config.n_kv_head,
+        use_gqa=config.use_gqa,
         sequence_length=config.seq_len,
         executed_weight_elements=executed_weight_elements,
         linear_flops_per_token=linear_flops_per_token,

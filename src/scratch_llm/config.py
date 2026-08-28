@@ -215,6 +215,19 @@ def _resolve_loaded_model_profile(
         model[field_name] = expected
 
 
+def _resolve_loaded_kv_heads(
+    resolved: DictConfig,
+    *,
+    explicit_model_fields: set[str],
+) -> None:
+    """Resolve omitted KV geometry after any profile-derived query heads."""
+
+    model = resolved.get("model")
+    if not isinstance(model, DictConfig) or "n_kv_head" in explicit_model_fields:
+        return
+    model["n_kv_head"] = model.get("n_head")
+
+
 @dataclass
 class _SerializableConfig:
     """Shared lossless conversion for dataclass-backed configuration."""
@@ -436,6 +449,7 @@ class GPTConfig(_SerializableConfig):
     seq_len: int = 512
     n_layer: int = 6
     n_head: int = 6
+    n_kv_head: int | None = None
     n_embd: int = 384
     mlp_ratio: int = 4
     dropout: float = 0.0
@@ -456,6 +470,8 @@ class GPTConfig(_SerializableConfig):
 
     def __post_init__(self) -> None:
         self._resolve_direct_profile_geometry()
+        if self.n_kv_head is None:
+            self.n_kv_head = self.n_head
         self.validate()
 
     def _resolve_direct_profile_geometry(self) -> None:
@@ -550,6 +566,12 @@ class GPTConfig(_SerializableConfig):
             _require_positive_int(getattr(self, field_name), f"model.{field_name}")
         if self.n_embd % self.n_head != 0:
             _fail("model.n_embd", "must be divisible by model.n_head")
+        _require_positive_int(self.n_kv_head, "model.n_kv_head")
+        assert isinstance(self.n_kv_head, int) and not isinstance(self.n_kv_head, bool)
+        if self.n_kv_head > self.n_head:
+            _fail("model.n_kv_head", "must be less than or equal to model.n_head")
+        if self.n_head % self.n_kv_head != 0:
+            _fail("model.n_head", "must be divisible by model.n_kv_head")
         _require_bool(self.use_rope, "model.use_rope")
         rope_theta = _require_real(self.rope_theta, "model.rope_theta")
         if not math.isfinite(rope_theta):
@@ -604,6 +626,13 @@ class GPTConfig(_SerializableConfig):
             )
         _require_bool(self.use_kv_cache, "model.use_kv_cache")
         _require_bool(self.use_qk_norm, "model.use_qk_norm")
+        _require_bool(self.use_gqa, "model.use_gqa")
+        expected_gqa = self.n_kv_head < self.n_head
+        if self.use_gqa is not expected_gqa:
+            _fail(
+                "model.use_gqa",
+                "must agree with whether model.n_kv_head is smaller than model.n_head",
+            )
         expected_rmsnorm = self.norm == "rmsnorm"
         if self.use_rmsnorm is not expected_rmsnorm:
             _fail(
@@ -1230,6 +1259,10 @@ def load_config(
     if not isinstance(resolved, DictConfig):
         _fail("config", "resolved configuration must be a mapping")
     _resolve_loaded_model_profile(
+        resolved,
+        explicit_model_fields=explicit_model_fields,
+    )
+    _resolve_loaded_kv_heads(
         resolved,
         explicit_model_fields=explicit_model_fields,
     )

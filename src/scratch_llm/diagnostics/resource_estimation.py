@@ -21,7 +21,7 @@ from scratch_llm.training.loop import derive_grad_accum_steps
 
 
 RESOURCE_ESTIMATE_FORMAT: Final = "scratch_llm_training_resource_estimate"
-RESOURCE_ESTIMATE_FORMAT_VERSION: Final = 6
+RESOURCE_ESTIMATE_FORMAT_VERSION: Final = 7
 _BYTES_PER_MIB = 1024**2
 _MAX_SIGNED_64 = 2**63 - 1
 _HEADROOM_NUMERATOR = 1
@@ -78,6 +78,8 @@ class GPTModelSizeEstimate:
     sequence_length: int
     layer_count: int
     head_count: int
+    n_kv_head: int
+    use_gqa: bool
     embedding_width: int
     norm: str
     activation: str
@@ -118,9 +120,18 @@ class GPTModelSizeEstimate:
             "sequence_length",
             "layer_count",
             "head_count",
+            "n_kv_head",
             "embedding_width",
         ):
             require_positive_integer(getattr(self, name), name=name)
+        if self.n_kv_head > self.head_count:
+            raise ValueError("n_kv_head cannot exceed head_count")
+        if self.head_count % self.n_kv_head != 0:
+            raise ValueError("head_count must be divisible by n_kv_head")
+        if not isinstance(self.use_gqa, bool):
+            raise TypeError("use_gqa must be a boolean")
+        if self.use_gqa is not (self.n_kv_head < self.head_count):
+            raise ValueError("use_gqa must agree with reduced KV-head geometry")
         requested = (
             self.requested_depth,
             self.requested_aspect_ratio,
@@ -199,6 +210,11 @@ class GPTModelSizeEstimate:
     def to_dict(self) -> dict[str, Any]:
         return {
             "activation": self.activation,
+            "attention": {
+                "n_head": self.head_count,
+                "n_kv_head": self.n_kv_head,
+                "use_gqa": self.use_gqa,
+            },
             "component_parameters": dict(self.component_parameters),
             "embedding_dominated": self.embedding_dominated,
             "embedding_fraction": self.embedding_fraction,
@@ -673,10 +689,39 @@ def estimate_gpt_model_size(config: GPTConfig) -> GPTModelSizeEstimate:
             name="position embedding parameters",
         )
     )
-    block_matrix_parameters = _checked_product(
-        4 + 2 * config.mlp_ratio,
+    if config.n_kv_head is None:  # pragma: no cover - validated resolution.
+        raise RuntimeError("validated config lost n_kv_head")
+    head_dimension = channels // config.n_head
+    kv_width = _checked_product(
+        config.n_kv_head,
+        head_dimension,
+        name="KV projection width",
+    )
+    attention_matrix_parameters = _checked_sum(
+        _checked_product(
+            2,
+            channels,
+            channels,
+            name="query and attention output matrix parameters",
+        ),
+        _checked_product(
+            2,
+            channels,
+            kv_width,
+            name="key and value matrix parameters",
+        ),
+        name="per-block attention matrix parameters",
+    )
+    mlp_matrix_parameters = _checked_product(
+        2,
+        config.mlp_ratio,
         channels,
         channels,
+        name="per-block MLP matrix parameters",
+    )
+    block_matrix_parameters = _checked_sum(
+        attention_matrix_parameters,
+        mlp_matrix_parameters,
         name="per-block matrix parameters",
     )
     block_norm_parameters = (
@@ -690,9 +735,17 @@ def estimate_gpt_model_size(config: GPTConfig) -> GPTModelSizeEstimate:
         )
     )
     block_projection_bias_parameters = (
-        _checked_product(
-            config.mlp_ratio + 5,
-            channels,
+        _checked_sum(
+            _checked_product(
+                config.mlp_ratio + 3,
+                channels,
+                name="per-block query/output/MLP bias parameters",
+            ),
+            _checked_product(
+                2,
+                kv_width,
+                name="per-block key/value bias parameters",
+            ),
             name="per-block projection bias parameters",
         )
         if config.bias
@@ -743,6 +796,8 @@ def estimate_gpt_model_size(config: GPTConfig) -> GPTModelSizeEstimate:
         sequence_length=config.seq_len,
         layer_count=config.n_layer,
         head_count=config.n_head,
+        n_kv_head=config.n_kv_head,
+        use_gqa=config.use_gqa,
         embedding_width=config.n_embd,
         norm=config.norm,
         activation=config.activation,
@@ -1075,13 +1130,12 @@ def _estimate_training_memory(
 def _validate_baseline_model(config: GPTConfig) -> None:
     unsupported = {
         "use_flash_attention": config.use_flash_attention,
-        "use_gqa": config.use_gqa,
         "use_kv_cache": config.use_kv_cache,
     }
     enabled = sorted(name for name, value in unsupported.items() if value)
     if enabled:
         raise ValueError(
-            "resource estimation currently supports RMSNorm/RoPE/QK-norm GPTs "
+            "resource estimation supports RMSNorm/RoPE/QK-norm/GQA GPTs "
             f"before later architecture switches; enabled switches={enabled}"
         )
 

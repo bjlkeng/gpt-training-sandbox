@@ -1344,6 +1344,48 @@ sharpening constants and attention-logit softcap are intentionally out of
 scope. The bounded same-seed RTX 3090 off/on evidence is in
 [`comparisons/gpt-training-sandbox-as7-6-qk-norm`](comparisons/gpt-training-sandbox-as7-6-qk-norm/README.md).
 
+### Grouped-query attention
+
+`model.n_kv_head` controls the number of key/value heads independently of the
+query-head count. Omitting it resolves to `model.n_head`, so existing configs
+remain ordinary multi-head attention (MHA). A smaller divisor enables
+grouped-query attention (GQA), while `n_kv_head: 1` is multi-query attention
+(MQA):
+
+```text
+1 <= n_kv_head <= n_head
+n_head % n_kv_head == 0
+query heads: n_head
+key/value heads: n_kv_head
+KV group for query head h: h // (n_head / n_kv_head)
+```
+
+`model.use_gqa` is an explicit architecture identity and must agree with that
+geometry: it is `false` when the two head counts match and `true` when K/V use
+fewer heads. Query width remains `n_embd`; each K/V projection has width
+`n_kv_head * (n_embd / n_head)`. Manual attention expands compact K/V groups
+at scoring time, SDPA uses its grouped-query mode, and FlashAttention receives
+the compact head layout directly.
+
+KV caches remain compact through prefill and decode. At the configured dtype,
+their allocation is:
+
+```text
+bytes per cached token =
+  2 * n_layer * n_kv_head * head_dim * bytes_per_element
+```
+
+New checkpoints store the compact fused projection under
+`attn.qkv_projection`. Legacy `attn.qkv` MHA weights migrate losslessly when
+`n_kv_head == n_head`; loading them into reduced-KV geometry fails explicitly
+instead of silently slicing or repeating parameters. Changing `n_kv_head`
+changes projection shapes and is therefore a checkpoint-architecture change.
+
+The bounded same-seed RTX 3090 MHA/GQA comparison—including BPB, training
+throughput, cached decode latency, cache bytes, peak memory, and parameter
+delta—is in
+[`comparisons/gpt-training-sandbox-as7-7-gqa`](comparisons/gpt-training-sandbox-as7-7-gqa/README.md).
+
 ### Base-model orchestration and resource preflight
 
 The three named presets and repeatable dotted overrides are the orchestration

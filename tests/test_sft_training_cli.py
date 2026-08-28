@@ -135,6 +135,7 @@ def test_command_executes_a_bounded_local_base_initialization(
     config.run.output_dir = str(tmp_path / "runs")
     config.model.n_layer = 1
     config.model.n_head = 1
+    config.model.n_kv_head = 1
     config.model.n_embd = 8
     config.model.mlp_ratio = 2
     config.sft.max_steps = 1

@@ -184,6 +184,9 @@ class GPT(nn.Module):
         config.validate()
 
         self.config = config
+        if config.n_kv_head is None:  # pragma: no cover - validated resolution.
+            raise RuntimeError("validated config lost n_kv_head")
+        self.n_kv_head = config.n_kv_head
         self.max_seq_len = config.seq_len
         self.activation_checkpointing = False
         self.token_embedding = nn.Embedding(config.vocab_size, config.n_embd)
@@ -266,7 +269,7 @@ class GPT(nn.Module):
         return KVCache(
             layer_count=len(self.blocks),
             batch_size=batch_size,
-            kv_head_count=self.config.n_head,
+            kv_head_count=self.n_kv_head,
             head_dimension=self.config.n_embd // self.config.n_head,
             capacity=active_capacity,
             device=reference.device,
@@ -320,7 +323,7 @@ class GPT(nn.Module):
             transaction = kv_cache.begin(
                 token_count=sequence_length,
                 batch_size=token_ids.shape[0],
-                kv_head_count=self.config.n_head,
+                kv_head_count=self.n_kv_head,
                 head_dimension=self.config.n_embd // self.config.n_head,
                 device=reference.device,
                 dtype=reference.dtype,
