@@ -17,6 +17,47 @@ from scratch_llm.config import GPTConfig
 from scratch_llm.kv_cache import KVCache, KVCacheError, KVCacheTransaction
 
 
+RMS_NORM_EPSILON = 1e-5
+
+
+class RMSNorm(nn.Module):
+    """Parameter-free native root-mean-square normalization over channels."""
+
+    def __init__(self, channels: int, *, eps: float = RMS_NORM_EPSILON) -> None:
+        super().__init__()
+        if isinstance(channels, bool) or not isinstance(channels, int) or channels <= 0:
+            raise ValueError("RMSNorm channels must be a positive integer")
+        if isinstance(eps, bool) or not isinstance(eps, (int, float)) or eps <= 0:
+            raise ValueError("RMSNorm epsilon must be a positive real number")
+        self.channels = channels
+        self.eps = float(eps)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Normalize one floating-point tensor without learned affine state."""
+
+        if x.ndim == 0:
+            raise ValueError("RMSNorm input must have at least one dimension")
+        if x.shape[-1] != self.channels:
+            raise ValueError(
+                f"RMSNorm input channel dimension {x.shape[-1]} does not match "
+                f"configured channels {self.channels}"
+            )
+        if not x.is_floating_point():
+            raise TypeError("RMSNorm input must use a floating-point dtype")
+        return F.rms_norm(x, (self.channels,), weight=None, eps=self.eps)
+
+
+def build_norm(config: GPTConfig) -> nn.Module:
+    """Construct the selected normalization through one architecture boundary."""
+
+    config.validate()
+    if config.norm == "layernorm":
+        return nn.LayerNorm(config.n_embd, bias=config.bias)
+    if config.norm == "rmsnorm":
+        return RMSNorm(config.n_embd)
+    raise RuntimeError(f"unsupported validated normalization {config.norm!r}")
+
+
 class MLP(nn.Module):
     """Expand each token internally, then restore the residual-stream width."""
 
@@ -69,13 +110,13 @@ class Block(nn.Module):
         super().__init__()
         config.validate()
 
-        self.ln_1 = nn.LayerNorm(config.n_embd, bias=config.bias)
+        self.ln_1 = build_norm(config)
         self.attn = CausalSelfAttention(
             config,
             flash_provider_loader=flash_provider_loader,
             layer_index=layer_index,
         )
-        self.ln_2 = nn.LayerNorm(config.n_embd, bias=config.bias)
+        self.ln_2 = build_norm(config)
         self.mlp = MLP(config)
 
     def forward(
@@ -127,7 +168,7 @@ class GPT(nn.Module):
                 for layer_index in range(config.n_layer)
             ]
         )
-        self.ln_f = nn.LayerNorm(config.n_embd, bias=config.bias)
+        self.ln_f = build_norm(config)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         if config.tie_weights:
             self.lm_head.weight = self.token_embedding.weight
