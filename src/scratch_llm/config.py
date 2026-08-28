@@ -603,6 +603,7 @@ class GPTConfig(_SerializableConfig):
                 "setting instead",
             )
         _require_bool(self.use_kv_cache, "model.use_kv_cache")
+        _require_bool(self.use_qk_norm, "model.use_qk_norm")
         expected_rmsnorm = self.norm == "rmsnorm"
         if self.use_rmsnorm is not expected_rmsnorm:
             _fail(

@@ -1315,6 +1315,35 @@ The bounded same-seed RTX 3090 comparison records BPB, throughput, peak
 allocated memory, parameter counts, and the fixed 51,200-token budget in
 [`comparisons/gpt-training-sandbox-as7-5-untied`](comparisons/gpt-training-sandbox-as7-5-untied/README.md).
 
+### Query/key normalization
+
+Set `model.use_qk_norm: true` to apply parameter-free RMS normalization to
+every query and key independently over its `head_dim` channels:
+
+```text
+q_hat = q / sqrt(mean(q^2, dim=head_dim) + 1e-5)
+k_hat = k / sqrt(mean(k^2, dim=head_dim) + 1e-5)
+attention_scores = (q_hat @ k_hat.T) / sqrt(head_dim)
+```
+
+When RoPE is enabled, rotation happens first; QK normalization then feeds the
+existing attention scale. Values are never normalized. The shared projected
+Q/K contract is consumed by manual attention, SDPA, FlashAttention and their
+fallbacks, as well as full forward, cache prefill, and cached decode. Cached
+keys are stored in normalized form, so cached and uncached scoring use the
+same math.
+
+The operation uses the same native, parameter-free `F.rms_norm` primitive and
+explicit `1e-5` epsilon as model RMSNorm. It adds no parameters, buffers, or
+state keys; resource reports record `qk_norm` as an architecture identity with
+zero parameter delta. `model.use_qk_norm: false` remains the compatibility
+default and preserves exact baseline logits.
+
+This is an isolated experimental switch. Nanochat's separate learned query/key
+sharpening constants and attention-logit softcap are intentionally out of
+scope. The bounded same-seed RTX 3090 off/on evidence is in
+[`comparisons/gpt-training-sandbox-as7-6-qk-norm`](comparisons/gpt-training-sandbox-as7-6-qk-norm/README.md).
+
 ### Base-model orchestration and resource preflight
 
 The three named presets and repeatable dotted overrides are the orchestration
