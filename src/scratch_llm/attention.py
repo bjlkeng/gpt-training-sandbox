@@ -20,6 +20,37 @@ from scratch_llm.attention_backends import (
 )
 from scratch_llm.config import GPTConfig
 from scratch_llm.kv_cache import KVCacheTransaction
+from scratch_llm.normalization import RMS_NORM_EPSILON
+
+
+def normalize_query_key(
+    query: torch.Tensor,
+    key: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Apply parameter-free RMS normalization over each Q/K head dimension."""
+
+    for name, value in (("query", query), ("key", key)):
+        if value.ndim != 4 or value.shape[-1] <= 0:
+            raise ValueError(f"{name} must have shape (batch, heads, time, head_dim)")
+        if not value.is_floating_point():
+            raise TypeError(f"{name} must use a floating-point dtype")
+    if query.shape[0] != key.shape[0] or query.shape[-2:] != key.shape[-2:]:
+        raise ValueError("query and key must share batch, time, and head dimensions")
+    normalized_shape = (query.shape[-1],)
+    return (
+        F.rms_norm(
+            query,
+            normalized_shape,
+            weight=None,
+            eps=RMS_NORM_EPSILON,
+        ),
+        F.rms_norm(
+            key,
+            normalized_shape,
+            weight=None,
+            eps=RMS_NORM_EPSILON,
+        ),
+    )
 
 
 def apply_rotary_emb(
@@ -47,6 +78,9 @@ def apply_rotary_emb(
 
 class RotaryEmbedding(nn.Module):
     """Deterministic, non-persistent float32 rotary cosine/sine tables."""
+
+    cosine: torch.Tensor
+    sine: torch.Tensor
 
     def __init__(self, *, head_dim: int, max_seq_len: int, theta: float) -> None:
         super().__init__()
@@ -110,6 +144,7 @@ class CausalSelfAttention(nn.Module):
         self.n_embd = config.n_embd
         self.head_dim = config.n_embd // config.n_head
         self.max_seq_len = config.seq_len
+        self.use_qk_norm = config.use_qk_norm
         self.attention_backend = config.attention_backend
         self._config = config
         self._flash_provider_loader = flash_provider_loader
@@ -218,6 +253,8 @@ class CausalSelfAttention(nn.Module):
                 raise ValueError("rotary attention requires absolute positions")
             q = self.rotary(q, positions)
             k = self.rotary(k, positions)
+        if self.use_qk_norm:
+            q, k = normalize_query_key(q, k)
         query_start = 0
         if kv_cache is not None:
             if self.layer_index is None:

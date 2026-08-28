@@ -21,7 +21,7 @@ from scratch_llm.training.loop import derive_grad_accum_steps
 
 
 RESOURCE_ESTIMATE_FORMAT: Final = "scratch_llm_training_resource_estimate"
-RESOURCE_ESTIMATE_FORMAT_VERSION: Final = 5
+RESOURCE_ESTIMATE_FORMAT_VERSION: Final = 6
 _BYTES_PER_MIB = 1024**2
 _MAX_SIGNED_64 = 2**63 - 1
 _HEADROOM_NUMERATOR = 1
@@ -81,6 +81,7 @@ class GPTModelSizeEstimate:
     embedding_width: int
     norm: str
     activation: str
+    qk_norm: bool
     position_encoding: str
     rope_theta: float | None
     tie_weights: bool
@@ -100,6 +101,8 @@ class GPTModelSizeEstimate:
             raise ValueError(f"unsupported normalization {self.norm!r}")
         if self.activation not in {"gelu", "relu_squared"}:
             raise ValueError(f"unsupported activation {self.activation!r}")
+        if not isinstance(self.qk_norm, bool):
+            raise TypeError("qk_norm must be a boolean")
         if self.position_encoding not in {"learned_absolute", "rope"}:
             raise ValueError(
                 f"unsupported position encoding {self.position_encoding!r}"
@@ -210,6 +213,7 @@ class GPTModelSizeEstimate:
                 "theta": self.rope_theta,
                 "type": self.position_encoding,
             },
+            "qk_norm": self.qk_norm,
             "geometry": {
                 "profile": self.profile,
                 "requested": {
@@ -742,6 +746,7 @@ def estimate_gpt_model_size(config: GPTConfig) -> GPTModelSizeEstimate:
         embedding_width=config.n_embd,
         norm=config.norm,
         activation=config.activation,
+        qk_norm=config.use_qk_norm,
         position_encoding="rope" if config.use_rope else "learned_absolute",
         rope_theta=config.rope_theta if config.use_rope else None,
         tie_weights=config.tie_weights,
@@ -1072,12 +1077,11 @@ def _validate_baseline_model(config: GPTConfig) -> None:
         "use_flash_attention": config.use_flash_attention,
         "use_gqa": config.use_gqa,
         "use_kv_cache": config.use_kv_cache,
-        "use_qk_norm": config.use_qk_norm,
     }
     enabled = sorted(name for name, value in unsupported.items() if value)
     if enabled:
         raise ValueError(
-            "resource estimation currently supports RMSNorm/RoPE GPTs "
+            "resource estimation currently supports RMSNorm/RoPE/QK-norm GPTs "
             f"before later architecture switches; enabled switches={enabled}"
         )
 

@@ -1,0 +1,75 @@
+{
+  "bead": "gpt-training-sandbox-as7.6",
+  "controls": {
+    "attention_backend": "manual",
+    "changed_config_fields": [
+      "model.use_qk_norm",
+      "run.name"
+    ],
+    "device": "NVIDIA GeForce RTX 3090",
+    "dtype": "float32",
+    "epsilon": 1e-05,
+    "mfu_peak_flops_basis": "rtx3090_fp32_35.58_tflops",
+    "mfu_peak_flops_per_second": 35580000000000,
+    "seed": 1337,
+    "sequence_length": 128,
+    "source_base_commit": "0c42d2f",
+    "timed_optimizer_steps": 45,
+    "total_optimizer_steps": 50,
+    "total_processed_model_tokens": 51200,
+    "warmup_steps_excluded": 5
+  },
+  "deltas": {
+    "peak_memory_mib": 0.7578125,
+    "unique_parameters": 0,
+    "validation_bpb": -0.023868255550150153,
+    "validation_bpb_percent": -0.1939300319392501,
+    "warm_tokens_per_second_median": -3029.544145822183,
+    "warm_tokens_per_second_percent": -6.644355160221102
+  },
+  "format": "scratch_llm_bounded_architecture_flag_comparison",
+  "format_version": 1,
+  "interpretation": {
+    "all_training_telemetry_finite": true,
+    "both_modes_tiny_overfit": "passed",
+    "claim": "bounded diagnostic only; no quality or throughput improvement claim",
+    "out_of_scope": [
+      "learned query/key sharpening constants",
+      "attention logit softcap"
+    ]
+  },
+  "runs": {
+    "disabled": {
+      "checkpoint_identity": "sha256:92e85ba595ff137617ba4bd599a1efb77809274d1ee012831c9bf867ea098098",
+      "config_identity": "sha256:6e11ff21a02a4a70e9d1704a79f71e0eae2af72ed8330eb157bdf21d556dc688",
+      "final_training_loss": 2.809593915939331,
+      "peak_memory_mib": 28.6328125,
+      "run_directory": "runs/m10-qk-norm-off",
+      "unique_parameters": 444160,
+      "use_qk_norm": false,
+      "validation_bpb": 12.307663393582612,
+      "warm_tokens_per_second_mean": 45450.11748534125,
+      "warm_tokens_per_second_median": 45595.758696941324
+    },
+    "enabled": {
+      "checkpoint_identity": "sha256:28ad3c6fd8053a174c5091f50b34e58eee8c8a7cccccf030fb59ef8d0756f419",
+      "config_identity": "sha256:98cc65a23f664fe224799c50756862ff964643dba7aa0bd41f97f63a592521b8",
+      "final_training_loss": 2.6488327980041504,
+      "peak_memory_mib": 29.390625,
+      "run_directory": "runs/m10-qk-norm-on",
+      "unique_parameters": 444160,
+      "use_qk_norm": true,
+      "validation_bpb": 12.283795138032461,
+      "warm_tokens_per_second_mean": 42703.3745370313,
+      "warm_tokens_per_second_median": 42566.21455111914
+    }
+  },
+  "validation": {
+    "counted_bytes": 261,
+    "counted_tokens": 261,
+    "processed_model_tokens": 261,
+    "protocol": "bounded_contiguous_byte_next_token_bpb_v1",
+    "source_path": "data/fixtures/chat/validation.jsonl",
+    "source_sha256": "b41bd8ad00945ea6c0223a2f1964835de0d6b7105fe76dcfa80639e78823ac3f"
+  }
+}

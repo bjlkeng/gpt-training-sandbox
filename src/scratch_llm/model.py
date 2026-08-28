@@ -15,9 +15,7 @@ from scratch_llm.attention_backends import (
 )
 from scratch_llm.config import GPTConfig
 from scratch_llm.kv_cache import KVCache, KVCacheError, KVCacheTransaction
-
-
-RMS_NORM_EPSILON = 1e-5
+from scratch_llm.normalization import RMS_NORM_EPSILON
 
 
 class RMSNorm(nn.Module):
