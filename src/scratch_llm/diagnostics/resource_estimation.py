@@ -21,7 +21,7 @@ from scratch_llm.training.loop import derive_grad_accum_steps
 
 
 RESOURCE_ESTIMATE_FORMAT: Final = "scratch_llm_training_resource_estimate"
-RESOURCE_ESTIMATE_FORMAT_VERSION: Final = 4
+RESOURCE_ESTIMATE_FORMAT_VERSION: Final = 5
 _BYTES_PER_MIB = 1024**2
 _MAX_SIGNED_64 = 2**63 - 1
 _HEADROOM_NUMERATOR = 1
@@ -80,6 +80,7 @@ class GPTModelSizeEstimate:
     head_count: int
     embedding_width: int
     norm: str
+    activation: str
     position_encoding: str
     rope_theta: float | None
     tie_weights: bool
@@ -97,6 +98,8 @@ class GPTModelSizeEstimate:
             raise ValueError(f"unsupported model profile {self.profile!r}")
         if self.norm not in {"layernorm", "rmsnorm"}:
             raise ValueError(f"unsupported normalization {self.norm!r}")
+        if self.activation not in {"gelu", "relu_squared"}:
+            raise ValueError(f"unsupported activation {self.activation!r}")
         if self.position_encoding not in {"learned_absolute", "rope"}:
             raise ValueError(
                 f"unsupported position encoding {self.position_encoding!r}"
@@ -192,6 +195,7 @@ class GPTModelSizeEstimate:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "activation": self.activation,
             "component_parameters": dict(self.component_parameters),
             "embedding_dominated": self.embedding_dominated,
             "embedding_fraction": self.embedding_fraction,
@@ -737,6 +741,7 @@ def estimate_gpt_model_size(config: GPTConfig) -> GPTModelSizeEstimate:
         head_count=config.n_head,
         embedding_width=config.n_embd,
         norm=config.norm,
+        activation=config.activation,
         position_encoding="rope" if config.use_rope else "learned_absolute",
         rope_theta=config.rope_theta if config.use_rope else None,
         tie_weights=config.tie_weights,
