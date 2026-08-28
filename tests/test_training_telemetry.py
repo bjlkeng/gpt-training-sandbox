@@ -57,7 +57,8 @@ def test_gpt_training_flops_matches_hand_calculation_without_tie_aliasing(
     assert estimate.assumptions == (
         "one multiply-accumulate is two FLOPs",
         "backward costs twice the modeled forward matrix multiplications",
-        "causal attention executes dense sequence-length score and value products",
+        "full-context layers execute sequence-length score and value products",
+        "short-window layers use their declared maximum visible key span",
         "embedding lookup, normalization, activation, bias, softmax, dropout, "
         "loss, clipping, optimizer, and scheduler FLOPs are excluded",
     )

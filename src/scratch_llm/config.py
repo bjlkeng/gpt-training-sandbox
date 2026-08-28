@@ -462,6 +462,8 @@ class GPTConfig(_SerializableConfig):
     use_rmsnorm: bool = False
     use_qk_norm: bool = False
     use_gqa: bool = False
+    sliding_window_pattern: str = "L"
+    sliding_window_size: int = 1
     attention_backend: AttentionBackend = "manual"
     attention_fallback_policy: AttentionFallbackPolicy = "allow"
     flash_attention_provider: FlashAttentionProvider = "auto"
@@ -525,6 +527,40 @@ class GPTConfig(_SerializableConfig):
         ):
             values.pop(field_name)
         return values
+
+    def layer_attention_windows(self) -> tuple[int | None, ...]:
+        """Resolve the tiled L/S pattern into per-layer left-window limits."""
+
+        layer_types = [
+            self.sliding_window_pattern[index % len(self.sliding_window_pattern)]
+            for index in range(self.n_layer)
+        ]
+        layer_types[-1] = "L"
+        return tuple(
+            self.sliding_window_size if layer_type == "S" else None
+            for layer_type in layer_types
+        )
+
+    def attention_window_identity(self) -> dict[str, object]:
+        """Return the complete reproducible layer-visibility identity."""
+
+        windows = self.layer_attention_windows()
+        return {
+            "final_layer_forced_full": True,
+            "pattern": self.sliding_window_pattern,
+            "resolved_layer_types": [
+                "S" if window is not None else "L" for window in windows
+            ],
+            "resolved_left_windows": list(windows),
+            "short_window_size": self.sliding_window_size,
+        }
+
+    def flash_window_size(self) -> tuple[int, int] | None:
+        """Return the provider capability request for any short layer."""
+
+        if any(window is not None for window in self.layer_attention_windows()):
+            return self.sliding_window_size, 0
+        return None
 
     def validate(self) -> None:
         _require_choice(self.profile, "model.profile", _MODEL_PROFILES)
@@ -632,6 +668,31 @@ class GPTConfig(_SerializableConfig):
             _fail(
                 "model.use_gqa",
                 "must agree with whether model.n_kv_head is smaller than model.n_head",
+            )
+        if (
+            not isinstance(self.sliding_window_pattern, str)
+            or not self.sliding_window_pattern
+            or any(
+                layer_type not in {"L", "S"}
+                for layer_type in self.sliding_window_pattern
+            )
+        ):
+            _fail(
+                "model.sliding_window_pattern",
+                "must be a non-empty string containing only uppercase L and S",
+            )
+        _require_positive_int(
+            self.sliding_window_size,
+            "model.sliding_window_size",
+        )
+        assert isinstance(self.sliding_window_size, int) and not isinstance(
+            self.sliding_window_size,
+            bool,
+        )
+        if self.sliding_window_size > self.seq_len:
+            _fail(
+                "model.sliding_window_size",
+                "must be less than or equal to model.seq_len",
             )
         expected_rmsnorm = self.norm == "rmsnorm"
         if self.use_rmsnorm is not expected_rmsnorm:

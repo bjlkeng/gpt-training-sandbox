@@ -135,6 +135,8 @@ def test_defaults_cover_the_roadmap_sections_and_are_deterministic() -> None:
             "use_rmsnorm": False,
             "use_qk_norm": False,
             "use_gqa": False,
+            "sliding_window_pattern": "L",
+            "sliding_window_size": 1,
             "attention_backend": "manual",
             "attention_fallback_policy": "allow",
             "flash_attention_provider": "auto",

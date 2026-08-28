@@ -274,6 +274,7 @@ class GPT(nn.Module):
             capacity=active_capacity,
             device=reference.device,
             dtype=reference.dtype,
+            layer_window_sizes=self.config.layer_attention_windows(),
         )
 
     def forward(

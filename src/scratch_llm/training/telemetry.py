@@ -16,11 +16,12 @@ from scratch_llm._validation import (
 from scratch_llm.config import GPTConfig, TrainConfig
 
 
-TRAINING_FLOPS_FORMULA_ID: Final = "baseline_gpt_dense_training_v1"
+TRAINING_FLOPS_FORMULA_ID: Final = "gpt_layer_window_training_v2"
 _TRAINING_FLOPS_ASSUMPTIONS: Final = (
     "one multiply-accumulate is two FLOPs",
     "backward costs twice the modeled forward matrix multiplications",
-    "causal attention executes dense sequence-length score and value products",
+    "full-context layers execute sequence-length score and value products",
+    "short-window layers use their declared maximum visible key span",
     "embedding lookup, normalization, activation, bias, softmax, dropout, "
     "loss, clipping, optimizer, and scheduler FLOPs are excluded",
 )
@@ -35,6 +36,9 @@ class GPTTrainingFlopsEstimate:
     n_head: int
     n_kv_head: int
     use_gqa: bool
+    sliding_window_pattern: str
+    sliding_window_size: int
+    layer_key_spans: tuple[int, ...]
     sequence_length: int
     executed_weight_elements: int
     linear_flops_per_token: int
@@ -64,6 +68,11 @@ class GPTTrainingFlopsEstimate:
             "n_head": self.n_head,
             "n_kv_head": self.n_kv_head,
             "sequence_length": self.sequence_length,
+            "sliding_window": {
+                "layer_key_spans": list(self.layer_key_spans),
+                "pattern": self.sliding_window_pattern,
+                "short_window_size": self.sliding_window_size,
+            },
             "tie_weights": self.tie_weights,
             "use_gqa": self.use_gqa,
         }
@@ -279,13 +288,20 @@ def estimate_gpt_training_flops(config: GPTConfig) -> GPTTrainingFlopsEstimate:
     output_weights = channels * config.vocab_size
     executed_weight_elements = transformer_weights + output_weights
     linear_flops_per_token = 6 * executed_weight_elements
-    attention_flops_per_token = 12 * config.n_layer * channels * config.seq_len
+    layer_key_spans = tuple(
+        config.seq_len if window is None else min(config.seq_len, window + 1)
+        for window in config.layer_attention_windows()
+    )
+    attention_flops_per_token = 12 * channels * sum(layer_key_spans)
     return GPTTrainingFlopsEstimate(
         formula_id=TRAINING_FLOPS_FORMULA_ID,
         tie_weights=config.tie_weights,
         n_head=config.n_head,
         n_kv_head=config.n_kv_head,
         use_gqa=config.use_gqa,
+        sliding_window_pattern=config.sliding_window_pattern,
+        sliding_window_size=config.sliding_window_size,
+        layer_key_spans=layer_key_spans,
         sequence_length=config.seq_len,
         executed_weight_elements=executed_weight_elements,
         linear_flops_per_token=linear_flops_per_token,

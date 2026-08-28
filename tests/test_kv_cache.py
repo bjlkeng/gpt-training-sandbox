@@ -72,6 +72,7 @@ def test_cache_metadata_byte_accounting_commit_and_reset_visibility() -> None:
         "kv_head_count": 2,
         "layer_count": 2,
         "layer_shape": [1, 2, 6, 4],
+        "layer_window_sizes": [None, None],
     }
     torch.testing.assert_close(cache.layer_keys(1), keys + 1000)
     torch.testing.assert_close(cache.layer_values(1), values + 1000)

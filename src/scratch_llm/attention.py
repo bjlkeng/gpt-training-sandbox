@@ -23,6 +23,38 @@ from scratch_llm.kv_cache import KVCacheTransaction
 from scratch_llm.normalization import RMS_NORM_EPSILON
 
 
+def build_causal_attention_mask(
+    query_positions: torch.Tensor,
+    key_positions: torch.Tensor,
+    *,
+    left_window: int | None,
+) -> torch.Tensor:
+    """Return causal visibility with an optional number of preceding tokens."""
+
+    for name, positions in (
+        ("query_positions", query_positions),
+        ("key_positions", key_positions),
+    ):
+        if positions.ndim != 1:
+            raise ValueError(f"{name} must be one-dimensional")
+        if positions.dtype == torch.bool or positions.is_floating_point():
+            raise TypeError(f"{name} must use an integer dtype")
+    if query_positions.device != key_positions.device:
+        raise ValueError("query and key positions must use the same device")
+    if left_window is not None and (
+        isinstance(left_window, bool)
+        or not isinstance(left_window, int)
+        or left_window <= 0
+    ):
+        raise ValueError("left_window must be a positive integer or None")
+    query = query_positions.unsqueeze(1)
+    key = key_positions.unsqueeze(0)
+    visible = key <= query
+    if left_window is not None:
+        visible = visible & (key >= query - left_window)
+    return visible
+
+
 def split_query_key_value(
     projected: torch.Tensor,
     *,
@@ -217,6 +249,17 @@ class CausalSelfAttention(nn.Module):
         self._prepared_attention_backend: str | None = None
         self._prepared_flash_provider: FlashAttentionProvider | None = None
         self.layer_index = layer_index
+        if layer_index is None:
+            active_layer_index = 0
+        elif (
+            isinstance(layer_index, bool)
+            or not isinstance(layer_index, int)
+            or not 0 <= layer_index < config.n_layer
+        ):
+            raise ValueError(f"layer_index must be in [0, {config.n_layer})")
+        else:
+            active_layer_index = layer_index
+        self.left_window = config.layer_attention_windows()[active_layer_index]
         self.rotary = (
             RotaryEmbedding(
                 head_dim=self.head_dim,
@@ -246,9 +289,12 @@ class CausalSelfAttention(nn.Module):
         self.output_dropout = nn.Dropout(config.dropout)
 
         self.causal_mask: torch.Tensor | None
-        if self.attention_backend == "manual":
-            causal_mask = torch.tril(
-                torch.ones(config.seq_len, config.seq_len, dtype=torch.bool)
+        if self.attention_backend == "manual" and self.left_window is None:
+            positions = torch.arange(config.seq_len)
+            causal_mask = build_causal_attention_mask(
+                positions,
+                positions,
+                left_window=self.left_window,
             )
             self.register_buffer("causal_mask", causal_mask, persistent=False)
         else:
@@ -378,23 +424,41 @@ class CausalSelfAttention(nn.Module):
         if self.use_qk_norm:
             q, k = normalize_query_key(q, k)
         query_start = 0
+        key_start = 0
         if kv_cache is not None:
             if self.layer_index is None:
                 raise ValueError("cached attention requires a configured layer index")
             query_start = kv_cache.start
             k, v = kv_cache.write(self.layer_index, k, v)
+            if self.left_window is not None and sequence_length == 1:
+                key_start = max(0, query_start - self.left_window)
+                k = k[:, :, key_start:, :]
+                v = v[:, :, key_start:, :]
 
         active_backend = self._prepared_attention_backend or self.attention_backend
         if active_backend == "manual":
-            attended = self._manual_attention(q, k, v, query_start=query_start)
+            attended = self._manual_attention(
+                q,
+                k,
+                v,
+                query_start=query_start,
+                key_start=key_start,
+            )
         elif active_backend == "sdpa":
-            attended = self._sdpa_attention(q, k, v, query_start=query_start)
+            attended = self._sdpa_attention(
+                q,
+                k,
+                v,
+                query_start=query_start,
+                key_start=key_start,
+            )
         elif self._prepared_flash_provider is not None:
             attended = self._prepared_flash_attention(
                 q,
                 k,
                 v,
                 query_start=query_start,
+                key_start=key_start,
             )
         else:
             attended = self._flash_or_fallback_attention(
@@ -402,6 +466,7 @@ class CausalSelfAttention(nn.Module):
                 k,
                 v,
                 query_start=query_start,
+                key_start=key_start,
                 use_kv_cache=kv_cache is not None,
             )
         attended = (
@@ -418,6 +483,7 @@ class CausalSelfAttention(nn.Module):
         v: torch.Tensor,
         *,
         query_start: int,
+        key_start: int,
     ) -> torch.Tensor:
         provider = self._prepared_flash_provider
         if provider is None:  # pragma: no cover - guarded by the caller.
@@ -430,6 +496,9 @@ class CausalSelfAttention(nn.Module):
                 v,
                 dropout_p=self.attention_dropout.p if self.training else 0.0,
                 causal=True,
+                window_size=(self.left_window, 0)
+                if self.left_window is not None
+                else None,
             )
         except (NotImplementedError, RuntimeError, TypeError):
             fallback = kernel_fallback_resolution(self._config)
@@ -440,6 +509,7 @@ class CausalSelfAttention(nn.Module):
                 k,
                 v,
                 query_start=query_start,
+                key_start=key_start,
             )
 
     def _flash_or_fallback_attention(
@@ -449,6 +519,7 @@ class CausalSelfAttention(nn.Module):
         v: torch.Tensor,
         *,
         query_start: int,
+        key_start: int,
         use_kv_cache: bool,
     ) -> torch.Tensor:
         resolution = resolve_attention_backend(
@@ -469,6 +540,7 @@ class CausalSelfAttention(nn.Module):
                 k,
                 v,
                 query_start=query_start,
+                key_start=key_start,
             )
         if resolution.provider is None:  # pragma: no cover - resolver invariant.
             raise RuntimeError("flash selection lost its provider")
@@ -480,6 +552,9 @@ class CausalSelfAttention(nn.Module):
                 v,
                 dropout_p=self.attention_dropout.p if self.training else 0.0,
                 causal=True,
+                window_size=(self.left_window, 0)
+                if self.left_window is not None
+                else None,
             )
         except (NotImplementedError, RuntimeError, TypeError):
             fallback = kernel_fallback_resolution(self._config)
@@ -490,6 +565,7 @@ class CausalSelfAttention(nn.Module):
                 k,
                 v,
                 query_start=query_start,
+                key_start=key_start,
             )
 
     def _run_fallback(
@@ -500,10 +576,23 @@ class CausalSelfAttention(nn.Module):
         v: torch.Tensor,
         *,
         query_start: int,
+        key_start: int,
     ) -> torch.Tensor:
         if resolution.selection.effective_backend == "sdpa":
-            return self._sdpa_attention(q, k, v, query_start=query_start)
-        return self._manual_attention(q, k, v, query_start=query_start)
+            return self._sdpa_attention(
+                q,
+                k,
+                v,
+                query_start=query_start,
+                key_start=key_start,
+            )
+        return self._manual_attention(
+            q,
+            k,
+            v,
+            query_start=query_start,
+            key_start=key_start,
+        )
 
     def _sdpa_attention(
         self,
@@ -512,10 +601,16 @@ class CausalSelfAttention(nn.Module):
         v: torch.Tensor,
         *,
         query_start: int = 0,
+        key_start: int = 0,
     ) -> torch.Tensor:
         query_length = q.shape[-2]
         key_length = k.shape[-2]
-        if query_start == 0 and query_length == key_length:
+        if (
+            self.left_window is None
+            and query_start == 0
+            and key_start == 0
+            and query_length == key_length
+        ):
             attention_mask = None
             is_causal = True
         else:
@@ -523,8 +618,12 @@ class CausalSelfAttention(nn.Module):
                 query_length,
                 device=q.device,
             )
-            key_positions = torch.arange(key_length, device=q.device)
-            attention_mask = key_positions.unsqueeze(0) <= query_positions.unsqueeze(1)
+            key_positions = key_start + torch.arange(key_length, device=q.device)
+            attention_mask = build_causal_attention_mask(
+                query_positions,
+                key_positions,
+                left_window=self.left_window,
+            )
             is_causal = False
         dropout_p = self.attention_dropout.p if self.training else 0.0
         if q.shape[1] != k.shape[1]:
@@ -553,30 +652,73 @@ class CausalSelfAttention(nn.Module):
         v: torch.Tensor,
         *,
         query_start: int = 0,
+        key_start: int = 0,
     ) -> torch.Tensor:
         k, v = expand_kv_heads(k, v, query_head_count=q.shape[1])
-        scores = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)
         query_length = q.shape[-2]
         key_length = k.shape[-2]
+        if (
+            self.left_window is not None
+            and query_start == 0
+            and key_start == 0
+            and query_length == key_length
+        ):
+            return self._manual_sliding_attention(q, k, v)
+        scores = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)
         mask = self.causal_mask
-        if query_start or query_length != key_length:
+        if query_start or key_start or query_length != key_length:
             query_positions = query_start + torch.arange(
                 query_length,
                 device=q.device,
             )
-            key_positions = torch.arange(key_length, device=q.device)
-            mask = key_positions.unsqueeze(0) <= query_positions.unsqueeze(1)
+            key_positions = key_start + torch.arange(key_length, device=q.device)
+            mask = build_causal_attention_mask(
+                query_positions,
+                key_positions,
+                left_window=self.left_window,
+            )
         elif mask is None:
-            mask = torch.tril(
-                torch.ones(
-                    query_length,
-                    key_length,
-                    dtype=torch.bool,
-                    device=q.device,
-                )
+            query_positions = torch.arange(query_length, device=q.device)
+            key_positions = torch.arange(key_length, device=q.device)
+            mask = build_causal_attention_mask(
+                query_positions,
+                key_positions,
+                left_window=self.left_window,
             )
         else:
             mask = mask[:query_length, :key_length]
         scores = scores.masked_fill(~mask, float("-inf"))
         weights = self.attention_dropout(F.softmax(scores, dim=-1))
         return weights @ v
+
+    def _manual_sliding_attention(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+    ) -> torch.Tensor:
+        """Score only the local causal band for aligned full/prefill inputs."""
+
+        if self.left_window is None:  # pragma: no cover - guarded by caller.
+            raise RuntimeError("sliding attention lost its left-window limit")
+        sequence_length = q.shape[-2]
+        active_left_window = min(self.left_window, sequence_length - 1)
+        window_width = active_left_window + 1
+        padded_key = F.pad(k, (0, 0, active_left_window, 0))
+        padded_value = F.pad(v, (0, 0, active_left_window, 0))
+        key_windows = padded_key.unfold(2, window_width, 1).transpose(-1, -2)
+        value_windows = padded_value.unfold(2, window_width, 1).transpose(-1, -2)
+        scores = torch.matmul(
+            q.unsqueeze(-2),
+            key_windows.transpose(-1, -2),
+        ).squeeze(-2) / math.sqrt(self.head_dim)
+        query_positions = torch.arange(sequence_length, device=q.device)
+        offsets = torch.arange(
+            -active_left_window,
+            1,
+            device=q.device,
+        )
+        valid = query_positions.unsqueeze(1) + offsets.unsqueeze(0) >= 0
+        scores = scores.masked_fill(~valid, float("-inf"))
+        weights = self.attention_dropout(F.softmax(scores, dim=-1))
+        return torch.matmul(weights.unsqueeze(-2), value_windows).squeeze(-2)

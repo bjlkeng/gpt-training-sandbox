@@ -180,6 +180,9 @@ def preflight_attention_backend(
 
     resolved_device = torch.device(device)
     capability = _device_capability(resolved_device)
+    active_window_size = (
+        config.flash_window_size() if window_size is None else window_size
+    )
     return resolve_attention_backend(
         config,
         AttentionBackendRequest(
@@ -192,7 +195,7 @@ def preflight_attention_backend(
             if requires_backward is None
             else requires_backward,
             dropout_p=config.dropout if training else 0.0,
-            window_size=window_size,
+            window_size=active_window_size,
             use_kv_cache=config.use_kv_cache if use_kv_cache is None else use_kv_cache,
         ),
         provider_loader=provider_loader,
@@ -246,6 +249,7 @@ def runtime_attention_request(
         training=training,
         requires_backward=torch.is_grad_enabled() and q.requires_grad,
         dropout_p=config.dropout if training else 0.0,
+        window_size=config.flash_window_size(),
         use_kv_cache=config.use_kv_cache if use_kv_cache is None else use_kv_cache,
     )
 
